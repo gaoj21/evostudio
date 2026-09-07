@@ -188,6 +188,7 @@ plugins:
               - RAG: tutorial/rag.md
               - Human-in-the-Loop (HITL): tutorial/hitl.md
               - MCP: tutorial/mcp.md
+              - Skills: tutorial/skills.md
               - Benchmark and Evaluation: tutorial/benchmark_and_evaluation.md
               - AFlow Optimizer: tutorial/aflow_optimizer.md
               - SEW Optimizer: tutorial/sew_optimizer.md
@@ -231,6 +232,7 @@ plugins:
               - 构建你的第一个工作流: tutorial/first_workflow.md
               - 使用工具: tutorial/tools.md
               - RAG 检索增强生成: tutorial/rag.md
+              - Skill 技能: tutorial/skills.md
               - 基准测试与评估: tutorial/benchmark_and_evaluation.md
               - AFlow 优化器: tutorial/aflow_optimizer.md
               - SEW 优化器: tutorial/sew_optimizer.md
