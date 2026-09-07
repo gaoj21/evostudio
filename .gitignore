@@ -136,3 +136,41 @@ evaluation_pipeline/results/
 workplace/
 openevolve/
 evoagentx/tools/assets/research_tools/*
+
+# ---------------------------------------------------------------------------
+# Datasets and runtime artifacts
+# ---------------------------------------------------------------------------
+# credit_risk datasets are gigabytes of fetched source data, rebuilt by the
+# scripts in credit_risk/dataset/. The builders and docs are tracked; the data
+# is not.
+credit_risk/dataset/**
+!credit_risk/dataset/**/
+!credit_risk/dataset/**/*.py
+!credit_risk/dataset/*.md
+!credit_risk/dataset/**/*.md
+credit_risk/output/
+# Anchored: an unanchored `data/` would also swallow studio/data/graphs.
+/data/
+
+# Studio runtime state. Workflow definitions are the source of truth for what
+# a user built, so those are tracked; everything a run produces is not.
+studio/data/runs/
+studio/data/batches/
+studio/data/memory/
+studio/data/agent-memory/
+studio/data/workspace/
+studio/data/evolve/
+studio/data/reviews/
+studio/data/watch/
+studio/data/tables/
+studio/data/stm/
+studio/data/schedules/
+studio/data/skills/
+studio/data/tools/
+studio/data/.cleared-*/
+
+# Frontend
+studio/frontend/node_modules/
+studio/frontend/dist/
+
+examples/output/
