@@ -100,6 +100,13 @@ class Evaluator:
         # clear the evaluation records
         self._evaluation_records.clear()
 
+        # Drop cached per-thread agent managers. They are keyed by thread id, and
+        # Python recycles ids of dead threads across ThreadPoolExecutor instances,
+        # so a cached manager created before agents were updated/added (e.g. when
+        # optimizing workflows whose structure changes between evaluations) would
+        # silently resurrect a stale agent list. Fresh copies are cheap.
+        self._thread_agent_managers.clear()
+
         # update the agents in the agent manager
         if isinstance(graph, WorkFlowGraph) and update_agents:
             if self.agent_manager is None:

@@ -103,5 +103,10 @@ OPTIMIZER_CONSTRAINTS = [
     "**Consistent Inputs**: If the instruction prompt contains input placeholders such as <input>{input_name}</input>, the new improved instruction prompt should also contains the same <input>{input_name}</input>.",
     "**Absolute Exclusion of Input Details**: The instruction prompt should NOT, in any form or manner, contain any information from the inputs, such as parts or the entirety of question, solution, code, etc. Instead, it should have placeholders for the inputs in the form of <input>{input_name}</input>.",
     "**System Prompts Format**: System prompts should NOT include any input tags and input placeholders e.g. <input>{input_name}</input> or {input_name}.",
-    '**Additional Instruction for Coding Tasks**: For coding tasks, always add the following instruction to the new system prompt -- "All identifiers (e.g. variable names, function names, class names, and argument names) used in the code **must match** those in the problem statement or provided template."'
 ]
+
+# Only meaningful when the optimized workflow *generates* code, so it is applied
+# on top of OPTIMIZER_CONSTRAINTS for coding benchmarks only. Applying it to
+# every task leaks an irrelevant instruction into the optimized prompt (e.g. a
+# code *review* prompt gains a rule about matching identifiers it never emits).
+CODING_OPTIMIZER_CONSTRAINT = '**Additional Instruction for Coding Tasks**: For coding tasks, always add the following instruction to the new system prompt -- "All identifiers (e.g. variable names, function names, class names, and argument names) used in the code **must match** those in the problem statement or provided template."'

@@ -15,7 +15,7 @@
 import os
 import shutil
 from copy import deepcopy
-from typing import Any, Iterator, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Iterator, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 from pydantic import Field, PositiveInt
@@ -44,6 +44,7 @@ from textgrad.optimizer import TextualGradientDescent
 
 from ..prompts.optimizers.textgrad_optimizer import (
     CODE_LOSS_PROMPT,
+    CODING_OPTIMIZER_CONSTRAINT,
     GENERAL_LOSS_PROMPT,
     NO_ANSWER_LOSS_PROMPT,
     OPTIMIZER_CONSTRAINTS,
@@ -176,6 +177,7 @@ class TextGradOptimizer(BaseModule):
     save_path: str = Field(default="./", description="The path to save the optimized workflow.")
     rollback: bool = Field(default=True, description="Whether to rollback to the best graph after each evaluation during optimization.")
     constraints: List[str] = Field(default=[], description="The constraints for optimization. e.g. ['They system prompt must not exceed 100 words.']")
+    objective_metric: Optional[Union[str, Callable[[dict], float]]] = Field(default=None, description="Which metric decides that one graph is better than another (used for rollback and for selecting the best graph). Either the name of a key in the benchmark's metrics dict, or a callable mapping the metrics dict to a single float. If None, the mean of all metric values is used, which is only meaningful when every metric is on a comparable scale (e.g. all in [0, 1]).")
 
 
     def init_module(self, **kwargs):
@@ -222,12 +224,19 @@ class TextGradOptimizer(BaseModule):
         else:
             raise ValueError("Unsupported `optimize_mode`, should be one of 'all', 'system_prompt', 'instruction'.")
 
-        OPTIMIZER_CONSTRAINTS.extend(self.constraints)
-        
+        # Build a fresh list every time: extending OPTIMIZER_CONSTRAINTS in place
+        # mutates the module-level constant, so custom constraints would leak into
+        # every other optimizer in the process and accumulate across `optimize()`
+        # calls. The coding-specific constraint only applies to coding benchmarks.
+        constraints = list(OPTIMIZER_CONSTRAINTS)
+        if isinstance(dataset, CodingBenchmark):
+            constraints.append(CODING_OPTIMIZER_CONSTRAINT)
+        constraints.extend(self.constraints)
+
         self.textgrad_optimizer = TextualGradientDescent(
-            parameters=optimize_variables, 
+            parameters=optimize_variables,
             engine=self.optimizer_engine,
-            constraints=OPTIMIZER_CONSTRAINTS,
+            constraints=constraints,
             optimizer_system_prompt=OPTIMIZER_SYSTEM_PROMPT,
             in_context_examples=[PERSONAL_FINANCE_ADVISOR_EXAMPLE, FITNESS_COACH_EXAMPLE, CODE_REVIEW_EXAMPLE]
         )
@@ -278,16 +287,16 @@ class TextGradOptimizer(BaseModule):
                 if self.rollback:
                     if len(self._snapshot) == 1:
                         best_snapshot = self._snapshot[-1]
-                        best_average_score = np.mean(list(metrics.values()))
+                        best_average_score = self._score(metrics)
                     else:
-                        current_average_score = np.mean(list(metrics.values()))
-                        
+                        current_average_score = self._score(metrics)
+
                         if current_average_score >= best_average_score:
-                            # If the current average score is better than the best average score, update the best snapshot
+                            # If the current score is better than the best score, update the best snapshot
                             best_snapshot = self._snapshot[-1]
                             best_average_score = current_average_score
                         else:
-                            # If the current average score is worse than the best average score, roll back to the best snapshot
+                            # If the current score is worse than the best score, roll back to the best snapshot
                             logger.info(f"Metrics are worse than the best snapshot which has {best_snapshot['metrics']}. Rolling back to the best snapshot.")
                             best_graph = WorkFlowGraph.from_dict(best_snapshot["graph"])
                             self.graph = best_graph
@@ -306,11 +315,43 @@ class TextGradOptimizer(BaseModule):
             self.save(os.path.join(self.save_path, f"{dataset.name}_textgrad_best.json"), graph=best_graph)
 
         
+    def _score(self, metrics: dict) -> float:
+        """Reduce a metrics dict to the single number that decides "better".
+
+        Used by both the rollback logic and the final best-graph selection so the
+        two can never disagree.
+        """
+        if callable(self.objective_metric):
+            return float(self.objective_metric(metrics))
+
+        if isinstance(self.objective_metric, str):
+            if self.objective_metric not in metrics:
+                raise ValueError(
+                    f"`objective_metric` is '{self.objective_metric}', but the benchmark's metrics "
+                    f"only contain {sorted(metrics)}. Set `objective_metric` to one of these keys, "
+                    f"to a callable, or to None to average all of them."
+                )
+            return float(metrics[self.objective_metric])
+
+        # Backward-compatible default: average everything. This silently picks the
+        # wrong graph when the metrics are on different scales (e.g. a benchmark
+        # that also reports latency or a token/character count), so warn loudly
+        # instead of letting an unnormalized metric dominate the average.
+        out_of_range = {k: v for k, v in metrics.items() if not 0.0 <= float(v) <= 1.0}
+        if out_of_range:
+            logger.warning(
+                f"Comparing graphs by the mean of all metrics, but {out_of_range} "
+                f"{'is' if len(out_of_range) == 1 else 'are'} outside [0, 1] and will dominate "
+                f"that mean, so the graph with the best score may not be selected. Set "
+                f"`objective_metric` to the metric you actually want to optimize."
+            )
+        return float(np.mean(list(metrics.values())))
+
     def step(
-        self, 
-        inputs: list[dict[str, str]], 
-        labels: Optional[list[Union[str, dict[str, str]]]], 
-        dataset: Benchmark, 
+        self,
+        inputs: list[dict[str, str]],
+        labels: Optional[list[Union[str, dict[str, str]]]],
+        dataset: Benchmark,
         use_answers: bool = True
     ) -> None:
         """Performs one optimization step using a batch of data."""
@@ -322,13 +363,29 @@ class TextGradOptimizer(BaseModule):
             if labels is None:
                 raise ValueError("Labels must be provided if `use_answers` is True.")
 
+            # Validate label types up front: executing the workflow first would
+            # spend LLM calls before failing, and a label that is neither a str
+            # nor a dict used to reach TextGrad's loss unwrapped and fail there
+            # with an opaque AttributeError.
+            for label in labels:
+                if isinstance(label, str):
+                    continue
+                if isinstance(label, dict):
+                    if not isinstance(dataset, CodingBenchmark):
+                        raise ValueError("Label must be a string for non-coding benchmarks.")
+                    continue
+                raise ValueError(
+                    f"Label must be a string (or a dict for coding benchmarks), got "
+                    f"{type(label).__name__}. Make the benchmark's `_get_label` return a string, "
+                    f"or set `use_answers=False` to optimize without labels."
+                )
+
             for input, label in zip(inputs, labels, strict=True):
                 output = self.forward(input)
                 if isinstance(label, str):
                     label = Variable(label, requires_grad=False, role_description="correct answer for the query")
-                elif isinstance(label, dict):
-                    if not isinstance(dataset, CodingBenchmark):
-                        raise ValueError("Label must be a string for non-coding benchmarks.")
+                else:
+                    # Validated above: a dict label implies a CodingBenchmark.
                     end_node_name = self.graph.find_end_nodes()[0]
                     end_node = self.graph.get_node(end_node_name)
                     output_name = end_node.outputs[0].name
@@ -612,7 +669,7 @@ class TextGradOptimizer(BaseModule):
                 return self.graph, None
             return self.graph
             
-        snapshot_scores = [np.mean(list(snapshot["metrics"].values())) for snapshot in self._snapshot]
+        snapshot_scores = [self._score(snapshot["metrics"]) for snapshot in self._snapshot]
         best_index = np.argmax(snapshot_scores)
 
         graph = WorkFlowGraph.from_dict(self._snapshot[best_index]["graph"])
