@@ -753,6 +753,71 @@ class BaseLLM(ABC):
         memo[id(self)] = self
         return self
 
+    def _init_async_client(self, config: LLMConfig):
+        """Create a new async client. Implemented by subclasses that use one."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not define `_init_async_client`."
+        )
+
+    def _async_client_cache(self) -> Dict[Any, Any]:
+        # Built lazily so subclasses need not initialise it in `init_model`.
+        cache = getattr(self, "_async_clients", None)
+        if cache is None:
+            cache = {}
+            self._async_clients = cache
+        return cache
+
+    def ensure_async_client(self):
+        """Return an async client bound to the *currently running* event loop.
+
+        An async HTTP client owns a connection pool tied to the event loop that
+        created it. `Evaluator` runs each example through `asyncio.run()` on a
+        thread-pool worker, i.e. a fresh loop per call that is closed right
+        after, so caching a single client per LLM instance would hand a later
+        loop a pool belonging to a dead one and every request on it would block
+        forever (sockets pile up in CLOSE_WAIT at 0% CPU, with no error). The
+        client's own `is_closed()` does not detect this, because the client was
+        never actually closed. Keying the cache by loop makes `num_workers > 1`
+        safe.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        cache = self._async_client_cache()
+        # Drop clients whose loop is gone, otherwise the cache grows without
+        # bound across evaluations (one loop per example, per worker thread).
+        for dead_loop in [key for key in cache if key is not None and key.is_closed()]:
+            cache.pop(dead_loop, None)
+
+        client = cache.get(loop)
+        if client is None or client.is_closed():
+            client = self._init_async_client(self.config)
+            cache[loop] = client
+        # Keep the legacy attribute pointing at the most recently used client so
+        # code that reads `_async_client` directly still sees a usable one.
+        self._async_client = client
+        return client
+
+    async def close_async_client(self):
+        """Close the async client belonging to the current event loop.
+
+        Only the current loop's client is closed: awaiting `close()` on a client
+        owned by another loop is exactly the cross-loop use this cache exists to
+        prevent.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        client = self._async_client_cache().pop(loop, None)
+        if client is not None and not client.is_closed():
+            await client.close()
+        if getattr(self, "_async_client", None) is client:
+            self._async_client = None
+
     def supports_native_tool_calling(self) -> bool:
         """Whether this LLM supports the native (OpenAI-style) function-calling protocol.
 

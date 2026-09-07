@@ -57,14 +57,8 @@ class OpenAILLM(BaseLLM):
         if self._client is not None and not self._client.is_closed():
             self._client.close()
 
-    def ensure_async_client(self):
-        if self._async_client is None or self._async_client.is_closed():
-            self._async_client = self._init_async_client(self.config)
-        return self._async_client
-
-    async def close_async_client(self):
-        if self._async_client is not None and not self._async_client.is_closed():
-            await self._async_client.close()
+    # ensure_async_client / close_async_client come from BaseLLM, which caches
+    # the async client per event loop (see the note there).
 
     def formulate_messages(self, prompts: List[str], system_messages: Optional[List[str]] = None) -> List[List[dict]]:
 
