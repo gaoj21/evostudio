@@ -44,6 +44,8 @@ execution). Unsourced inputs become workflow inputs (asked at run time).
 ## Endpoints
 
 - `GET /api/health` → `{"ok": true}`
+- `GET /api/features` → stable core features plus experimental integrations,
+  including runtime availability, missing-dependency reason and install extra.
 - `GET /api/palette` → `{"templates": [{type, label, description, defaults: {...task fields...}}]}`
 - `GET /api/graphs` → `[{id, name, goal, updated_at}]`
 - `POST /api/graphs` `{name, goal}` → full graph (empty tasks)

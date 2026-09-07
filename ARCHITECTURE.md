@@ -83,4 +83,5 @@ EvoAgentX Studio: FastAPI backend (`studio/backend/`) + React canvas
 task / `kind="source"` input source / `kind="tool"` deterministic tool
 node), per-node LTM, batch runs, watch triggers, MIPRO prompt optimization,
 HITL review, and a per-graph workspace (run artifacts + user-managed files:
-upload / create / edit / delete). See `studio/API.md` for the REST contract.
+upload / create / edit / delete). Stable core and experimental integrations
+are separated in `studio/README.md`; see `studio/API.md` for the REST contract.

@@ -21,6 +21,7 @@ from . import chat_api
 from . import custom_tools
 from . import evaluation
 from . import export_api
+from . import features
 from . import graphs as graph_store
 from . import memory_api
 from . import preprocess
@@ -167,6 +168,17 @@ app.add_middleware(
 @app.get("/api/health")
 def health():
     return {"ok": True}
+
+
+@app.get("/api/features")
+def list_features():
+    overrides = {}
+    if _EVOLVE_IMPORT_ERROR:
+        overrides["evolve"] = (
+            False,
+            f"Missing optimizer package: {_EVOLVE_IMPORT_ERROR}",
+        )
+    return features.catalog(overrides)
 
 
 @app.get("/api/palette")
