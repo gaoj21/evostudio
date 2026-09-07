@@ -89,3 +89,9 @@ antlr4-python3-runtime==4.11
 
 # viz
 matplotlib>=3.10.0
+
+# studio (studio/backend + tests/studio)
+fastapi>=0.110
+uvicorn>=0.27
+python-multipart>=0.0.9
+httpx>=0.27

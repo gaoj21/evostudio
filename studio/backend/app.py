@@ -1,0 +1,741 @@
+"""EvoAgentX Studio backend — FastAPI app per studio/API.md (v1, MVP).
+
+Run from anywhere:  uvicorn app:app --port 8000  (cwd: studio/backend)
+or:                 python studio/backend/app.py
+"""
+
+import json
+import sys
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+_BACKEND_DIR = Path(__file__).resolve().parent
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
+
+from contextlib import asynccontextmanager
+
+from fastapi import Body, FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
+from fastapi.staticfiles import StaticFiles
+
+import agent_api
+import batch as batch_store
+import batch_compare
+import batch_export
+import chat_api
+import custom_tools
+import evaluation
+import evolve_api
+import export_api
+import graphs as graph_store
+import memory_api
+import preprocess
+import registry
+import review as review_store
+import runner
+import scheduler
+import skills_api
+import sources
+import tools_registry
+import watcher
+import workspace
+import workspace_api
+
+FRONTEND_DIST = _REPO_ROOT / "studio" / "frontend" / "dist"
+
+PALETTE = {
+    "templates": [
+        {
+            "type": "task",
+            "label": "LLM Task",
+            "description": "A general-purpose LLM task with custom inputs and outputs.",
+            "defaults": {
+                "description": "Describe what this task does.",
+                "inputs": [
+                    {"name": "input", "type": "str", "description": "Input text", "required": True}
+                ],
+                "outputs": [
+                    {"name": "output", "type": "str", "description": "Output text", "required": True}
+                ],
+                "prompt": "Process the input:\n{input}",
+                "parse_mode": "str",
+            },
+        },
+        {
+            "type": "summarizer",
+            "label": "Summarizer",
+            "description": "Summarizes a piece of text into a short summary.",
+            "defaults": {
+                "description": "Summarize the given text.",
+                "inputs": [
+                    {"name": "text", "type": "str", "description": "Text to summarize", "required": True}
+                ],
+                "outputs": [
+                    {"name": "summary", "type": "str", "description": "Concise summary", "required": True}
+                ],
+                "prompt": "Summarize the following text concisely:\n{text}",
+                "parse_mode": "str",
+            },
+        },
+        {
+            "type": "writer",
+            "label": "Report Writer",
+            "description": "Turns upstream material into a structured report.",
+            "defaults": {
+                "description": "Write a report from the provided material.",
+                "inputs": [
+                    {"name": "material", "type": "str", "description": "Source material", "required": True}
+                ],
+                "outputs": [
+                    {"name": "report", "type": "str", "description": "Structured report", "required": True}
+                ],
+                "prompt": "Write a well-structured report based on:\n{material}",
+                "parse_mode": "str",
+            },
+        },
+    ]
+}
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Reconcile state a previous process left behind.
+
+    Runs and batches live in memory while they execute; a restart kills the
+    threads but leaves their records claiming to be running. Nothing can be
+    resumed — the work was LLM calls in flight, and repeating them would bill
+    the user twice — so the point is to stop them from hanging forever and say
+    what happened instead.
+    """
+    interrupted = runner.mark_interrupted() + batch_store.mark_interrupted()
+    if interrupted:
+        print(f"[studio] marked {interrupted} run(s)/batch(es) interrupted by a restart")
+    # Schedules are the one thing that *is* resumed: "every day" that stops at
+    # the next restart is not a schedule.
+    resumed = scheduler.restore()
+    if resumed:
+        print(f"[studio] resumed schedules for: {', '.join(resumed)}")
+    yield
+
+
+app = FastAPI(title="EvoAgentX Studio", lifespan=_lifespan)
+app.include_router(memory_api.router)
+app.include_router(evolve_api.router)
+app.include_router(workspace_api.router)
+app.include_router(custom_tools.router)
+app.include_router(chat_api.router)
+app.include_router(skills_api.router)
+app.include_router(export_api.router)
+app.include_router(agent_api.router)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/api/health")
+def health():
+    return {"ok": True}
+
+
+@app.get("/api/palette")
+def palette():
+    return {
+        "templates": PALETTE["templates"] + registry.credit_risk_presets(),
+        "sources": registry.source_presets(),
+    }
+
+
+@app.get("/api/templates")
+def list_templates():
+    return {"templates": [{"id": t["id"], "name": t["name"], "description": t["description"]}
+                          for t in registry.templates()]}
+
+
+@app.get("/api/templates/{template_id}")
+def get_template(template_id: str):
+    for t in registry.templates():
+        if t["id"] == template_id:
+            return t
+    raise HTTPException(status_code=404, detail=f"Template '{template_id}' not found")
+
+
+def _gray_zone(value) -> tuple | None:
+    """Validate an optional [lo, hi] review gray-zone band."""
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        try:
+            lo, hi = float(value[0]), float(value[1])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="review_zone must be [lo, hi] numbers")
+        if lo >= hi:
+            raise HTTPException(status_code=422, detail="review_zone requires lo < hi")
+        return (lo, hi)
+    raise HTTPException(status_code=422, detail="review_zone must be [lo, hi]")
+
+
+@app.get("/api/graphs")
+def list_graphs():
+    return graph_store.list_graphs()
+
+
+@app.post("/api/graphs")
+def create_graph(body: dict = Body(...)):
+    return graph_store.create_graph(name=body.get("name", ""), goal=body.get("goal", ""))
+
+
+@app.get("/api/graphs/{graph_id}")
+def get_graph(graph_id: str):
+    graph = graph_store.load_graph(graph_id)
+    if graph is None:
+        raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found")
+    ordered, _ = _safe_order(graph)
+    return {**graph, "workflow_inputs": graph_store.compute_workflow_inputs(
+        ordered, graph.get("edges") or [])}
+
+
+@app.put("/api/graphs/{graph_id}")
+def save_graph(graph_id: str, body: dict = Body(...)):
+    if not graph_store.graph_exists(graph_id):
+        raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found")
+    candidate = {
+        "id": graph_id,
+        "name": body.get("name", graph_id),
+        "goal": body.get("goal", ""),
+        "tasks": body.get("tasks", []),
+        "edges": body.get("edges", []),
+    }
+    try:
+        ordered, workflow_inputs = graph_store.validate_graph(candidate)
+        saved = graph_store.save_graph(graph_id, body)
+    except graph_store.GraphValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors)
+    # The canvas is the source; the workspace is what it compiles to. Keeping
+    # them in step on save is what makes the workspace the project rather than
+    # a folder that happens to collect run output.
+    project_error = _write_project(saved)
+    return {**saved, "workflow_inputs": workflow_inputs,
+            **({"project_error": project_error} if project_error else {})}
+
+
+def _write_project(graph: dict) -> str | None:
+    """Compile a graph into its workspace; returns why not, if it could not.
+
+    Never raises: a workflow half-built or referring to a tool being edited
+    still has to be savable.
+    """
+    try:
+        workspace.write_project(graph)
+        return None
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"
+
+
+@app.delete("/api/graphs/{graph_id}")
+def delete_graph(graph_id: str):
+    if not graph_store.delete_graph(graph_id):
+        raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found")
+    return {"ok": True}
+
+
+@app.post("/api/graphs/{graph_id}/run")
+def run_graph(graph_id: str, body: dict = Body(default={})):
+    graph = graph_store.load_graph(graph_id)
+    if graph is None:
+        raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found")
+    try:
+        graph_store.validate_graph(graph)
+        tools_registry.validate_tool_names(_graph_tool_names(graph))
+        _validate_source_nodes(graph)
+    except graph_store.GraphValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors)
+    except tools_registry.ToolResolveError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except sources.SourceError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    start_at = body.get("start_at") or None
+    inputs = body.get("inputs") or {}
+    try:
+        # One record for a single run: the preprocessor sees the same shape it
+        # sees in a batch, so the same tool serves both.
+        inputs = preprocess.apply(graph, [inputs])[0] if inputs else inputs
+    except preprocess.PreprocessError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    run_id = runner.start_run(graph, inputs,
+                              gray_zone=_gray_zone(body.get("review_zone")),
+                              start_at=start_at,
+                              session=body.get("session"))
+    return {"run_id": run_id}
+
+
+@app.get("/api/graphs/{graph_id}/inputs")
+def graph_inputs(graph_id: str, start_at: str | None = Query(default=None)):
+    """What a run would ask for, optionally starting from part-way through.
+
+    Starting mid-pipeline turns the upstream nodes' outputs into inputs, and
+    those usually already exist: `prefill` carries them from the most recent
+    run that produced them, so a re-run of one step does not mean retyping the
+    step before it.
+    """
+    graph = graph_store.load_graph(graph_id)
+    if graph is None:
+        raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found")
+    names = [n for n in (start_at or "").split(",") if n.strip()]
+    try:
+        tasks, edges = graph_store.subgraph_from(
+            graph.get("tasks") or [], graph.get("edges") or [], names
+        )
+    except graph_store.GraphValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors)
+
+    ordered = graph_store.topo_sort_tasks(tasks, edges)
+    workflow_inputs = graph_store.compute_workflow_inputs(ordered, edges)
+
+    prefill, source_run = {}, None
+    wanted = {i["name"] for i in workflow_inputs}
+    if wanted:
+        # Prefer the most recent run that covers *every* needed input. Stopping
+        # at the first run with any overlap picks up a failed run that never
+        # got far enough, and the re-run then dies on the one missing value.
+        for run in runner.list_runs(graph_id=graph_id):
+            full = runner.get_run(run.get("run_id")) or {}
+            found = {}
+            for node in full.get("nodes") or []:
+                output = node.get("output")
+                if isinstance(output, dict):
+                    found.update({k: v for k, v in output.items() if k in wanted})
+            found.update({k: v for k, v in (full.get("inputs") or {}).items()
+                          if k in wanted and k not in found})
+            if len(found) > len(prefill):
+                prefill, source_run = found, run.get("run_id")
+            if wanted <= set(prefill):
+                break
+
+    return {
+        "start_at": names,
+        "nodes": [t.get("name") for t in graph.get("tasks") or []],
+        "workflow_inputs": workflow_inputs,
+        "prefill": prefill,
+        "prefill_from_run": source_run,
+        # What no past run could supply, so the form can point at it instead of
+        # letting the run fail on a missing value.
+        "prefill_missing": sorted(wanted - set(prefill)),
+    }
+
+
+def _graph_tool_names(graph: dict) -> list[str]:
+    return sorted({
+        name
+        for t in graph.get("tasks", []) or []
+        for name in (t.get("tool_names") or [])
+    })
+
+
+def _validate_source_nodes(graph: dict) -> None:
+    """Probe local (credit_risk) source nodes; API sources are validated
+    statically at save time and fail visibly at run time instead.
+    Unconnected source nodes are skipped (the runner ignores them)."""
+    wired = {e.get("source") for e in (graph.get("edges") or [])}
+    for node in sources.find_source_nodes(graph):
+        if node.get("name") not in wired:
+            continue
+        if (node.get("source") or {}).get("type") == "credit_risk":
+            sources.records_from_source_node(node)
+
+
+@app.get("/api/runs")
+def list_runs(graph_id: str | None = Query(default=None)):
+    return runner.list_runs(graph_id=graph_id)
+
+
+@app.get("/api/runs/{run_id}")
+def get_run(run_id: str):
+    run = runner.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
+    return run
+
+
+@app.get("/api/graphs/{graph_id}/schedule")
+def get_schedule(graph_id: str):
+    """This workflow's schedule, if it has one."""
+    if not graph_store.graph_exists(graph_id):
+        raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found")
+    return scheduler.status(graph_id)
+
+
+@app.put("/api/graphs/{graph_id}/schedule")
+def put_schedule(graph_id: str, body: dict = Body(...)):
+    """Run this workflow on a timer: daily at a time, or every N minutes."""
+    graph = graph_store.load_graph(graph_id)
+    if graph is None:
+        raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found")
+    try:
+        graph_store.validate_graph(graph)
+    except graph_store.GraphValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors)
+    try:
+        return scheduler.set_schedule(graph, body)
+    except scheduler.ScheduleError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.delete("/api/graphs/{graph_id}/schedule")
+def delete_schedule(graph_id: str):
+    return {"ok": True, "removed": scheduler.clear(graph_id)}
+
+
+@app.post("/api/graphs/{graph_id}/rename")
+def rename_graph(graph_id: str, body: dict = Body(...)):
+    """Rename a workflow, and its identity with it.
+
+    Separate from saving the graph: renaming is its own action, and going
+    through the ordinary save would persist whatever else is on the canvas
+    along with it.
+    """
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="A workflow needs a name.")
+    if not graph_store.graph_exists(graph_id):
+        raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found")
+    try:
+        renamed = graph_store.rename_graph(graph_id, name)
+    except graph_store.GraphValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors)
+    # The generated project names the workflow inside itself, so it is rewritten
+    # rather than just carried across.
+    _write_project(renamed)
+    # The schedule is filed under the id, so it follows rather than stopping.
+    scheduler.rename(graph_id, renamed["id"])
+    return renamed
+
+
+@app.post("/api/runs/{run_id}/abandon")
+def abandon_run(run_id: str):
+    """Give up on a run. It keeps executing — see runner.abandon_run."""
+    outcome = runner.abandon_run(run_id)
+    if not outcome.get("abandoned") and outcome.get("reason") == "no such run":
+        raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
+    return outcome
+
+
+@app.get("/api/sources/credit-risk")
+def credit_risk_source():
+    return sources.credit_risk_info()
+
+
+@app.get("/api/sources")
+def list_source_types():
+    """Config schema for every canvas source type (drives the Inspector form)."""
+    from source_apis import SOURCE_TYPE_SCHEMAS
+
+    return {
+        "source_types": [
+            {"type": type_, **schema} for type_, schema in SOURCE_TYPE_SCHEMAS.items()
+        ]
+    }
+
+
+@app.get("/api/tools")
+def list_tools():
+    return {"tools": tools_registry.list_tools()}
+
+
+async def _batch_payload(graph_id: str, request: Request):
+    """Work out what a batch would run, without running it.
+
+    Body is either a multipart file upload (JSONL/CSV) or JSON
+    {"source": "credit_risk", "split": ..., "n": ..., "seed": ...}.
+    Shared by the batch endpoint and its preview so the count shown before
+    you start is produced by the same code that then does the work.
+    """
+    graph = graph_store.load_graph(graph_id)
+    if graph is None:
+        raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found")
+    try:
+        ordered, workflow_inputs = graph_store.validate_graph(graph)
+        tools_registry.validate_tool_names(_graph_tool_names(graph))
+    except graph_store.GraphValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors)
+    except tools_registry.ToolResolveError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    try:
+        content_type = request.headers.get("content-type", "")
+        review_zone = None
+        workers = 2
+        # Present only for an evaluation; a plain batch leaves them unset.
+        metric = None
+        label_key = None
+        if content_type.startswith("multipart/form-data"):
+            form = await request.form()
+            upload = form.get("file")
+            if upload is None:
+                raise sources.SourceError("Multipart body must include a 'file' field")
+            records = sources.parse_upload(upload.filename, await upload.read())
+            source = {"type": "upload", "filename": upload.filename}
+            if form.get("review_zone"):
+                review_zone = json.loads(form["review_zone"])
+            if form.get("workers"):
+                workers = int(form["workers"])
+            metric = form.get("metric") or None
+            label_key = form.get("label_key") or None
+        else:
+            body = await request.json()
+            source_name = (body or {}).get("source")
+            if source_name == "canvas":
+                # use the canvas credit_risk source node's own config
+                # (only wired nodes count — unconnected sources are inert)
+                wired = {e.get("source") for e in (graph.get("edges") or [])}
+                node = next(
+                    (t for t in sources.find_source_nodes(graph)
+                     if t.get("name") in wired
+                     and (t.get("source") or {}).get("type") == "credit_risk"),
+                    None,
+                )
+                if node is None:
+                    raise sources.SourceError(
+                        "Graph has no connected credit_risk source node; wire one "
+                        "into the pipeline or use {\"source\": \"credit_risk\", ...} "
+                        "explicitly"
+                    )
+                config = node["source"]
+                records = sources.records_from_source_node(node)
+                source = {"type": "canvas", "node": node.get("name"),
+                          "split": config.get("split"), "n": int(config.get("n") or 1),
+                          "seed": int(config.get("seed") or 42),
+                          "step": config.get("step") or "none"}
+            elif source_name == "credit_risk":
+                n_raw = body.get("n")
+                n_val = int(n_raw) if n_raw is not None else 5  # n=0: entire split
+                records = sources.credit_risk_records(
+                    split=body.get("split") or None,
+                    n=n_val,
+                    seed=int(body.get("seed") or 42),
+                    step=body.get("step"),
+                )
+                source = {
+                    "type": "credit_risk",
+                    "split": body.get("split"),
+                    "n": n_val,
+                    "seed": int(body.get("seed") or 42),
+                }
+            else:
+                raise sources.SourceError(
+                    "JSON body must be {\"source\": \"canvas\"|\"credit_risk\", ...}"
+                )
+            review_zone = body.get("review_zone")
+            workers = int(body.get("workers") or 2)
+            metric = body.get("metric") or None
+            label_key = body.get("label_key") or None
+        # batch records must also cover fields provided by connected canvas
+        # source nodes (they are excluded from workflow_inputs by design)
+        wired = {e.get("source") for e in (graph.get("edges") or [])}
+        mapping_inputs = list(workflow_inputs)
+        for node in sources.find_source_nodes(graph):
+            if node.get("name") not in wired:
+                continue
+            for out in node.get("outputs") or []:
+                mapping_inputs.append({"name": out["name"], "required": False})
+        # Preprocess the raw records: doing it before the mapping is what lets a
+        # preprocessor rename or derive the very fields the mapping needs.
+        records = preprocess.apply(graph, records)
+        # An evaluation is a batch with a metric: pull the expected answers out
+        # before mapping, so the label never reaches the workflow as an input.
+        labels = None
+        if metric:
+            records, labels = evaluation.split_labels(records, label_key)
+        mapped = sources.map_to_workflow_inputs(records, mapping_inputs)
+    except sources.SourceError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except preprocess.PreprocessError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except evaluation.EvaluationError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    return graph, records, mapped, source, review_zone, workers, metric, labels
+
+
+@app.post("/api/graphs/{graph_id}/run-batch")
+async def run_batch(graph_id: str, request: Request):
+    """Batch-run a graph over a file upload or a configured sample."""
+    graph, _records, mapped, source, review_zone, workers, metric, labels = (
+        await _batch_payload(graph_id, request))
+    batch_id = batch_store.start_batch(graph, mapped, source,
+                                       gray_zone=_gray_zone(review_zone),
+                                       workers=workers, metric=metric, labels=labels)
+    return {"batch_id": batch_id, "total": len(mapped)}
+
+
+@app.post("/api/graphs/{graph_id}/run-batch/preview")
+async def preview_batch(graph_id: str, request: Request):
+    """How many runs this batch would be, before you commit to it.
+
+    Stepping turns one sample into one record per date, so the number of runs
+    is not the `n` you typed. Answering that here means the dialog can say so
+    up front rather than after 1200 model calls.
+    """
+    _graph, records, mapped, source, _zone, workers, metric, _labels = (
+        await _batch_payload(graph_id, request))
+    # A stepped record carries the sample it came from; without stepping every
+    # record is its own sample and the two counts agree.
+    by_sample: dict[str, set[str]] = {}
+    for r in records:
+        if r.get("sample_id") and r.get("as_of"):
+            by_sample.setdefault(str(r["sample_id"]), set()).add(str(r["as_of"]))
+    # Dates are per sample, and two companies rarely share one: counting them
+    # across the whole batch would say "18 dates" for 3 samples of 6.
+    per_sample = [len(v) for v in by_sample.values()]
+    dates = sorted({d for v in by_sample.values() for d in v})
+    return {
+        "total": len(mapped),
+        "samples": len(by_sample) or len(mapped),
+        "dates": [dates[0], dates[-1]] if dates else None,
+        "steps": max(per_sample) if per_sample else 1,
+        "steps_min": min(per_sample) if per_sample else 1,
+        "source": source,
+        "workers": workers,
+        "metric": metric,
+        "fields": sorted({k for r in mapped[:50] for k in r}),
+    }
+
+
+@app.get("/api/metrics")
+def list_metrics():
+    """Metrics an evaluation can use: the optimizer's built-ins, plus any
+    custom tool shaped like one (exactly `prediction` and `label` params)."""
+    return {"metrics": evaluation.available_metrics()}
+
+
+@app.get("/api/batches")
+def list_batches(graph_id: str | None = Query(default=None)):
+    """Past batches for a workflow, newest first (without their records)."""
+    return batch_store.list_batches(graph_id=graph_id)
+
+
+@app.get("/api/batches/{batch_id}")
+def get_batch(batch_id: str):
+    batch = batch_store.get_batch(batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found")
+    return batch
+
+
+@app.get("/api/batches/{batch_id}/compare")
+def compare_batches(batch_id: str, baseline: str = Query(...)):
+    """How this batch differs from an earlier one, record by record."""
+    candidate = batch_store.get_batch(batch_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found")
+    before = batch_store.get_batch(baseline)
+    if before is None:
+        raise HTTPException(status_code=404, detail=f"Batch '{baseline}' not found")
+    return batch_compare.compare(before, candidate)
+
+
+@app.get("/api/batches/{batch_id}/export")
+def export_batch(batch_id: str, format: str = Query(default="csv")):
+    """Download a batch's per-record results as CSV or JSON."""
+    fmt = (format or "csv").lower()
+    if fmt not in ("csv", "json"):
+        raise HTTPException(status_code=422,
+                            detail=f"Unsupported format '{format}' (use csv or json)")
+    batch = batch_store.get_batch(batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found")
+    if fmt == "csv":
+        body = batch_export.to_csv(batch)
+        media_type = "text/csv; charset=utf-8"
+    else:
+        body = batch_export.to_json(batch)
+        media_type = "application/json"
+    name = batch_export.filename(batch, fmt)
+    return Response(
+        content=body,
+        media_type=media_type,
+        headers={"content-disposition": f'attachment; filename="{name}"'},
+    )
+
+
+@app.post("/api/batches/{batch_id}/cancel")
+def cancel_batch(batch_id: str):
+    """Stop a batch starting further items; in-flight items finish."""
+    outcome = batch_store.cancel_batch(batch_id)
+    if not outcome.get("cancelled") and outcome.get("reason") == "no such batch":
+        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found")
+    return outcome
+
+
+@app.post("/api/graphs/{graph_id}/watch")
+def start_watch(graph_id: str):
+    """Start watchers for the graph's scheduled (non-ondemand) source nodes."""
+    graph = graph_store.load_graph(graph_id)
+    if graph is None:
+        raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found")
+    started = watcher.start_graph_watch(graph)
+    if not started:
+        raise HTTPException(
+            status_code=422,
+            detail="No source node with a schedule (mode daily/interval) in this graph",
+        )
+    return {"watching": True, "watchers": started}
+
+
+@app.delete("/api/graphs/{graph_id}/watch")
+def stop_watch(graph_id: str):
+    stopped = watcher.stop_graph_watch(graph_id)
+    return {"watching": False, "stopped": stopped}
+
+
+@app.get("/api/graphs/{graph_id}/watch")
+def watch_status(graph_id: str):
+    return watcher.graph_watch_status(graph_id)
+
+
+@app.get("/api/review")
+def list_reviews(status: str | None = Query(default=None)):
+    return review_store.list_reviews(status=status)
+
+
+@app.post("/api/review/{review_id}")
+def resolve_review(review_id: str, body: dict = Body(...)):
+    try:
+        review = review_store.resolve_review(
+            review_id, decision=body.get("decision", ""), note=body.get("note")
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if review is None:
+        raise HTTPException(status_code=404, detail=f"Review '{review_id}' not found")
+    return review
+
+
+def _safe_order(graph: dict) -> tuple[list[dict], list[dict]]:
+    """Topo-order tasks; fall back to canvas order when edges are invalid."""
+    try:
+        ordered = graph_store.topo_sort_tasks(
+            graph.get("tasks", []) or [], graph.get("edges", []) or []
+        )
+    except graph_store.GraphValidationError:
+        ordered = graph.get("tasks", []) or []
+    return ordered, []
+
+
+# Static hosting of the production frontend build, when present. Mounted last
+# so /api/* routes always win.
+if FRONTEND_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=str(FRONTEND_DIST), html=True), name="frontend")
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="127.0.0.1", port=8000)

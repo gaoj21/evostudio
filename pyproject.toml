@@ -110,6 +110,14 @@ benchmarks = [
 viz = [
     "matplotlib>=3.10.0"
 ]
+# EvoAgentX Studio: the FastAPI backend under studio/, and what its test suite
+# (tests/studio/) needs to exercise the HTTP surface.
+studio = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27"
+]
 all = [
     "llama-index",
     "llama-index-vector-stores-faiss",

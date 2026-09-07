@@ -170,6 +170,7 @@ studio/data/tools/
 studio/data/.cleared-*/
 
 # Frontend
+studio/node_modules/
 studio/frontend/node_modules/
 studio/frontend/dist/
 
