@@ -404,14 +404,8 @@ button.primary:hover:not(:disabled) {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  /* the shell owns scrolling; a wide toolbar row must clip, never scroll the
-     page. Clipping the row rather than the header lets the overflow menu
-     escape downwards. */
-  overflow: hidden;
-}
-
-/* ...except the row holding the overflow menu, which must let it out */
-.topbar-compact .topbar-row {
+  /* The More menu is positioned below this row. Hiding overflow here leaves
+     the button interactive while clipping the entire menu on desktop. */
   overflow: visible;
 }
 
