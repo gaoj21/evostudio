@@ -12,10 +12,10 @@ import {
   applyEdgeChanges,
 } from '@xyflow/react';
 import { api } from './api.js';
-import { cancelOutcome, unattendedBatch } from './batchControl.js';
 import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels';
 import { graphToFlow, flowToGraph, uniqueName } from './convert.js';
 import { useLayoutMode } from './useLayoutMode.js';
+import { BATCH_SETTLED, useExecutionSession } from './useExecutionSession.js';
 import TaskNode from './components/TaskNode.jsx';
 import SourceNode from './components/SourceNode.jsx';
 import ToolNode from './components/ToolNode.jsx';
@@ -81,13 +81,6 @@ function extractErrors(err) {
 }
 
 
-// A run or batch stops being polled only once it can no longer change. An
-// abandoned run and a cancelling batch are easy to get wrong in opposite
-// directions: the first is finished as far as the UI is concerned even though
-// its thread is still going, and the second is *not* finished even though the
-// user has already asked it to stop.
-const RUN_SETTLED = ['success', 'failed', 'abandoned', 'lost'];
-const BATCH_SETTLED = ['completed', 'cancelled', 'lost', 'interrupted'];
 const isSettled = (settled, status) => settled.includes(status);
 
 // Stable ids for the three main panels. Kept module-level so the array identity
@@ -109,14 +102,6 @@ export function Studio() {
   const [notices, setNotices] = useState(null);
   const [saving, setSaving] = useState(false);
   const [runDialogOpen, setRunDialogOpen] = useState(false);
-  const [runStarting, setRunStarting] = useState(false);
-  const [runMode, setRunMode] = useState(false);
-  const [run, setRun] = useState(null);
-  const [batch, setBatch] = useState(null); // {batch_id, status, node_progress, ...}
-  // A batch left running while the canvas shows a different one.
-  const [unattended, setUnattended] = useState(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerTab, setDrawerTab] = useState('result'); // 'result' | 'nodes' | 'memory'
   const [copied, setCopied] = useState(false);
   const [evolveOpen, setEvolveOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -154,6 +139,37 @@ export function Studio() {
   const rightPanelRef = useRef(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
+
+  const reportExecutionError = useCallback((error) => {
+    setErrors(Array.isArray(error) ? error : extractErrors(error));
+  }, []);
+  const clearSelection = useCallback(() => setSelectedId(null), []);
+  const execution = useExecutionSession({
+    graphId: graph?.id,
+    onError: reportExecutionError,
+    onClearSelection: clearSelection,
+  });
+  const {
+    abandonRun,
+    batch,
+    batchProgress,
+    beginBatch,
+    cancelBatch,
+    drawerOpen,
+    drawerTab,
+    exitRunMode,
+    launchRun,
+    openPastBatch: openExecutionBatch,
+    openPastRun: openExecutionRun,
+    reset: resetExecution,
+    run,
+    runByName,
+    runMode,
+    runStarting,
+    setDrawerOpen,
+    setDrawerTab,
+    unattended,
+  } = execution;
   // Remembers panel widths *and* collapsed state across reloads (localStorage).
   // A restored layout of 0 collapses the panel; `onResize` fires on mount via
   // the library's ResizeObserver, so the edge expand button appears with it.
@@ -322,13 +338,10 @@ export function Studio() {
       setSelectedId(null);
       setErrors(null);
       setNotices(null);
-      setRunMode(false);
-      setRun(null);
-      setBatch(null);
-      setDrawerOpen(false);
+      resetExecution();
       api.getWatch(id).then(setWatchInfo).catch(() => setWatchInfo(null));
     },
-    [setNodes, setEdges, markClean, resetHistory]
+    [setNodes, setEdges, markClean, resetHistory, resetExecution]
   );
 
   const refreshList = useCallback(async () => {
@@ -732,45 +745,22 @@ export function Studio() {
   );
 
   const openPastRun = useCallback(
-    async (run) => {
+    async (listedRun) => {
       setRunsOpen(false);
-      try {
-        // The listing carries a trimmed record; fetch the full one so node
-        // outputs are there to inspect.
-        const full = (await api.getRun(run.run_id)) || run;
-        setBatch(null);
-        setRun(full);
-        setRunMode(true);
-        setSelectedId(null);
-        setDrawerTab('result');
-        setDrawerOpen(true);
-      } catch (err) {
-        setErrors(extractErrors(err));
-      }
+      await openExecutionRun(listedRun);
     },
-    []
+    [openExecutionRun]
   );
 
   // Reopening a batch is also how a still-running one is picked back up after
   // a reload: the progress poll keys on the id, so putting it back into state
   // reattaches the canvas to work that never stopped.
   const openPastBatch = useCallback(
-    async (batch) => {
+    async (listedBatch) => {
       setRunsOpen(false);
-      try {
-        // The listing omits the records to stay small; the canvas needs them.
-        const full = await api.getBatch(batch.batch_id);
-        setRun(null);
-        setBatch(full);
-        setRunMode(true);
-        setSelectedId(null);
-        setDrawerTab('items');
-        setDrawerOpen(true);
-      } catch (err) {
-        setErrors(extractErrors(err));
-      }
+      await openExecutionBatch(listedBatch);
     },
-    []
+    [openExecutionBatch]
   );
 
   const applyChatGraph = useCallback(
@@ -793,178 +783,27 @@ export function Studio() {
   const startRun = useCallback(
     async (inputs, startAt, session) => {
       if (!graph?.id) return;
-      setRunStarting(true);
-      try {
+      const runId = await launchRun(async () => {
         // Run what you see: persist the canvas before starting the run,
         // otherwise the server executes the last *saved* version.
         const current = await saveCurrent();
-        if (!current?.id) return undefined;
-        const { run_id } = await api.runGraph(current.id, inputs, startAt, session);
-        setRunDialogOpen(false);
-        setRun({ run_id, status: 'running', nodes: [], result: null, error: null });
-        setBatch(null);
-        setRunMode(true);
-        setDrawerOpen(false);
-        setDrawerTab('result');
-        setSelectedId(null);
-        // Returned so a caller that needs the id (Chat, to report the outcome
-        // back) can have it; failures already surface in the error banner.
-        return run_id;
-      } catch (err) {
-        setErrors(extractErrors(err));
-        setRunDialogOpen(false);
-        return undefined;
-      } finally {
-        setRunStarting(false);
-      }
+        if (!current?.id) return null;
+        const { run_id: runId } = await api.runGraph(current.id, inputs, startAt, session);
+        return { run_id: runId, status: 'running', nodes: [], result: null, error: null };
+      });
+      setRunDialogOpen(false);
+      return runId;
     },
-    [graph?.id, saveCurrent]
+    [graph?.id, launchRun, saveCurrent]
   );
-
-  useEffect(() => {
-    if (!runMode || !run?.run_id) return;
-    if (isSettled(RUN_SETTLED, run.status)) return;
-    let stopped = false;
-    const tick = async () => {
-      try {
-        const r = await api.getRun(run.run_id);
-        if (stopped) return;
-        setRun(r);
-        if (isSettled(RUN_SETTLED, r.status)) setDrawerOpen(true);
-      } catch (err) {
-        if (stopped) return;
-        // A 404 is final: the run is gone (the server restarted before it was
-        // persisted, or it was never started). Polling it forever leaves the
-        // canvas stuck in run mode with a badge that never resolves.
-        if (err?.status === 404) {
-          stopped = true;
-          setRun((current) => (current?.run_id === run.run_id
-            ? { ...current, status: 'failed',
-                error: `Run ${run.run_id} is no longer on the server — it was `
-                  + 'lost before it finished (a restart, most likely).' }
-            : current));
-          setDrawerOpen(true);
-        }
-        /* anything else is a transient poll error: keep polling */
-      }
-    };
-    tick();
-    const t = setInterval(tick, 2000);
-    return () => {
-      stopped = true;
-      clearInterval(t);
-    };
-  }, [runMode, run?.run_id, run?.status]);
 
   // ---- batch run: canvas-level progress ----
   const onBatchStart = useCallback((batchId) => {
     // Close the dialog: aggregate progress lives on the canvas (per-node
     // counters plus a status badge) and per-record detail in the drawer.
     setRunDialogOpen(false);
-    setBatch({ batch_id: batchId, status: 'running', node_progress: null, items: [] });
-    setRun(null);
-    setRunMode(true);
-    setDrawerOpen(false);
-    setDrawerTab('items');
-    setSelectedId(null);
-  }, []);
-
-  useEffect(() => {
-    if (!runMode || !batch?.batch_id) return;
-    // Not `!== 'running'`: a cancelling batch is still winding down, and
-    // giving up on it here would leave the badge stuck mid-cancel forever.
-    if (isSettled(BATCH_SETTLED, batch.status)) return;
-    let stopped = false;
-    const tick = async () => {
-      try {
-        const b = await api.getBatch(batch.batch_id);
-        if (stopped) return;
-        setBatch(b);
-        // Surface the per-record detail the moment there is a verdict, the same
-        // way a single run opens its result.
-        if (isSettled(BATCH_SETTLED, b.status)) setDrawerOpen(true);
-      } catch (err) {
-        if (stopped) return;
-        if (err?.status === 404) {
-          // Same as a run: a batch the server no longer knows about will never
-          // report progress, so stop rather than spin.
-          stopped = true;
-          setBatch((current) => (current?.batch_id === batch.batch_id
-            ? { ...current, status: 'lost' }
-            : current));
-          setErrors([`Batch ${batch.batch_id} is no longer on the server — `
-            + 'it was lost before it finished.']);
-        }
-        /* anything else is a transient poll error: keep polling */
-      }
-    };
-    tick();
-    const t = setInterval(tick, 2000);
-    return () => {
-      stopped = true;
-      clearInterval(t);
-    };
-  }, [runMode, batch?.batch_id, batch?.status]);
-
-  // Separately from the batch on screen: is another one still running? The
-  // canvas tracks one batch, so opening an older one from Runs quietly moves
-  // the Stop button off the live one.
-  useEffect(() => {
-    if (!graph?.id) return undefined;
-    let stopped = false;
-    const look = async () => {
-      try {
-        const listed = await api.listBatches(graph.id);
-        if (!stopped) setUnattended(unattendedBatch(listed?.batches || listed, batch?.batch_id));
-      } catch {
-        /* transient: the badge is a warning, not a source of truth */
-      }
-    };
-    look();
-    const t = setInterval(look, 5000);
-    return () => { stopped = true; clearInterval(t); };
-  }, [graph?.id, batch?.batch_id, batch?.status]);
-
-  // Stopping a batch is worth real money: the records it has not started yet
-  // are the bulk of a long evaluation, and nothing else can call them back.
-  const cancelBatch = useCallback(async (batchId) => {
-    const target = typeof batchId === 'string' ? batchId : batch?.batch_id;
-    if (!target) return;
-    try {
-      const { stopping, message } = cancelOutcome(await api.cancelBatch(target));
-      if (stopping) {
-        setBatch((current) => (current?.batch_id === target
-          ? { ...current, status: 'cancelling' }
-          : current));
-      }
-      if (message) setErrors([message]);
-    } catch (err) {
-      setErrors(extractErrors(err));
-    }
-  }, [batch?.batch_id]);
-
-  // Deliberately "give up on", not "stop": the framework call cannot be
-  // interrupted, so this only stops the UI waiting on it.
-  const abandonRun = useCallback(async () => {
-    if (!run?.run_id) return;
-    try {
-      await api.abandonRun(run.run_id);
-      setRun((current) => (current?.run_id === run.run_id
-        ? { ...current, status: 'abandoned' }
-        : current));
-      setErrors(['Given up on this run. It cannot be interrupted, so it '
-        + 'finishes in the background and still spends whatever it has left.']);
-    } catch (err) {
-      setErrors(extractErrors(err));
-    }
-  }, [run?.run_id]);
-
-  const exitRunMode = useCallback(() => {
-    setRunMode(false);
-    setRun(null);
-    setBatch(null);
-    setDrawerOpen(false);
-  }, []);
+    beginBatch(batchId);
+  }, [beginBatch]);
 
   // ---- watch (scheduled source nodes) ----
   const onToggleWatch = useCallback(async () => {
@@ -1024,14 +863,6 @@ export function Studio() {
   }, [watchInfo?.watching, graph?.id]);
 
   // ---- derived ----
-  const runByName = useMemo(() => {
-    const m = {};
-    (run?.nodes || []).forEach((n) => {
-      m[n.name] = n;
-    });
-    return m;
-  }, [run]);
-
   const displayNodes = useMemo(
     () => {
       // nodes with no edges at all are parked drafts (inert at run time)
@@ -1081,15 +912,6 @@ export function Studio() {
   // Names some node produces. An input that matches none of them is not wired
   // to anything and will be asked for at run time — usually intended, but it is
   // also exactly what a typo'd input name looks like.
-  const batchProgress = useMemo(() => {
-    const items = batch?.items || [];
-    return {
-      total: batch?.total ?? items.length,
-      done: items.filter((it) => it.status === 'success' || it.status === 'failed').length,
-      failed: items.filter((it) => it.status === 'failed').length,
-    };
-  }, [batch]);
-
   const producedNames = useMemo(() => {
     const names = new Set();
     nodes.forEach((n) => (n.data?.outputs || []).forEach((o) => o.name && names.add(o.name)));
