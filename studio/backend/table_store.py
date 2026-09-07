@@ -27,12 +27,13 @@ import time
 import sys
 import threading
 from pathlib import Path
+from studio_config import data_path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-TABLES_DIR = _REPO_ROOT / "studio" / "data" / "tables"
+TABLES_DIR = data_path("tables")
 
 # SQLite serialises writers itself, but a batch has several threads opening
 # the same file; a short busy timeout turns contention into a wait instead of

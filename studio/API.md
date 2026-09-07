@@ -1,6 +1,10 @@
 # Studio API Contract (v1, MVP)
 
 Backend: FastAPI at `studio/backend/`, served with uvicorn on port 8000.
+
+Mutable state is stored under `studio/data/` by default for backward
+compatibility. Set `EAX_STUDIO_DATA_DIR` to an absolute application-data path
+in deployed or shared environments; every backend store uses the same root.
 Frontend: Vite + React + @xyflow/react at `studio/frontend/`, dev server
 proxies `/api` to :8000; production build is statically hosted by FastAPI.
 

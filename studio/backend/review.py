@@ -18,12 +18,13 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from studio_config import data_path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-REVIEWS_DIR = _REPO_ROOT / "studio" / "data" / "reviews"
-RUNS_DIR = _REPO_ROOT / "studio" / "data" / "runs"
-BATCHES_DIR = _REPO_ROOT / "studio" / "data" / "batches"
+REVIEWS_DIR = data_path("reviews")
+RUNS_DIR = data_path("runs")
+BATCHES_DIR = data_path("batches")
 
 DEFAULT_GRAY_ZONE = (35, 65)
 

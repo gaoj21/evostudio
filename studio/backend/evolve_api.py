@@ -17,6 +17,7 @@ import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from studio_config import data_path
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -31,7 +32,7 @@ import graphs as graph_store
 import sources
 from graphs import strip_task, topo_sort_tasks
 
-EVOLVE_DIR = _REPO_ROOT / "studio" / "data" / "evolve"
+EVOLVE_DIR = data_path("evolve")
 ENV_PATH = _REPO_ROOT / ".env"
 
 # --- dspy 3.3.0 compatibility shims (copied from credit_risk/optimize_mipro.py)

@@ -22,6 +22,7 @@ import re
 import time
 import uuid
 from pathlib import Path
+from studio_config import data_path
 
 from fastapi import APIRouter, Body, Header, HTTPException
 from fastapi.responses import StreamingResponse
@@ -34,7 +35,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 MODEL_NAME = "evoagentx-agent"
 MAX_STEPS = 8
-MEMORY_DIR = _REPO_ROOT / "studio" / "data" / "agent-memory"
+MEMORY_DIR = data_path("agent-memory")
 MEMORY_HITS = 4
 MAX_OBSERVATION = 4000
 

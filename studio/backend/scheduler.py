@@ -24,12 +24,13 @@ import threading
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
+from studio_config import data_path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 import runner
 
-SCHEDULES_DIR = _REPO_ROOT / "studio" / "data" / "schedules"
+SCHEDULES_DIR = data_path("schedules")
 
 MODES = ("daily", "interval")
 # A schedule runs LLM calls with nobody watching. A typo of 1 instead of 60

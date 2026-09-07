@@ -9,6 +9,7 @@ and corpus-id conventions.
 
 import sys
 from pathlib import Path
+from studio_config import data_path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
@@ -22,7 +23,7 @@ from memory.ltm import (  # noqa: F401  (re-exported for existing imports)
     unquote_content,
 )
 
-MEMORY_DIR = _REPO_ROOT / "studio" / "data" / "memory"
+MEMORY_DIR = data_path("memory")
 
 
 def store_dir(graph_id: str, agent: str) -> Path:

@@ -31,8 +31,9 @@ import workspace as workspace_mod
 from graphs import (is_source_task, is_tool_task, parked_task_names,
                     strip_task, subgraph_from, topo_sort_tasks)
 import skills_api
+from studio_config import data_path
 
-RUNS_DIR = _REPO_ROOT / "studio" / "data" / "runs"
+RUNS_DIR = data_path("runs")
 
 _runs: dict[str, dict] = {}
 _lock = threading.Lock()

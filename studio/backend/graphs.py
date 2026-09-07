@@ -9,6 +9,7 @@ import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from studio_config import DATA_DIR
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -17,7 +18,6 @@ import sys
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-DATA_DIR = _REPO_ROOT / "studio" / "data"
 GRAPHS_DIR = DATA_DIR / "graphs"
 
 _lock = threading.Lock()

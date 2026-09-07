@@ -32,10 +32,11 @@ Only new runs write artifacts; historical runs are untouched.
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from studio_config import data_path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-WORKSPACE_DIR = _REPO_ROOT / "studio" / "data" / "workspace"
+WORKSPACE_DIR = data_path("workspace")
 MAX_READ_BYTES = 100 * 1024
 
 

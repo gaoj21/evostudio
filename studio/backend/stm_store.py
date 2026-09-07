@@ -17,10 +17,11 @@ capped by how many entries the node asked for.
 
 import threading
 from pathlib import Path
+from studio_config import data_path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-STM_DIR = _REPO_ROOT / "studio" / "data" / "stm"
+STM_DIR = data_path("stm")
 
 # Sessions accumulate; a workflow left running for a week should not grow an
 # unbounded file. Oldest entries of a session are dropped first.

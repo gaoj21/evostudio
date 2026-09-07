@@ -20,6 +20,7 @@ import time
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
+from studio_config import data_path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -27,7 +28,7 @@ import runner
 import sources
 import source_apis
 
-WATCH_DIR = _REPO_ROOT / "studio" / "data" / "watch"
+WATCH_DIR = data_path("watch")
 
 MIN_INTERVAL_MINUTES = 5
 DEBUG_MIN_INTERVAL_MINUTES = 0.2

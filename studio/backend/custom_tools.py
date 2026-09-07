@@ -57,12 +57,13 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from studio_config import data_path
 
 from fastapi import APIRouter, Body, HTTPException
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-TOOLS_DIR = _REPO_ROOT / "studio" / "data" / "tools"
+TOOLS_DIR = data_path("tools")
 
 ALLOWED_TYPES = ["string", "number", "integer", "boolean", "object", "array"]
 _PY_TYPES = {"string": str, "integer": int, "number": float,

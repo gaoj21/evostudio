@@ -12,12 +12,13 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from studio_config import data_path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 import runner
 
-BATCHES_DIR = _REPO_ROOT / "studio" / "data" / "batches"
+BATCHES_DIR = data_path("batches")
 
 MAX_WORKERS = 5
 
