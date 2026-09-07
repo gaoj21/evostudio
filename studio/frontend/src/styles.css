@@ -578,7 +578,7 @@ button.primary:hover:not(:disabled) {
   border-right: 1px solid var(--border);
 }
 
-/* segmented control for Nodes / Tools / Workspace */
+/* segmented control for Library / Custom / Workspace */
 .sidebar-tabs {
   display: flex;
   align-items: center;
@@ -823,6 +823,17 @@ button.primary:hover:not(:disabled) {
   background: var(--accent-soft);
   color: var(--accent-text);
   font-weight: 600;
+}
+
+.custom-capability-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  margin-bottom: 18px;
+}
+
+.custom-capability-actions .palette-custom-add {
+  margin: 0;
 }
 
 .workflow-settings-name {

@@ -49,7 +49,7 @@ export default function Palette({ templates, sources, graphTemplates, onAdd, onL
   );
 
   // one draggable palette entry per sub-tool (built-in or custom); custom
-  // tools are created/managed in the left "Tools" tab
+  // tools are created/managed in the unified Library and Custom tabs
   const toolItems = toolCatalog
     .filter((t) => t.available)
     .flatMap((t) => (t.tools || []).map((sub) => ({ toolkit: t.name, ...sub })));
@@ -101,29 +101,6 @@ export default function Palette({ templates, sources, graphTemplates, onAdd, onL
         onChange={(event) => setQuery(event.target.value)}
       />
       <PaletteSection title="Core nodes" count={filtered.core.length} initiallyOpen searching={searching}>
-        {!searching && (
-          <button
-            type="button"
-            className="palette-custom-add"
-            disabled={disabled}
-            onClick={() =>
-              onAdd({
-                type: 'custom',
-                label: 'Custom node',
-                defaults: {
-                  description: '',
-                  inputs: [{ name: 'input', type: 'str', description: '', required: true }],
-                  outputs: [{ name: 'output', type: 'str', description: '', required: true }],
-                  prompt: '',
-                  system_prompt: '',
-                  parse_mode: 'str',
-                },
-              })
-            }
-          >
-            + Custom node
-          </button>
-        )}
         {filtered.core.map(item)}
       </PaletteSection>
       <PaletteSection title="Input sources" count={filtered.sources.length} searching={searching}>

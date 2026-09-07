@@ -8,7 +8,7 @@ import { useCallback, useState } from 'react';
  * updating a tab that is currently hidden on compact layouts.
  */
 export function useStudioNavigation(layout) {
-  const [leftTab, setLeftTab] = useState('nodes');
+  const [leftTab, setLeftTab] = useState('library');
   const [rightTab, setRightTab] = useState('inspector');
   const [compactPane, setCompactPane] = useState('chat');
   const [libraryOpen, setLibraryOpen] = useState(false);
@@ -32,7 +32,7 @@ export function useStudioNavigation(layout) {
   const openWorkspace = useCallback(() => {
     setLeftTab('workspace');
     if (layout === 'phone') {
-      setCompactPane('nodes');
+      setCompactPane('library');
       setLibraryOpen(false);
     } else if (layout === 'tablet') {
       setLibraryOpen(true);
@@ -48,12 +48,12 @@ export function useStudioNavigation(layout) {
 
   const toggleLibrary = useCallback(() => {
     if (layout === 'phone') {
-      setCompactPane('nodes');
+      setCompactPane('library');
       setLibraryOpen(false);
     } else if (layout === 'tablet') {
       setLibraryOpen((open) => !open);
     } else {
-      setLeftTab('nodes');
+      setLeftTab('library');
     }
   }, [layout]);
 

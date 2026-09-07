@@ -141,7 +141,7 @@ function ToolsSelect({ selected, onChange }) {
     <div className="field">
       <label>Tools</label>
       <div className="muted small" style={{ marginBottom: 4 }}>
-        Tick to attach; manage custom tools in the left "Tools" tab.
+        Tick to attach; manage custom tools in the left "Custom" tab.
       </div>
       {catalog.map((t) => (
         <label
@@ -181,7 +181,7 @@ function SkillsSelect({ selected, onChange }) {
       <label>Skills</label>
       <div className="muted small" style={{ marginBottom: 4 }}>
         Instructions this node always follows — appended to its system prompt at
-        run time. Manage them in the left &quot;Tools&quot; tab, or ask in Chat.
+        run time. Manage them in the left &quot;Custom&quot; tab, or ask in Chat.
       </div>
       {catalog.length === 0 ? (
         <div className="muted small">No skills yet.</div>

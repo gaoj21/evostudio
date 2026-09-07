@@ -177,7 +177,6 @@ export function CustomToolEditor({ initial, onClose, onSaved }) {
 
 export default function ToolsPanel({ onAdd, disabled }) {
   const [customTools, setCustomTools] = useState([]);
-  const [toolCatalog, setToolCatalog] = useState([]);
   const [editorOpen, setEditorOpen] = useState(false);
   const [skills, setSkills] = useState([]);
   const [skillEditor, setSkillEditor] = useState(null); // null | {} | skill
@@ -192,7 +191,6 @@ export default function ToolsPanel({ onAdd, disabled }) {
 
   const refreshTools = () => {
     api.listCustomTools().then((r) => setCustomTools(r.tools || [])).catch(() => {});
-    api.listTools().then((r) => setToolCatalog(r.tools || [])).catch(() => {});
   };
   useEffect(() => {
     refreshSkills();
@@ -204,50 +202,40 @@ export default function ToolsPanel({ onAdd, disabled }) {
     refreshTools();
   };
 
-  const onDragStart = (e, tpl) => {
-    e.dataTransfer.setData('application/evoagentx-template', JSON.stringify(tpl));
-    e.dataTransfer.effectAllowed = 'move';
-  };
-
-  // one palette entry per sub-tool (built-in toolkits + custom tools)
-  const toolItems = toolCatalog
-    .filter((t) => t.available)
-    .flatMap((t) => (t.tools || []).map((sub) => ({ toolkit: t.name, ...sub })));
-
-  const toolItem = (sub) => {
-    const tpl = { type: sub.name, label: sub.name, defaults: toolDefaults(sub) };
-    return (
-      <div
-        key={`${sub.toolkit}:${sub.name}`}
-        className={`palette-item tool-item${disabled ? ' disabled' : ''}`}
-        draggable={!disabled}
-        onDragStart={(e) => onDragStart(e, tpl)}
-        onClick={() => !disabled && onAdd && onAdd(tpl)}
-        title={`${sub.description} (${sub.toolkit})`}
-      >
-        <div className="palette-label">⚙ {sub.name}</div>
-        <div className="palette-desc">{sub.description}</div>
-      </div>
-    );
-  };
+  const addCustomNode = () => onAdd?.({
+    type: 'custom',
+    label: 'Custom node',
+    defaults: {
+      description: '',
+      inputs: [{ name: 'input', type: 'str', description: '', required: true }],
+      outputs: [{ name: 'output', type: 'str', description: '', required: true }],
+      prompt: '',
+      system_prompt: '',
+      parse_mode: 'str',
+    },
+  });
 
   return (
     <aside className="palette">
-      <h3>Tools</h3>
+      <div className="palette-title-row">
+        <h3>Custom capabilities</h3>
+      </div>
       <p className="palette-hint">
-        Drag or click to add as a tool node on the canvas, or attach to an LLM node in the Inspector.
+        Create a workflow step or reusable code that an LLM node can call.
       </p>
-      {toolItems.map(toolItem)}
-      {toolItems.length === 0 && <p className="muted small">No tools available.</p>}
-      <h3>Custom Toolkits</h3>
+      <div className="custom-capability-actions">
+        <button type="button" className="palette-custom-add" disabled={disabled} onClick={addCustomNode}>
+          + Custom node
+        </button>
+        <button type="button" className="palette-custom-add" onClick={() => setEditorOpen(true)}>
+          + Custom tool
+        </button>
+      </div>
+      <h3>Custom tools</h3>
       <p className="palette-hint">
-        A tool is a calling interface with a description. A toolkit is a Python module,
-        and every public function in it is one tool — including functions that just wrap
-        a library or a project you already have. They appear individually in the list above.
+        Each public function in a Python module becomes a reusable tool. Once saved,
+        it appears with the built-in tools in Library.
       </p>
-      <button type="button" className="palette-custom-add" onClick={() => setEditorOpen(true)}>
-        + Toolkit
-      </button>
       {customTools.map((t) => (
         <div key={t.name} className="palette-item">
           <div className="palette-label">
@@ -264,6 +252,7 @@ export default function ToolsPanel({ onAdd, disabled }) {
           )}
         </div>
       ))}
+      {customTools.length === 0 && <p className="muted small">No custom tools yet.</p>}
       <h3>Skills</h3>
       <p className="palette-hint">
         A skill is instructions a node follows, not code it calls. Attach one to

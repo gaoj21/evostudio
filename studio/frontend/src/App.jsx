@@ -36,7 +36,7 @@ import TopBar from './components/TopBar.jsx';
 
 const nodeTypes = { task: TaskNode, source: SourceNode, tool: ToolNode };
 
-// Wide enough that the Nodes / Tools / Workspace tabs and the collapse chevron
+// Wide enough that the Library / Custom / Workspace tabs and the collapse chevron
 // all fit without truncating, and that palette descriptions stop wrapping to
 // three lines.
 const DEFAULT_SIDEBAR_SIZE = 19; // percent of the group
@@ -924,11 +924,11 @@ export function Studio() {
   const renderSidebar = (collapsible) => (
     <div className="left-sidebar">
       <div className="sidebar-tabs">
-        <button type="button" className={leftTab === 'nodes' ? 'primary' : ''} onClick={() => openLeft('nodes')}>
-          Nodes
+        <button type="button" className={leftTab === 'library' ? 'primary' : ''} onClick={() => openLeft('library')}>
+          Library
         </button>
-        <button type="button" className={leftTab === 'tools' ? 'primary' : ''} onClick={() => openLeft('tools')}>
-          Tools
+        <button type="button" className={leftTab === 'custom' ? 'primary' : ''} onClick={() => openLeft('custom')}>
+          Custom
         </button>
         <button type="button" className={leftTab === 'workspace' ? 'primary' : ''} onClick={openWorkspace}>
           Workspace
@@ -945,12 +945,12 @@ export function Studio() {
         )}
       </div>
       <div className="sidebar-body">
-        {leftTab === 'nodes' && (
+        {leftTab === 'library' && (
           <Palette templates={palette} sources={sourcePalette} graphTemplates={graphTemplates} onAdd={(tpl) => addNode(tpl)} onLoadTemplate={(id) => loadTemplate(id).catch((err) => setErrors(extractErrors(err)))} disabled={runMode} />
         )}
-        {leftTab === 'tools' && <ToolsPanel onAdd={(tpl) => addNode(tpl)} disabled={runMode} />}
+        {leftTab === 'custom' && <ToolsPanel onAdd={(tpl) => addNode(tpl)} disabled={runMode} />}
         {leftTab === 'workspace' && (
-          <WorkspacePanel open graphId={graph?.id} onClose={() => openLeft('nodes')} />
+          <WorkspacePanel open graphId={graph?.id} onClose={() => openLeft('library')} />
         )}
       </div>
     </div>
@@ -1238,7 +1238,7 @@ export function Studio() {
               {renderRight(false, compactPane === 'setup' ? 'inspector' : 'chat')}
             </div>
           )}
-          {layout === 'phone' && compactPane === 'nodes' && (
+          {layout === 'phone' && compactPane === 'library' && (
             <div className="compact-side compact-full">{renderSidebar(false)}</div>
           )}
           {layout === 'tablet' && libraryOpen && (
@@ -1274,10 +1274,10 @@ export function Studio() {
             </button>
             <button
               type="button"
-              className={(layout === 'phone' ? compactPane === 'nodes' : libraryOpen) ? 'primary' : ''}
+              className={(layout === 'phone' ? compactPane === 'library' : libraryOpen) ? 'primary' : ''}
               onClick={toggleLibrary}
             >
-              Nodes
+              Library
             </button>
           </nav>
         </div>

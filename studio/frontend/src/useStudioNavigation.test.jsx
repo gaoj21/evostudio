@@ -4,6 +4,11 @@ import { describe, expect, it } from 'vitest';
 import { useStudioNavigation } from './useStudioNavigation.js';
 
 describe('studio navigation', () => {
+  it('opens the unified library by default', () => {
+    const { result } = renderHook(() => useStudioNavigation('desktop'));
+    expect(result.current.leftTab).toBe('library');
+  });
+
   it('opens Workspace in the persistent desktop sidebar', () => {
     const { result } = renderHook(() => useStudioNavigation('desktop'));
     act(() => result.current.openWorkspace());
@@ -25,7 +30,7 @@ describe('studio navigation', () => {
     act(() => result.current.openWorkspace());
 
     expect(result.current.leftTab).toBe('workspace');
-    expect(result.current.compactPane).toBe('nodes');
+    expect(result.current.compactPane).toBe('library');
   });
 
   it('takes a selected phone node straight to its editor', () => {
