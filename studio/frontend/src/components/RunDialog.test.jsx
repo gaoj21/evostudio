@@ -120,6 +120,14 @@ describe('batch data source', () => {
     await waitFor(() => expect(beforeRun).toHaveBeenCalled());
     expect(api.previewBatchCanvas).toHaveBeenCalled();
   });
+
+  it('previews with the new graph id when saving renamed it', async () => {
+    const beforeRun = vi.fn().mockResolvedValue({ id: 'renamed-graph' });
+    const user = open({ beforeRun });
+    await batchTab(user);
+
+    await waitFor(() => expect(api.previewBatchCanvas).toHaveBeenCalledWith('renamed-graph'));
+  });
 });
 
 describe('how big this batch is', () => {
@@ -215,5 +223,16 @@ describe('stepping from the dialog', () => {
 
     await waitFor(() => expect(api.runBatchSource).toHaveBeenCalledWith(
       'g1', expect.objectContaining({ step: 'weekly' })));
+  });
+
+  it('starts the batch with the new graph id returned by save', async () => {
+    const beforeRun = vi.fn().mockResolvedValue({ id: 'renamed-graph' });
+    api.runBatchCanvas.mockResolvedValue({ batch_id: 'b1' });
+    const user = open({ beforeRun });
+    await batchTab(user);
+    await user.click(await screen.findByRole('button', { name: /run batch/i }));
+
+    await waitFor(() => expect(api.runBatchCanvas).toHaveBeenCalledWith(
+      'renamed-graph', expect.objectContaining({ workers: 2 })));
   });
 });

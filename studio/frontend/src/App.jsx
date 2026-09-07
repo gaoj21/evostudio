@@ -96,7 +96,7 @@ const isSettled = (settled, status) => settled.includes(status);
 // the saved layout.
 const MAIN_PANEL_IDS = ['sidebar', 'canvas', 'inspector'];
 
-function Studio() {
+export function Studio() {
   const [palette, setPalette] = useState([]);
   const [sourcePalette, setSourcePalette] = useState([]);
   const [graphs, setGraphs] = useState([]);
@@ -106,6 +106,7 @@ function Studio() {
   const [edges, setEdges] = useEdgesState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [errors, setErrors] = useState(null);
+  const [notices, setNotices] = useState(null);
   const [saving, setSaving] = useState(false);
   const [runDialogOpen, setRunDialogOpen] = useState(false);
   const [runStarting, setRunStarting] = useState(false);
@@ -133,6 +134,10 @@ function Studio() {
   // Serialisation of the last saved/loaded state. Comparing against it beats a
   // "touched" flag: undoing back to the saved state correctly reports clean.
   const cleanRef = useRef(null);
+  // React StrictMode deliberately replays mount effects in development. Keep
+  // project initialization idempotent so an empty Studio does not create two
+  // "Untitled Workflow" documents on first load.
+  const initializedRef = useRef(false);
   // Set when Chat persists the graph server-side. The dirty effect consumes it
   // on its next pass, once the canvas state that was saved has actually landed
   // — marking clean inline would race the apply that happened in the same tick.
@@ -316,6 +321,7 @@ function Studio() {
       markClean(meta, n, e);
       setSelectedId(null);
       setErrors(null);
+      setNotices(null);
       setRunMode(false);
       setRun(null);
       setBatch(null);
@@ -352,6 +358,8 @@ function Studio() {
   );
 
   useEffect(() => {
+    if (initializedRef.current) return;
+    initializedRef.current = true;
     (async () => {
       try {
         const list = await refreshList();
@@ -604,7 +612,7 @@ function Studio() {
   }, [graph, dirty, nodes, edges, markClean, refreshList]);
 
   const saveCurrent = useCallback(async () => {
-    if (!graph?.id) return;
+    if (!graph?.id) return null;
     const body = flowToGraph(graph, nodes, edges);
     const saved = await api.saveGraph(graph.id, body);
     setWorkflowInputs(saved.workflow_inputs || []);
@@ -618,6 +626,7 @@ function Studio() {
     setGraph(meta);
     markClean(meta, nodes, edges);
     refreshList();
+    return meta;
   }, [graph, nodes, edges, refreshList, markClean]);
 
   const onSaveRef = useRef(null);
@@ -673,13 +682,14 @@ function Studio() {
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [dirty]);
 
-  // Import always lands in a new workflow, so nothing on screen is at risk;
-  // the file input is hidden and driven from the menu.
+  // Import lands in a new workflow, but opening it still replaces the canvas
+  // currently on screen. Guard that transition exactly like New and Select.
   const importInputRef = useRef(null);
 
   const onImportFile = useCallback(
     async (file) => {
       if (!file) return;
+      if (!(await confirmDiscard('Importing a project'))) return;
       try {
         const imported = await api.importGraph(file);
         await refreshList();
@@ -691,12 +701,12 @@ function Studio() {
             ? [`installed skills: ${imported.imported_skills.join(', ')}`] : []),
           ...(imported.notes || []),
         ];
-        if (notes.length) setErrors(notes);
+        if (notes.length) setNotices(notes);
       } catch (err) {
         setErrors(extractErrors(err));
       }
     },
-    [refreshList, openGraph]
+    [refreshList, openGraph, confirmDiscard]
   );
 
   // Export runs off the *saved* graph, so persist first — otherwise the
@@ -704,12 +714,13 @@ function Studio() {
   const onExport = useCallback(async () => {
     if (!graph?.id) return;
     try {
-      if (dirty) await saveCurrent();
-      window.location.assign(`/api/graphs/${encodeURIComponent(graph.id)}/export`);
+      const current = dirty ? await saveCurrent() : graph;
+      if (!current?.id) return;
+      window.location.assign(`/api/graphs/${encodeURIComponent(current.id)}/export`);
     } catch (err) {
       setErrors(extractErrors(err));
     }
-  }, [graph?.id, dirty, saveCurrent]);
+  }, [graph, dirty, saveCurrent]);
 
   // ---- chat ----
   // The chat reasons about the canvas as the user currently sees it, unsaved
@@ -786,8 +797,9 @@ function Studio() {
       try {
         // Run what you see: persist the canvas before starting the run,
         // otherwise the server executes the last *saved* version.
-        await saveCurrent();
-        const { run_id } = await api.runGraph(graph.id, inputs, startAt, session);
+        const current = await saveCurrent();
+        if (!current?.id) return undefined;
+        const { run_id } = await api.runGraph(current.id, inputs, startAt, session);
         setRunDialogOpen(false);
         setRun({ run_id, status: 'running', nodes: [], result: null, error: null });
         setBatch(null);
@@ -962,13 +974,45 @@ function Studio() {
         await api.stopWatch(graph.id);
         setWatchInfo({ watching: false, watchers: [] });
       } else {
-        await saveCurrent();
-        setWatchInfo(await api.startWatch(graph.id));
+        const current = await saveCurrent();
+        if (!current?.id) return;
+        setWatchInfo(await api.startWatch(current.id));
       }
     } catch (err) {
       setErrors(extractErrors(err));
     }
   }, [graph?.id, watchInfo?.watching, saveCurrent]);
+
+  const openEvolve = useCallback(async () => {
+    if (!graph?.id) return;
+    setErrors(null);
+    try {
+      // Optimization runs on the server-side graph, so make sure it is the
+      // same version the user is looking at before opening the panel.
+      if (dirty) await saveCurrent();
+      setEvolveOpen(true);
+    } catch (err) {
+      setErrors(extractErrors(err));
+    }
+  }, [graph?.id, dirty, saveCurrent]);
+
+  const openSchedule = useCallback(async () => {
+    if (!graph?.id) return;
+    setErrors(null);
+    try {
+      // A schedule executes the stored workflow later, not the live canvas.
+      if (dirty) await saveCurrent();
+      setScheduleOpen(true);
+    } catch (err) {
+      setErrors(extractErrors(err));
+    }
+  }, [graph?.id, dirty, saveCurrent]);
+
+  const openWorkspace = useCallback(() => {
+    setLeftTab('workspace');
+    if (layout === 'phone') setCompactPane('nodes');
+    if (layout === 'tablet') setDrawerNodes(true);
+  }, [layout]);
 
   // poll watch status while watching (fires may trigger runs)
   useEffect(() => {
@@ -1284,15 +1328,15 @@ function Studio() {
         onDelete={onDeleteGraph}
         onSave={onSave}
         onRun={() => setRunDialogOpen(true)}
-        onEvolve={() => setEvolveOpen(true)}
+        onEvolve={openEvolve}
         onReview={() => setReviewOpen(true)}
         watching={!!watchInfo?.watching}
         onToggleWatch={onToggleWatch}
-        onWorkspace={() => setLeftTab('workspace')}
+        onWorkspace={openWorkspace}
         onExport={onExport}
         onImport={() => importInputRef.current?.click()}
         onRuns={() => setRunsOpen(true)}
-        onSchedule={() => setScheduleOpen(true)}
+        onSchedule={openSchedule}
         onRename={onRename}
         onBackToEdit={exitRunMode}
       />
@@ -1304,6 +1348,16 @@ function Studio() {
             ))}
           </div>
           <button onClick={() => setErrors(null)}>✕</button>
+        </div>
+      )}
+      {notices && (
+        <div className="notice-banner">
+          <div>
+            {notices.map((notice, i) => (
+              <div key={i}>• {notice}</div>
+            ))}
+          </div>
+          <button onClick={() => setNotices(null)}>✕</button>
         </div>
       )}
       {layout === 'desktop' ? (

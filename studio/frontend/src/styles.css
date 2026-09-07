@@ -516,6 +516,30 @@ button.primary:hover:not(:disabled) {
   opacity: 0.7;
 }
 
+.notice-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 9px 14px;
+  background: var(--success-soft);
+  border-bottom: 1px solid var(--success-border);
+  color: var(--success);
+}
+
+.notice-banner button {
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 0 4px;
+}
+
+.notice-banner button:hover:not(:disabled) {
+  background: transparent;
+  color: inherit;
+  opacity: 0.7;
+}
+
 /* ==========================================================================
    Layout shell
    ========================================================================== */

@@ -319,12 +319,13 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
       try {
         // The canvas source node's config lives in the graph, so the saved
         // version has to match the screen for the count to be true.
-        if (source === 'canvas') await beforeRunRef.current?.();
+        const saved = source === 'canvas' ? await beforeRunRef.current?.() : null;
+        const activeGraphId = saved?.id || graphId;
         const res = source === 'upload'
-          ? await api.previewBatchUpload(graphId, file)
+          ? await api.previewBatchUpload(activeGraphId, file)
           : source === 'canvas'
-            ? await api.previewBatchCanvas(graphId)
-            : await api.previewBatchSource(graphId, {
+            ? await api.previewBatchCanvas(activeGraphId)
+            : await api.previewBatchSource(activeGraphId, {
               split: split || undefined,
               n: fullSplit ? 0 : (Number(n) || 5),
               seed: Number(seed) || 42,
@@ -350,14 +351,15 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
     setError(null);
     try {
       // Persist the canvas first so the batch runs the version on screen.
-      if (beforeRun) await beforeRun();
+      const saved = beforeRun ? await beforeRun() : null;
+      const activeGraphId = saved?.id || graphId;
       const scoring = metric ? { metric, label_key: labelKey } : {};
       const res =
         source === 'upload'
-          ? await api.runBatchUpload(graphId, file, { workers, ...scoring })
+          ? await api.runBatchUpload(activeGraphId, file, { workers, ...scoring })
           : source === 'canvas'
-            ? await api.runBatchCanvas(graphId, { workers, ...scoring })
-            : await api.runBatchSource(graphId, { split: split || undefined, n: fullSplit ? 0 : (Number(n) || 5), seed: Number(seed) || 42, step, workers, ...scoring });
+            ? await api.runBatchCanvas(activeGraphId, { workers, ...scoring })
+            : await api.runBatchSource(activeGraphId, { split: split || undefined, n: fullSplit ? 0 : (Number(n) || 5), seed: Number(seed) || 42, step, workers, ...scoring });
       // Hand the batch to the canvas and close: progress belongs on the graph,
       // not in a window covering it.
       onBatchStart?.(res.batch_id);
