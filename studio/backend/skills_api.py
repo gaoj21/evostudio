@@ -18,16 +18,11 @@ Routes: GET/POST/DELETE /api/skills (mounted via this module's router).
 
 import re
 import shutil
-import sys
 import threading
 from pathlib import Path
-from studio_config import data_path
+from .studio_config import data_path
 
 from fastapi import APIRouter, Body, HTTPException
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
 
 SKILLS_DIR = data_path("skills")
 

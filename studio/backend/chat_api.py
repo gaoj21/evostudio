@@ -22,23 +22,17 @@ workflow from a goal in one step).
 import copy
 import json
 import re
-import sys
 import threading
 import time
 import uuid
-from pathlib import Path
 
 from fastapi import APIRouter, Body, HTTPException
 
-import custom_tools
-import model_json
-import graphs as graph_store
-import skills_api
-import tools_registry
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+from . import custom_tools
+from . import model_json
+from . import graphs as graph_store
+from . import skills_api
+from . import tools_registry
 
 # How many previous turns to replay. The graph itself is sent every turn, so
 # older turns only carry intent, not state -- a short window is enough and
@@ -253,7 +247,7 @@ def _skill_catalog() -> str:
 
 def _source_catalog() -> str:
     try:
-        from source_apis import SOURCE_TYPE_SCHEMAS
+        from .source_apis import SOURCE_TYPE_SCHEMAS
 
         return "\n".join(
             f"- {type_}: {schema.get('description', '')} "
@@ -532,8 +526,7 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None)
                 observe("inspect_node", task)
 
             elif op == "list_runs":
-                import runner
-
+                from . import runner
                 observe("list_runs", [
                     {"run_id": r.get("run_id"), "status": r.get("status"),
                      "created_at": r.get("created_at")}
@@ -541,8 +534,7 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None)
                 ])
 
             elif op == "read_run":
-                import runner
-
+                from . import runner
                 wanted = raw.get("run_id")
                 if not wanted:
                     recent = runner.list_runs(graph_id=graph_id)
@@ -555,8 +547,7 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None)
                 observe("read_run", _run_digest(run))
 
             elif op == "list_files":
-                import workspace as workspace_mod
-
+                from . import workspace as workspace_mod
                 if not graph_id:
                     raise ChatError("list_files: no workflow is open")
                 tree = workspace_mod.tree(graph_id)
@@ -566,8 +557,7 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None)
                 observe("list_files", tree[:200])
 
             elif op == "read_file":
-                import workspace as workspace_mod
-
+                from . import workspace as workspace_mod
                 if not graph_id:
                     raise ChatError("read_file: no workflow is open")
                 info = workspace_mod.read_file(graph_id, raw.get("path") or "")
@@ -589,8 +579,7 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None)
                 graph["output_dir"] = (raw.get("path") or "runs").strip() or "runs"
 
             elif op == "write_file":
-                import workspace as workspace_mod
-
+                from . import workspace as workspace_mod
                 if not graph_id:
                     raise ChatError("write_file: no workflow is open")
                 workspace_mod.write_file(graph_id, raw.get("path") or "",
@@ -598,16 +587,14 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None)
                 notes.append(f"Wrote {raw.get('path')}")
 
             elif op == "delete_file":
-                import workspace as workspace_mod
-
+                from . import workspace as workspace_mod
                 if not graph_id:
                     raise ChatError("delete_file: no workflow is open")
                 workspace_mod.delete_file(graph_id, raw.get("path") or "")
                 notes.append(f"Deleted {raw.get('path')}")
 
             elif op == "make_dir":
-                import workspace as workspace_mod
-
+                from . import workspace as workspace_mod
                 if not graph_id:
                     raise ChatError("make_dir: no workflow is open")
                 workspace_mod.make_dir(graph_id, raw.get("path") or "")

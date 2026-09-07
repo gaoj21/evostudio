@@ -7,13 +7,8 @@ in the top-level `memory` package; this module only owns Studio's directory
 and corpus-id conventions.
 """
 
-import sys
 from pathlib import Path
-from studio_config import data_path
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+from .studio_config import data_path
 
 from memory import _backend  # dispatch on EAX_MEMORY_BACKEND
 from memory.ltm import (  # noqa: F401  (re-exported for existing imports)

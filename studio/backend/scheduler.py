@@ -24,11 +24,9 @@ import threading
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
-from studio_config import data_path
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-
-import runner
+from . import runner
+from .studio_config import data_path
 
 SCHEDULES_DIR = data_path("schedules")
 
@@ -205,8 +203,7 @@ def _loop(graph_id: str, stop_event: threading.Event) -> None:
 
 def _fire(graph_id: str, schedule: dict) -> None:
     """Start one scheduled run and write down what happened."""
-    import graphs as graph_store
-
+    from . import graphs as graph_store
     fired_at = _now()
     schedule = load(graph_id) or schedule
     schedule["last_fire"] = fired_at.isoformat()
@@ -243,8 +240,7 @@ def restore() -> list[str]:
     being skipped: `next_fire` is already in the past, so the loop's wait ends
     immediately.
     """
-    import graphs as graph_store
-
+    from . import graphs as graph_store
     started = []
     if not SCHEDULES_DIR.is_dir():
         return started

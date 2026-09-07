@@ -17,16 +17,13 @@ import json
 import os
 import threading
 import time
-import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from studio_config import data_path
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-
-import runner
-import sources
-import source_apis
+from . import runner
+from . import source_apis
+from . import sources
+from .studio_config import data_path
 
 WATCH_DIR = data_path("watch")
 

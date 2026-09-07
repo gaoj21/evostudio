@@ -23,12 +23,12 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile
 from fastapi.responses import Response
 
-import custom_tools
-import graphs as graph_store
-import runner
-import skills_api
-import tools_registry
-from graphs import (COL_WIDTH, ROW_HEIGHT, is_source_task, is_tool_task,
+from . import custom_tools
+from . import graphs as graph_store
+from . import runner
+from . import skills_api
+from . import tools_registry
+from .graphs import (COL_WIDTH, ROW_HEIGHT, is_source_task, is_tool_task,
                     parked_task_names, topo_sort_tasks)
 
 router = APIRouter(prefix="/api")
@@ -149,10 +149,6 @@ def _py(value) -> str:
 def _default_model() -> tuple[str, str, str]:
     """The provider Studio is configured with: (model, base_url, key env var)."""
     try:
-        import sys
-
-        if str(_REPO_ROOT) not in sys.path:
-            sys.path.insert(0, str(_REPO_ROOT))
         from llm.registry import get_provider
 
         cfg = get_provider(None)
@@ -1053,7 +1049,7 @@ def save_ltm(memories, graph, workflow, succeeded=True):
             # Missing table key means there is no row to write; it does not
             # turn a table node into a vector-memory node.
             if keeps_table(task):
-                print(f"[memory] {node.name}: no table subject — nothing stored")
+                print(f"[memory] {{node.name}}: no table subject — nothing stored")
                 continue
 
             # A node that tracks a subject keeps one entry per subject — that

@@ -10,12 +10,6 @@ Verified by probing import + no-arg instantiation of every enabled entry.
 """
 
 import os
-import sys
-from pathlib import Path
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
 
 
 class ToolResolveError(Exception):
@@ -25,8 +19,7 @@ class ToolResolveError(Exception):
 def _skill_toolkit(**kwargs):
     from evoagentx.tools.skill_tool import SkillToolkit
 
-    import skills_api
-
+    from . import skills_api
     return SkillToolkit(skill_paths=str(skills_api.SKILLS_DIR))
 
 
@@ -156,8 +149,7 @@ def _sub_tools(toolkit) -> list[dict]:
 def find_tool(name: str):
     """Locate a sub-tool by name. Returns ("custom", spec) for user-defined
     tools, ("builtin", toolkit_name) for built-ins, None otherwise."""
-    import custom_tools
-
+    from . import custom_tools
     found = custom_tools.find(name)
     if found is not None:
         return ("custom", found[0])
@@ -179,8 +171,7 @@ def call_tool(name: str, args: dict, workspace_dir=None):
     """Execute one tool (custom or built-in sub-tool) with args; returns the
     raw result (custom tools return {"result": ...}; built-ins return their
     own payload). Raises ToolResolveError / tool exceptions on failure."""
-    import custom_tools
-
+    from . import custom_tools
     kind, target = find_tool(name) or (None, None)
     if kind is None:
         raise ToolResolveError(f"Unknown tool '{name}'")
@@ -222,8 +213,7 @@ def list_tools() -> list[dict]:
                 item["tools"] = []
         catalog.append(item)
     # user-defined tools (studio/data/tools/), always available
-    import custom_tools
-
+    from . import custom_tools
     for spec in custom_tools.list_custom_tools():
         tools = custom_tools.tools_of(spec)
         catalog.append({
@@ -248,8 +238,7 @@ def list_tools() -> list[dict]:
 
 def validate_tool_names(tool_names: list[str]) -> None:
     """Check names and required env vars without instantiating anything."""
-    import custom_tools
-
+    from . import custom_tools
     custom = {t["name"] for t in custom_tools.list_custom_tools()}
     for name in tool_names or []:
         if name in custom:
@@ -276,8 +265,7 @@ def resolve_tools(tool_names: list[str], workspace_dir=None) -> list:
     tools (studio/data/tools/) build their own single-tool toolkit.
     """
     validate_tool_names(tool_names)
-    import custom_tools
-
+    from . import custom_tools
     custom = {t["name"]: t for t in custom_tools.list_custom_tools()}
     tools = []
     for name in tool_names or []:

@@ -12,9 +12,7 @@ import json
 
 import pytest
 
-import batch_export
-
-
+from studio.backend import batch_export
 def read_csv(text):
     csv.field_size_limit(10 ** 7)
     return list(csv.DictReader(io.StringIO(text)))
@@ -149,9 +147,8 @@ class TestEndpoint:
     def client(self, tmp_path, monkeypatch):
         from fastapi.testclient import TestClient
 
-        import app as studio_app
-        import batch as batch_module
-
+        from studio.backend import app as studio_app
+        from studio.backend import batch as batch_module
         monkeypatch.setattr(batch_module, "BATCHES_DIR", tmp_path / "batches")
         batch_module._batches.clear()
         batch_module._threads.clear()

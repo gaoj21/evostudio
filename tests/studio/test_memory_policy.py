@@ -11,9 +11,7 @@ import json
 
 import pytest
 
-import memory_policy
-
-
+from studio.backend import memory_policy
 def task(**extra):
     base = {
         "name": "judge",

@@ -12,10 +12,8 @@ import threading
 
 import pytest
 
-import memory_policy
-import table_store
-
-
+from studio.backend import memory_policy
+from studio.backend import table_store
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     monkeypatch.setattr(table_store, "TABLES_DIR", tmp_path / "tables")

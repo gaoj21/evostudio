@@ -22,15 +22,14 @@ import re
 import time
 import uuid
 from pathlib import Path
-from studio_config import data_path
+from .studio_config import data_path
 
 from fastapi import APIRouter, Body, Header, HTTPException
 from fastapi.responses import StreamingResponse
 
-import model_json
-import skills_api
-import tools_registry
-
+from . import model_json
+from . import skills_api
+from . import tools_registry
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 MODEL_NAME = "evoagentx-agent"
@@ -112,10 +111,6 @@ def _system_prompt() -> str:
 
 def _open_memory(session: str, create: bool):
     """Per-session long-term memory, through the layer's backend dispatch."""
-    import sys
-
-    if str(_REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(_REPO_ROOT))
     from memory import open_memory
 
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session or "default") or "default"
@@ -150,10 +145,6 @@ def remember(session: str, text: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _ask(messages: list) -> str:
-    import sys
-
-    if str(_REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(_REPO_ROOT))
     from llm import chat as llm_chat
     from llm.registry import ProviderError
 

@@ -37,6 +37,9 @@ dependencies = [
     "jsonschema"
 ]
 
+[project.scripts]
+evoagentx-studio = "studio.backend.app:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest",

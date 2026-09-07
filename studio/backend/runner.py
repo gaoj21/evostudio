@@ -7,31 +7,25 @@ from the workflow Environment's execution data (best effort per output name).
 """
 
 import json
-import sys
 import threading
 import traceback
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
 
 from llm import get_evoagentx_llm
 
-import memory_policy
-import memory_store
-import table_store
-import stm_store
-import review as review_mod
-import sources
-import tools_registry
-import workspace as workspace_mod
-from graphs import (is_source_task, is_tool_task, parked_task_names,
+from . import memory_policy
+from . import memory_store
+from . import table_store
+from . import stm_store
+from . import review as review_mod
+from . import sources
+from . import tools_registry
+from . import workspace as workspace_mod
+from .graphs import (is_source_task, is_tool_task, parked_task_names,
                     strip_task, subgraph_from, topo_sort_tasks)
-import skills_api
-from studio_config import data_path
+from . import skills_api
+from .studio_config import data_path
 
 RUNS_DIR = data_path("runs")
 

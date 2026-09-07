@@ -10,8 +10,8 @@ description cannot drift apart.
 
 import pytest
 
-import custom_tools
-from custom_tools import CustomToolError
+from studio.backend import custom_tools
+from studio.backend.custom_tools import CustomToolError
 
 
 def save(code, name=None, builtins=()):
@@ -337,8 +337,7 @@ class TestTheExportedProject:
         import io
         import zipfile
 
-        import export_api
-
+        from studio.backend import export_api
         _, payload = export_api.build_project(graph)
         archive = zipfile.ZipFile(io.BytesIO(payload))
         return {n.split("/", 1)[1]: archive.read(n).decode("utf-8")

@@ -5,8 +5,8 @@ artifacts (runs/<run_id>/input.json + output.json), tool-produced files
 (files/), and user-managed files (upload / create / delete).
 """
 
-import graphs as graph_store
-import workspace
+from . import graphs as graph_store
+from . import workspace
 from fastapi import APIRouter, Body, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 

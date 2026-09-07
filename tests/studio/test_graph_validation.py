@@ -20,8 +20,7 @@ from conftest import make_graph, make_task
 
 
 def inputs_of(graph):
-    import graphs as graph_store
-
+    from studio.backend import graphs as graph_store
     ordered = graph_store.topo_sort_tasks(graph["tasks"], graph["edges"])
     return graph_store.compute_workflow_inputs(ordered, graph["edges"])
 
@@ -72,8 +71,7 @@ class TestWorkflowInputs:
 
 class TestValidation:
     def test_a_sound_graph_validates(self, studio_data):
-        import graphs as graph_store
-
+        from studio.backend import graphs as graph_store
         graph = make_graph(
             [make_task("a", outputs=["x"]), make_task("b", inputs=["x"], outputs=["y"])],
             edges=[("a", "b")],
@@ -83,17 +81,15 @@ class TestValidation:
         assert workflow_inputs == []
 
     def test_unknown_skill_is_rejected(self, studio_data):
-        import graphs as graph_store
-
+        from studio.backend import graphs as graph_store
         graph = make_graph([make_task("a", outputs=["x"], skill_names=["ghost"])])
         with pytest.raises(graph_store.GraphValidationError) as raised:
             graph_store.validate_graph(graph)
         assert "ghost" in str(raised.value)
 
     def test_a_known_skill_passes_and_never_reaches_the_framework(self, studio_data):
-        import graphs as graph_store
-        import skills_api
-
+        from studio.backend import graphs as graph_store
+        from studio.backend import skills_api
         skills_api.save_skill({"name": "rubric", "description": "d", "content": "# R"})
         task = make_task("a", outputs=["x"], skill_names=["rubric"])
         graph_store.validate_graph(make_graph([task]))
@@ -101,8 +97,7 @@ class TestValidation:
 
     def test_tool_node_fed_by_an_llm_node_is_rejected(self, studio_data):
         """Tool nodes run before the graph, so they cannot consume its output."""
-        import graphs as graph_store
-
+        from studio.backend import graphs as graph_store
         llm = make_task("a", outputs=["x"])
         tool = {"name": "t", "kind": "tool", "tool": "word_count",
                 "inputs": [{"name": "x", "type": "str", "description": "x",
@@ -116,8 +111,7 @@ class TestValidation:
 
 class TestTopologyHelpers:
     def test_topo_sort_follows_the_edges(self):
-        import graphs as graph_store
-
+        from studio.backend import graphs as graph_store
         graph = make_graph(
             [make_task("c", inputs=["y"], outputs=["z"]),
              make_task("a", outputs=["x"]),
@@ -128,8 +122,7 @@ class TestTopologyHelpers:
         assert [t["name"] for t in ordered] == ["a", "b", "c"]
 
     def test_parked_nodes_are_the_ones_with_no_edges(self):
-        import graphs as graph_store
-
+        from studio.backend import graphs as graph_store
         graph = make_graph(
             [make_task("a", outputs=["x"]), make_task("b", inputs=["x"], outputs=["y"]),
              make_task("lonely", outputs=["z"])],
@@ -139,8 +132,7 @@ class TestTopologyHelpers:
         assert parked == {"lonely"}
 
     def test_auto_layout_columns_by_dependency_depth(self):
-        import graphs as graph_store
-
+        from studio.backend import graphs as graph_store
         graph = make_graph(
             [make_task("a", outputs=["x"]), make_task("b", inputs=["x"], outputs=["y"]),
              make_task("c", inputs=["y"], outputs=["z"])],
@@ -152,8 +144,7 @@ class TestTopologyHelpers:
 
     def test_auto_layout_survives_a_cycle(self):
         """A cycle cannot be ordered by depth; it must not hang or raise."""
-        import graphs as graph_store
-
+        from studio.backend import graphs as graph_store
         graph = make_graph(
             [make_task("a", inputs=["y"], outputs=["x"]),
              make_task("b", inputs=["x"], outputs=["y"])],

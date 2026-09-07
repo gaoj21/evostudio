@@ -13,8 +13,7 @@ import pytest
 
 @pytest.fixture
 def sched(tmp_path, monkeypatch):
-    import scheduler
-
+    from studio.backend import scheduler
     monkeypatch.setattr(scheduler, "SCHEDULES_DIR", tmp_path / "schedules")
     scheduler._threads.clear()
     # Nothing in these tests should start a real thread.
@@ -132,8 +131,7 @@ class TestSettingOne:
 class TestFiring:
     @pytest.fixture
     def fired(self, sched, monkeypatch):
-        import graphs as graph_store
-
+        from studio.backend import graphs as graph_store
         started = []
 
         def fake_start_run(graph, inputs, background=True, session=None, **kw):
@@ -175,8 +173,7 @@ class TestFiring:
 
     def test_a_fire_that_cannot_start_does_not_kill_the_schedule(self, sched,
                                                                  monkeypatch):
-        import graphs as graph_store
-
+        from studio.backend import graphs as graph_store
         monkeypatch.setattr(graph_store, "load_graph", lambda gid: {"id": gid})
         monkeypatch.setattr(sched.runner, "start_run",
                             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no LLM")))
@@ -189,8 +186,7 @@ class TestFiring:
         assert stored["next_fire"]
 
     def test_a_deleted_workflow_is_reported_not_run(self, sched, monkeypatch):
-        import graphs as graph_store
-
+        from studio.backend import graphs as graph_store
         monkeypatch.setattr(graph_store, "load_graph", lambda gid: None)
         sched.set_schedule({"id": "g1"}, {"mode": "daily"})
         sched._fire("g1", sched.load("g1"))
@@ -200,8 +196,7 @@ class TestFiring:
 
 class TestSurvivingARestart:
     def test_enabled_schedules_start_again(self, sched, monkeypatch):
-        import graphs as graph_store
-
+        from studio.backend import graphs as graph_store
         started = []
         monkeypatch.setattr(sched, "_start_thread",
                             lambda graph, schedule: started.append(graph["id"]))
@@ -214,16 +209,14 @@ class TestSurvivingARestart:
         assert sorted(started) == ["g1", "g2"]
 
     def test_a_paused_schedule_stays_paused(self, sched, monkeypatch):
-        import graphs as graph_store
-
+        from studio.backend import graphs as graph_store
         monkeypatch.setattr(graph_store, "load_graph", lambda gid: {"id": gid})
         sched.set_schedule({"id": "g1"}, {"mode": "daily", "enabled": False})
         assert sched.restore() == []
 
     def test_a_schedule_for_a_workflow_that_is_gone_is_skipped(self, sched,
                                                                monkeypatch):
-        import graphs as graph_store
-
+        from studio.backend import graphs as graph_store
         monkeypatch.setattr(graph_store, "load_graph", lambda gid: None)
         sched.set_schedule({"id": "g1"}, {"mode": "daily"})
         assert sched.restore() == []
@@ -257,9 +250,8 @@ class TestThroughTheApi:
     def client(self, sched, studio_data):
         from fastapi.testclient import TestClient
 
-        import app as studio_app
-        import graphs
-
+        from studio.backend import app as studio_app
+        from studio.backend import graphs
         graphs.create_graph("Probe", "")
         return TestClient(studio_app.app)
 

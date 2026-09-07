@@ -6,9 +6,8 @@ use_long_term_memory=true) as REST endpoints for the frontend Memory panel.
 
 from fastapi import APIRouter, HTTPException, Query
 
-import graphs as graph_store
-import memory_store
-
+from . import graphs as graph_store
+from . import memory_store
 router = APIRouter(prefix="/api")
 
 

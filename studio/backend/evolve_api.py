@@ -7,30 +7,25 @@ and artifacts (optimized graph, before/after metrics, prompt diff) are
 persisted to studio/data/evolve/<task_id>/.
 """
 
-import ast
 import json
 import os
-import re
-import sys
 import threading
 import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from studio_config import data_path
+
+from fastapi import APIRouter, HTTPException, Request
+
+from . import graphs as graph_store
+from . import sources
+from .graphs import strip_task, topo_sort_tasks
+from .studio_config import data_path
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-
-from fastapi import APIRouter, HTTPException, Request
-
-import graphs as graph_store
-import sources
-from graphs import strip_task, topo_sort_tasks
 
 EVOLVE_DIR = data_path("evolve")
 ENV_PATH = _REPO_ROOT / ".env"
@@ -42,7 +37,7 @@ import dspy.teleprompt.mipro_optimizer_v2 as _dspy_mipro  # noqa: E402
 from evoagentx.optimizers.mipro_optimizer import (  # noqa: E402
     MiproLMWrapper as _MiproLMWrapper,
 )
-from evoagentx.optimizers.mipro_optimizer import MiproOptimizer as _MiproOptimizer
+from evoagentx.optimizers.mipro_optimizer import MiproOptimizer as _MiproOptimizer  # noqa: E402
 
 
 def _compat_set_hyperparams(self, program, num_trials, minibatch, zeroshot_opt, valset):
@@ -170,9 +165,8 @@ _MiproLMWrapper.copy = _patched_lm_copy
 # not have to pay for that.
 # ---------------------------------------------------------------------------
 
-from evaluation import (  # noqa: E402
+from .evaluation import (  # noqa: E402
     METRICS,
-    _prediction_text,
     _score,
 )
 
@@ -262,7 +256,7 @@ def start_evolve(graph: dict, records: list[dict], metric: str, params: dict) ->
 def _execute_evolve(task_id: str, graph_doc: dict, metric: str, params: dict, task_dir: Path) -> None:
     state = _tasks[task_id]
     try:
-        import runner as runner_mod
+        from . import runner as runner_mod
         from evoagentx.agents.agent_manager import AgentManager
         from evoagentx.evaluators import Evaluator
         from evoagentx.optimizers.mipro_optimizer import WorkFlowMiproOptimizer

@@ -20,9 +20,8 @@ from conftest import make_graph, make_task
 
 @pytest.fixture
 def dirs(tmp_path, monkeypatch):
-    import batch as batch_store
-    import runner
-
+    from studio.backend import batch as batch_store
+    from studio.backend import runner
     runs = tmp_path / "runs"
     batches = tmp_path / "batches"
     runs.mkdir()
@@ -39,7 +38,7 @@ def write(path, **fields):
 class TestRunsSurviveTheProcess:
     def test_a_run_is_on_disk_before_it_finishes(self, dirs, studio_data, monkeypatch):
         """Persisting only on completion is what made a lost run 404."""
-        import runner
+        from studio.backend import runner
 
         # Never actually execute: the point is what exists the moment it starts.
         monkeypatch.setattr(runner, "_execute_run", lambda *a, **k: None)
@@ -54,8 +53,7 @@ class TestRunsSurviveTheProcess:
         assert stored["inputs"] == {"topic": "t"}
 
     def test_a_leftover_running_record_becomes_a_stated_failure(self, dirs):
-        import runner
-
+        from studio.backend import runner
         runs, _ = dirs
         write(runs / "ghost.json", run_id="ghost", status="running", error=None)
 
@@ -65,8 +63,7 @@ class TestRunsSurviveTheProcess:
         assert "restart" in stored["error"]
 
     def test_finished_runs_are_left_alone(self, dirs):
-        import runner
-
+        from studio.backend import runner
         runs, _ = dirs
         write(runs / "ok.json", run_id="ok", status="success", result={"a": 1})
         write(runs / "bad.json", run_id="bad", status="failed", error="a real error")
@@ -76,8 +73,7 @@ class TestRunsSurviveTheProcess:
         assert json.loads((runs / "bad.json").read_text())["error"] == "a real error"
 
     def test_unreadable_files_do_not_stop_the_sweep(self, dirs):
-        import runner
-
+        from studio.backend import runner
         runs, _ = dirs
         (runs / "broken.json").write_text("{not json", encoding="utf-8")
         write(runs / "ghost.json", run_id="ghost", status="running")
@@ -85,8 +81,7 @@ class TestRunsSurviveTheProcess:
         assert runner.mark_interrupted() == 1
 
     def test_the_sweep_is_idempotent(self, dirs):
-        import runner
-
+        from studio.backend import runner
         runs, _ = dirs
         write(runs / "ghost.json", run_id="ghost", status="running")
         assert runner.mark_interrupted() == 1
@@ -97,8 +92,7 @@ class TestBatchesSurviveTheProcess:
     def test_a_leftover_batch_keeps_what_it_finished(self, dirs):
         """An interrupted batch is still worth reading: the items that
         completed have real results, and scores worth keeping."""
-        import batch as batch_store
-
+        from studio.backend import batch as batch_store
         _, batches = dirs
         write(batches / "b1.json", batch_id="b1", status="running", items=[
             {"index": 0, "status": "success", "score": 1.0},
@@ -115,8 +109,7 @@ class TestBatchesSurviveTheProcess:
         assert stored["items"][2]["status"] == "failed"
 
     def test_a_completed_batch_is_untouched(self, dirs):
-        import batch as batch_store
-
+        from studio.backend import batch as batch_store
         _, batches = dirs
         write(batches / "done.json", batch_id="done", status="completed",
               items=[{"index": 0, "status": "success"}], summary={"mean": 1.0})

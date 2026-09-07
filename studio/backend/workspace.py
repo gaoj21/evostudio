@@ -32,7 +32,7 @@ Only new runs write artifacts; historical runs are untouched.
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from studio_config import data_path
+from .studio_config import data_path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -85,8 +85,7 @@ def write_project(graph: dict) -> list[str]:
     """
     import shutil
 
-    import export_api
-
+    from . import export_api
     graph_id = graph.get("id") or "graph"
     root = workspace_root(graph_id)
     root.mkdir(parents=True, exist_ok=True)
@@ -191,8 +190,7 @@ def _memory_entries(graph_id: str) -> list[dict]:
     newest first — so what a workflow has learned sits beside its code and its
     runs instead of behind a tab in the run drawer.
     """
-    import memory_store
-
+    from . import memory_store
     listing: list[dict] = []
     try:
         agents = memory_store.list_agents(graph_id)
@@ -225,8 +223,7 @@ def _session_entries(graph_id: str) -> list[dict]:
     numbered forwards, unlike the long-term store where newest-first is what
     you want.
     """
-    import stm_store
-
+    from . import stm_store
     listing: list[dict] = []
     try:
         sessions = stm_store.sessions(graph_id)
@@ -255,8 +252,7 @@ def _ordered_memory(graph_id: str, agent: str) -> list[dict]:
     reader have to agree on it — hence one function rather than the same sort
     written twice.
     """
-    import memory_store
-
+    from . import memory_store
     try:
         entries = memory_store.list_entries(graph_id, agent)
     except Exception:
@@ -271,8 +267,7 @@ def _memory_text(entry: dict) -> str:
     the way into the store; left as it comes out it is a wall of escaped
     quotes, so it is unwrapped here.
     """
-    import memory_policy
-
+    from . import memory_policy
     readable = dict(entry)
     content = entry.get("content")
     for _ in range(3):
@@ -340,8 +335,7 @@ def _table_entries(graph_id: str) -> list[dict]:
     said only how recently it happened to be written. Being able to open a
     company and see its whole record is the thing this was missing.
     """
-    import table_store
-
+    from . import table_store
     listing: list[dict] = []
     try:
         nodes = table_store.nodes(graph_id)
@@ -363,8 +357,7 @@ def _table_entries(graph_id: str) -> list[dict]:
 
 def _table_text(graph_id: str, node: str, subject: str) -> str:
     """One subject's whole record, oldest first."""
-    import table_store
-
+    from . import table_store
     rows = table_store.rows(graph_id, node, subject)
     return json.dumps({"subject": subject, "node": node,
                        "rows": len(rows), "record": rows},
@@ -373,8 +366,7 @@ def _table_text(graph_id: str, node: str, subject: str) -> str:
 
 def _table_file(graph_id: str, relpath: str) -> dict | None:
     """A table row-set addressed as a path, or None if that is not one."""
-    import table_store
-
+    from . import table_store
     parts = relpath.split("/")
     if (len(parts) != 4 or parts[0] != MEMORY_DIR_NAME or parts[1] != TABLE
             or not parts[3].endswith(".json")):
@@ -396,8 +388,7 @@ def _memory_names(entries: list[dict]) -> list[str]:
     `007.json`, which said only how recently it happened to be written. Kept
     in one function because the listing and the reader must agree on it.
     """
-    import memory_policy
-
+    from . import memory_policy
     names, used = [], {}
     for position, entry in enumerate(entries, start=1):
         body = memory_policy._unwrap(entry.get("content"))
@@ -436,8 +427,7 @@ def _memory_file(graph_id: str, relpath: str) -> dict | None:
 
     # The session log stays numbered: it is a sequence of things that happened,
     # and the order is the only name a line of it has.
-    import stm_store
-
+    from . import stm_store
     try:
         position = int(parts[3][:-len(".json")])
     except ValueError:

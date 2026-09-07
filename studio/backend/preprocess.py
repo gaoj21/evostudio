@@ -10,9 +10,7 @@ dict), which means it is written in the same editor, executes in the same
 subprocess with the same timeout, and is bundled by the same export path.
 """
 
-import custom_tools
-
-
+from . import custom_tools
 class PreprocessError(Exception):
     """User-facing preprocessing failure (HTTP 422)."""
 

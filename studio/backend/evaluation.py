@@ -20,9 +20,7 @@ import json
 import re
 import statistics
 
-import custom_tools
-
-
+from . import custom_tools
 _LEVEL_SCORE_POS = {"low": 0.0, "medium": 0.5, "high": 1.0, "critical": 1.0}
 _LEVEL_SCORE_NEG = {"low": 1.0, "medium": 0.8, "high": 0.2, "critical": 0.0}
 

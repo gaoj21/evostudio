@@ -5,16 +5,12 @@ match_company_name / match_cik against the internal obligor list loaded from
 credit_risk/dataset/contemporary/candidates.csv (lazy, cached process-wide).
 """
 
-import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-
 from evoagentx.tools.tool import Tool, Toolkit
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 CANDIDATES_CSV = _REPO_ROOT / "credit_risk" / "dataset" / "contemporary" / "candidates.csv"
 
 _registry = None

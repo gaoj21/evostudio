@@ -16,9 +16,8 @@ from conftest import make_graph, make_task
 
 @pytest.fixture
 def store(studio_data, monkeypatch):
-    import graphs
-    import workspace
-
+    from studio.backend import graphs
+    from studio.backend import workspace
     monkeypatch.setattr(workspace, "WORKSPACE_DIR", studio_data / "workspace")
     return graphs, workspace
 
@@ -72,9 +71,8 @@ class TestTheProjectLivesThere:
         assert "'name': 'second'" not in source
 
     def test_a_tool_the_workflow_stopped_using_is_cleared_out(self, store, monkeypatch):
-        import custom_tools
-        import tools_registry
-
+        from studio.backend import custom_tools
+        from studio.backend import tools_registry
         graphs, workspace = store
         monkeypatch.setattr(custom_tools, "TOOLS_DIR", studio := workspace.WORKSPACE_DIR.parent / "tools")
         custom_tools.save_custom_tool(custom_tools.validate_spec(
@@ -133,8 +131,7 @@ class TestTheProjectLivesThere:
         assert marker.stat().st_mtime_ns == before
 
     def test_it_is_rewritten_when_the_source_changes(self, store, monkeypatch):
-        import export_api
-
+        from studio.backend import export_api
         graphs, workspace = store
         workspace.write_project(graph_with())
         marker = workspace.workspace_root("probe") / "vendor" / "evoagentx" / "__init__.py"
@@ -155,8 +152,7 @@ class TestTheProjectLivesThere:
 
 class TestItMatchesTheExport:
     def test_the_same_files_with_the_same_contents(self, store):
-        import export_api
-
+        from studio.backend import export_api
         graphs, workspace = store
         graph = graph_with()
         workspace.write_project(graph)
@@ -369,8 +365,7 @@ class TestThroughTheWorkspaceApi:
     def client(self, store):
         from fastapi.testclient import TestClient
 
-        import app as studio_app
-
+        from studio.backend import app as studio_app
         graphs, workspace = store
         graphs.create_graph("Probe", "")
         workspace.write_project(graph_with())

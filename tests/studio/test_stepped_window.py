@@ -9,9 +9,7 @@ reasoning has nothing to compare against.
 
 import pytest
 
-import sources
-
-
+from studio.backend import sources
 def sample(news=(), filings=(), start="2024-01-01", end="2024-06-30"):
     return {
         "sample_id": "pos_1_2024-07-01",
@@ -125,8 +123,7 @@ class TestOrderingInABatch:
         return [({"index": i}, r) for i, r in enumerate(records)]
 
     def test_steps_of_one_sample_stay_together(self):
-        import batch
-
+        from studio.backend import batch
         records = [{"sample_id": "a", "as_of": "2024-01-01"},
                    {"sample_id": "a", "as_of": "2024-02-01"},
                    {"sample_id": "b", "as_of": "2024-01-01"}]
@@ -137,8 +134,7 @@ class TestOrderingInABatch:
         assert sorted(len(g) for g in groups) == [1, 2]
 
     def test_they_stay_in_order_within_the_group(self):
-        import batch
-
+        from studio.backend import batch
         records = [{"sample_id": "a", "as_of": d}
                    for d in ("2024-01-01", "2024-02-01", "2024-03-01")]
         [group] = batch._grouped(self.pairs(records))
@@ -146,13 +142,12 @@ class TestOrderingInABatch:
             ["2024-01-01", "2024-02-01", "2024-03-01"]
 
     def test_different_samples_still_run_in_parallel(self):
-        import batch
-
+        from studio.backend import batch
         records = [{"sample_id": s, "as_of": "2024-01-01"} for s in "abc"]
         assert len(batch._grouped(self.pairs(records))) == 3
 
     def test_unstepped_records_are_not_grouped(self):
-        import batch
+        from studio.backend import batch
 
         # Independent records; serialising them would cost throughput for
         # nothing.
@@ -160,14 +155,12 @@ class TestOrderingInABatch:
         assert len(batch._grouped(self.pairs(records))) == 3
 
     def test_records_with_no_sample_id_are_left_alone(self):
-        import batch
-
+        from studio.backend import batch
         records = [{"city": "Lima"}, {"city": "Oslo"}]
         assert len(batch._grouped(self.pairs(records))) == 2
 
     def test_nothing_is_dropped(self):
-        import batch
-
+        from studio.backend import batch
         records = [{"sample_id": "a", "as_of": "1"}, {"sample_id": "a", "as_of": "2"},
                    {"sample_id": "b", "as_of": "1"}, {"city": "Lima"}]
         groups = batch._grouped(self.pairs(records))
@@ -184,7 +177,7 @@ class TestThroughTheSource:
         assert captured["step"] == "weekly"
 
     def test_it_is_offered_as_a_setting(self):
-        from source_apis import SOURCE_TYPE_SCHEMAS
+        from studio.backend.source_apis import SOURCE_TYPE_SCHEMAS
 
         names = {c["name"] for c in SOURCE_TYPE_SCHEMAS["credit_risk"]["config"]}
         assert "step" in names

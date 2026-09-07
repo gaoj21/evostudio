@@ -14,8 +14,7 @@ import pytest
 
 @pytest.fixture
 def stm(tmp_path, monkeypatch):
-    import stm_store
-
+    from studio.backend import stm_store
     monkeypatch.setattr(stm_store, "STM_DIR", tmp_path / "stm")
     return stm_store
 
@@ -84,8 +83,7 @@ class TestWhatTheNodeIsTold:
                 **({"memory": memory} if memory else {})}
 
     def test_it_reads_as_a_sequence_not_a_search(self):
-        import memory_policy
-
+        from studio.backend import memory_policy
         entries = [
             {"node": "note", "inputs": {"company": "A"}, "outputs": {"fact": "one"}},
             {"node": "note", "inputs": {"company": "B"}, "outputs": {"fact": "two"}},
@@ -96,8 +94,7 @@ class TestWhatTheNodeIsTold:
         assert block.index("one") < block.index("two")
 
     def test_another_node_s_step_says_whose_it_was(self):
-        import memory_policy
-
+        from studio.backend import memory_policy
         entries = [{"node": "investigate", "inputs": {}, "outputs": {"context": "c"}},
                    {"node": "note", "inputs": {}, "outputs": {"fact": "f"}}]
         block = memory_policy.session_block(entries, self.task())
@@ -106,8 +103,7 @@ class TestWhatTheNodeIsTold:
         assert "- fact: f" in block
 
     def test_the_node_says_how_much_of_the_session_it_wants(self):
-        import memory_policy
-
+        from studio.backend import memory_policy
         entries = [{"node": "note", "inputs": {}, "outputs": {"fact": str(i)}}
                    for i in range(5)]
         block = memory_policy.session_block(entries, self.task(session_recall=2))
@@ -116,26 +112,23 @@ class TestWhatTheNodeIsTold:
         assert "fact: 4" in block and "fact: 0" not in block
 
     def test_a_node_can_opt_out_of_it_entirely(self):
-        import memory_policy
-
+        from studio.backend import memory_policy
         entries = [{"node": "note", "inputs": {}, "outputs": {"fact": "f"}}]
         assert memory_policy.session_block(entries, self.task(session_recall=0)) == ""
 
     def test_the_read_selection_applies_here_too(self):
-        import memory_policy
-
+        from studio.backend import memory_policy
         entries = [{"node": "note", "inputs": {"company": "A"},
                     "outputs": {"fact": "f"}}]
         block = memory_policy.session_block(entries, self.task(read=["fact"]))
         assert "fact: f" in block and "company" not in block
 
     def test_an_empty_session_adds_nothing(self):
-        import memory_policy
-
+        from studio.backend import memory_policy
         assert memory_policy.session_block([], self.task()) == ""
 
     def test_the_default_is_on_but_only_matters_with_a_session(self):
-        import memory_policy
+        from studio.backend import memory_policy
 
         # Nothing changes for a node set up before this existed: no run
         # supplies a session unless someone asks for one.
@@ -154,8 +147,7 @@ class TestThroughTheRunner:
         }]}
 
     def test_a_run_records_what_it_kept_into_its_session(self, stm, monkeypatch):
-        import runner
-
+        from studio.backend import runner
         class Param:
             def __init__(self, name): self.name = name
 
@@ -186,8 +178,7 @@ class TestThroughTheRunner:
         assert recorded["run_id"] == "r1"
 
     def test_a_run_with_no_session_records_nothing(self, stm):
-        import runner
-
+        from studio.backend import runner
         class Node:
             name = "note"
             inputs = []
@@ -210,8 +201,7 @@ class TestThroughTheRunner:
         assert stm.sessions("g1") == []
 
     def test_the_session_is_kept_on_the_run(self, stm, monkeypatch):
-        import runner
-
+        from studio.backend import runner
         monkeypatch.setattr(runner, "RUNS_DIR", stm.STM_DIR.parent / "runs")
         runner._runs.clear()
         run_id = runner.start_run({"id": "g1", "tasks": []}, {},
@@ -226,9 +216,8 @@ class TestThroughTheRunner:
 class TestInTheWorkspace:
     @pytest.fixture
     def shown(self, stm, tmp_path, monkeypatch):
-        import memory_store
-        import workspace
-
+        from studio.backend import memory_store
+        from studio.backend import workspace
         monkeypatch.setattr(workspace, "WORKSPACE_DIR", tmp_path / "workspace")
         monkeypatch.setattr(memory_store, "list_agents", lambda gid: ["note"])
         monkeypatch.setattr(memory_store, "list_entries", lambda gid, agent: [

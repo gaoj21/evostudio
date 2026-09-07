@@ -19,8 +19,7 @@ from conftest import make_graph, make_task
 
 
 def apply(graph, operations, graph_id=None):
-    import chat_api
-
+    from studio.backend import chat_api
     return chat_api.apply_operations(graph, operations, graph_id)
 
 
@@ -119,8 +118,7 @@ class TestFailureIsolation:
 class TestSideEffectingOperations:
     def test_run_workflow_only_proposes(self, studio_data):
         """A run costs money and its tools touch the world: the user confirms."""
-        import graphs as graph_store
-
+        from studio.backend import graphs as graph_store
         created = graph_store.create_graph("Runnable", "goal")
         graph = make_graph([make_task("a", inputs=["topic"], outputs=["x"])],
                            id=created["id"])
@@ -130,8 +128,7 @@ class TestSideEffectingOperations:
         assert result["saved"] is False
 
     def test_save_graph_refuses_an_invalid_workflow(self, studio_data):
-        import graphs as graph_store
-
+        from studio.backend import graphs as graph_store
         created = graph_store.create_graph("Broken", "goal")
         # Referencing a skill that does not exist fails validation.
         task = make_task("a", inputs=["topic"], outputs=["x"], skill_names=["ghost"])
@@ -141,8 +138,7 @@ class TestSideEffectingOperations:
         assert any("save_graph refused" in note for note in result["notes"])
 
     def test_create_skill_then_delete(self, studio_data):
-        import skills_api
-
+        from studio.backend import skills_api
         result = apply(make_graph([]), [
             {"op": "create_skill", "spec": {"name": "tone", "description": "d",
                                             "content": "# Tone"}},

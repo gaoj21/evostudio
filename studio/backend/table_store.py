@@ -24,14 +24,9 @@ out of order then reads its own future.
 import json
 import sqlite3
 import time
-import sys
 import threading
 from pathlib import Path
-from studio_config import data_path
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+from .studio_config import data_path
 
 TABLES_DIR = data_path("tables")
 

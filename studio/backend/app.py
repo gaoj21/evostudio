@@ -1,50 +1,42 @@
 """EvoAgentX Studio backend — FastAPI app per studio/API.md (v1, MVP).
 
-Run from anywhere:  uvicorn app:app --port 8000  (cwd: studio/backend)
-or:                 python studio/backend/app.py
+Run from the repository root:  uvicorn studio.backend.app:app --port 8000
+or:                            python -m studio.backend.app
 """
 
 import json
-import sys
-from pathlib import Path
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-_BACKEND_DIR = Path(__file__).resolve().parent
-if str(_BACKEND_DIR) not in sys.path:
-    sys.path.insert(0, str(_BACKEND_DIR))
-
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
-import agent_api
-import batch as batch_store
-import batch_compare
-import batch_export
-import chat_api
-import custom_tools
-import evaluation
-import evolve_api
-import export_api
-import graphs as graph_store
-import memory_api
-import preprocess
-import registry
-import review as review_store
-import runner
-import scheduler
-import skills_api
-import sources
-import tools_registry
-import watcher
-import workspace
-import workspace_api
+from . import agent_api
+from . import batch as batch_store
+from . import batch_compare
+from . import batch_export
+from . import chat_api
+from . import custom_tools
+from . import evaluation
+from . import evolve_api
+from . import export_api
+from . import graphs as graph_store
+from . import memory_api
+from . import preprocess
+from . import registry
+from . import review as review_store
+from . import runner
+from . import scheduler
+from . import skills_api
+from . import sources
+from . import tools_registry
+from . import watcher
+from . import workspace
+from . import workspace_api
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIST = _REPO_ROOT / "studio" / "frontend" / "dist"
 
 PALETTE = {
@@ -435,7 +427,7 @@ def credit_risk_source():
 @app.get("/api/sources")
 def list_source_types():
     """Config schema for every canvas source type (drives the Inspector form)."""
-    from source_apis import SOURCE_TYPE_SCHEMAS
+    from .source_apis import SOURCE_TYPE_SCHEMAS
 
     return {
         "source_types": [
@@ -735,7 +727,12 @@ if FRONTEND_DIST.is_dir():
     app.mount("/", StaticFiles(directory=str(FRONTEND_DIST), html=True), name="frontend")
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Run the Studio development server."""
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run("studio.backend.app:app", host="127.0.0.1", port=8000)
+
+
+if __name__ == "__main__":
+    main()

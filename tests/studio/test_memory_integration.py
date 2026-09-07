@@ -125,9 +125,8 @@ def saved(monkeypatch):
     The write goes through a store opened at save time, not the one handed in:
     that is what stops the records of a batch overwriting each other.
     """
-    import memory_store
-    import runner
-
+    from studio.backend import memory_store
+    from studio.backend import runner
     def run(doc, data, succeeded=True):
         memory = FakeMemory()
         monkeypatch.setattr(memory_store, "open_memory",
@@ -150,9 +149,8 @@ DATA = {"company": "Gaucho", "news": "n" * 20_000,
 
 class TestTheRunEngine:
     def test_a_table_only_graph_still_writes(self, tmp_path, monkeypatch):
-        import runner
-        import table_store
-
+        from studio.backend import runner
+        from studio.backend import table_store
         monkeypatch.setattr(table_store, "TABLES_DIR", tmp_path / "tables")
         doc = graph_doc(kind="table", match="company", at="as_of",
                         inputs=["company", "as_of"], outputs=["verdict"])
@@ -172,9 +170,8 @@ class TestTheRunEngine:
 
     def test_a_table_node_without_its_key_does_not_create_a_vector_store(
             self, monkeypatch):
-        import memory_store
-        import runner
-
+        from studio.backend import memory_store
+        from studio.backend import runner
         opened = []
         monkeypatch.setattr(memory_store, "open_memory",
                             lambda *a, **k: opened.append((a, k)))
@@ -226,9 +223,8 @@ class TestTheRunEngine:
         assert message.wf_task_desc == "decide"
 
     def test_a_broken_store_does_not_fail_the_run(self, monkeypatch):
-        import memory_store
-        import runner
-
+        from studio.backend import memory_store
+        from studio.backend import runner
         class Exploding(FakeMemory):
             def add(self, messages):
                 raise RuntimeError("disk full")
@@ -296,9 +292,8 @@ class TestRecall:
         return next(a for a in agent.actions if isinstance(a, CustomizeAction))
 
     def test_opening_the_stores_does_not_search_them(self, monkeypatch):
-        import memory_store
-        import runner
-
+        from studio.backend import memory_store
+        from studio.backend import runner
         memory = FakeMemory()
         monkeypatch.setattr(memory_store, "open_memory", lambda *a, **k: memory)
         doc = graph_doc()
@@ -310,8 +305,7 @@ class TestRecall:
         assert tasks[0]["prompt"] == "Company: {company}\nNews: {news}"
 
     def test_the_store_reaches_the_agent_the_framework_actually_built(self, built):
-        import runner
-
+        from studio.backend import runner
         graph, manager, doc = built
         memory = FakeMemory()
         runner._attach_ltm(manager, graph, doc, {"judge": memory}, {})
@@ -323,8 +317,7 @@ class TestRecall:
         assert agent.use_long_term_memory is True
 
     def test_it_searches_with_the_inputs_the_node_was_given(self, built):
-        import runner
-
+        from studio.backend import runner
         graph, manager, doc = built
         memory = FakeMemory()
         runner._attach_ltm(manager, graph, doc, {"report": memory}, {})
@@ -341,8 +334,7 @@ class TestRecall:
         assert "concern" in memory.searches[0][0]
 
     def test_the_recall_goes_into_the_prompt_for_that_call_only(self, built):
-        import runner
-
+        from studio.backend import runner
         graph, manager, doc = built
         memory = FakeMemory()
         memory.hits = [(FakeMessage(json.dumps(
@@ -361,8 +353,7 @@ class TestRecall:
         assert action.prompt == base
 
     def test_braces_in_a_recalled_memory_survive_prompt_formatting(self, built):
-        import runner
-
+        from studio.backend import runner
         graph, manager, doc = built
         memory = FakeMemory()
         memory.hits = [(FakeMessage('{"outputs": {"summary": "a {tricky} value"}}'), 0.9)]
@@ -376,8 +367,7 @@ class TestRecall:
         seen["prompt"].format(verdict="c")
 
     def test_a_node_can_write_memory_without_reading_it(self, built):
-        import runner
-
+        from studio.backend import runner
         graph, manager, doc = built
         doc["tasks"][1]["memory"] = {"retrieve": 0}
         memory = FakeMemory()
@@ -390,8 +380,7 @@ class TestRecall:
         assert "Similar past runs" not in seen["prompt"]
 
     def test_a_framework_store_is_searched_without_nesting_event_loops(self, built):
-        import runner
-
+        from studio.backend import runner
         graph, manager, doc = built
         memory = FrameworkShapedMemory(
             hits=[(FakeMessage('{"outputs": {"summary": "escalated"}}'), 0.9)])
@@ -408,7 +397,7 @@ class TestRecall:
         assert "summary: escalated" in seen["prompt"]
 
     def test_a_store_with_only_a_synchronous_search_still_works(self, built):
-        import runner
+        from studio.backend import runner
 
         # The langchain backend has no async entry point at all.
         graph, manager, doc = built
@@ -424,8 +413,7 @@ class TestRecall:
         assert "summary: held" in seen["prompt"]
 
     def test_a_store_that_cannot_be_searched_does_not_stop_the_node(self, built):
-        import runner
-
+        from studio.backend import runner
         graph, manager, doc = built
 
         class Exploding(FakeMemory):
@@ -447,9 +435,8 @@ class TestReadingAnotherNodesMemory:
     """A node can draw on what another node learned, not only on its own."""
 
     def test_the_other_node_s_store_is_opened_too(self, monkeypatch):
-        import memory_store
-        import runner
-
+        from studio.backend import memory_store
+        from studio.backend import runner
         opened = {}
 
         def fake_open(graph_id, agent, create=False):
@@ -467,9 +454,8 @@ class TestReadingAnotherNodesMemory:
         assert opened == {"judge": True, "investigate": False}
 
     def test_a_store_that_does_not_exist_is_simply_absent(self, monkeypatch):
-        import memory_store
-        import runner
-
+        from studio.backend import memory_store
+        from studio.backend import runner
         monkeypatch.setattr(memory_store, "open_memory",
                             lambda gid, agent, create=False:
                             FakeMemory() if create else None)
@@ -478,8 +464,7 @@ class TestReadingAnotherNodesMemory:
         assert list(memories) == ["judge"]
 
     def test_it_recalls_from_the_store_it_named(self, built):
-        import runner
-
+        from studio.backend import runner
         graph, manager, doc = built
         doc["tasks"][1]["memory"] = {"read_from": ["judge"]}
         theirs = FakeMemory(hits=[(FakeMessage(json.dumps(
@@ -493,8 +478,7 @@ class TestReadingAnotherNodesMemory:
         assert "verdict: concern" in seen["prompt"]
 
     def test_another_node_s_memory_says_whose_it_is(self, built):
-        import runner
-
+        from studio.backend import runner
         graph, manager, doc = built
         doc["tasks"][1]["memory"] = {"read_from": ["judge", "report"]}
         action = self.main_action(next(a for a in manager.agents if a.name == "ReportAgent"))
@@ -511,8 +495,7 @@ class TestReadingAnotherNodesMemory:
         assert "- summary: s" in seen["prompt"]
 
     def test_it_reads_only_the_fields_it_asked_for(self, built):
-        import runner
-
+        from studio.backend import runner
         graph, manager, doc = built
         doc["tasks"][1]["memory"] = {"read": ["verdict"]}
         action = self.main_action(next(a for a in manager.agents if a.name == "ReportAgent"))
@@ -528,8 +511,7 @@ class TestReadingAnotherNodesMemory:
         assert recalled.strip() == "- verdict: c"
 
     def test_reading_from_nothing_leaves_the_prompt_alone(self, built):
-        import runner
-
+        from studio.backend import runner
         graph, manager, doc = built
         doc["tasks"][1]["memory"] = {"read_from": []}
         memory = FakeMemory(hits=[(FakeMessage('{"outputs": {"summary": "s"}}'), 0.9)])
@@ -548,8 +530,7 @@ class TestReadingAnotherNodesMemory:
 
 class TestQuery:
     def test_it_searches_with_the_fields_the_node_stores(self):
-        import memory_policy
-
+        from studio.backend import memory_policy
         task = {"name": "judge", "description": "decide",
                 "inputs": [{"name": "company"}, {"name": "news"}],
                 "outputs": [{"name": "verdict"}],
@@ -562,8 +543,7 @@ class TestQuery:
         assert "n" * 100 not in query
 
     def test_a_node_that_stores_no_inputs_still_has_something_to_match_on(self):
-        import memory_policy
-
+        from studio.backend import memory_policy
         task = {"name": "judge", "description": "decide",
                 "inputs": [{"name": "company"}], "outputs": [{"name": "verdict"}],
                 "memory": {"inputs": []}}
@@ -585,10 +565,9 @@ class TestTrackingOneSubject:
 
     def test_a_node_that_names_a_subject_reads_its_table_only(
             self, built, tmp_path, monkeypatch):
-        import memory_store
-        import runner
-        import table_store
-
+        from studio.backend import memory_store
+        from studio.backend import runner
+        from studio.backend import table_store
         monkeypatch.setattr(table_store, "TABLES_DIR", tmp_path / "tables")
         graph, manager, doc = built
         doc["tasks"][1]["memory"] = {"match": "verdict", "retrieve": 3}
@@ -617,8 +596,7 @@ class TestTrackingOneSubject:
         assert store.searches == [], "a table node searched a vector store"
 
     def test_a_node_with_no_subject_still_gets_similarity_search(self, built):
-        import runner
-
+        from studio.backend import runner
         graph, manager, doc = built
         doc["tasks"][1]["memory"] = {"retrieve": 3}     # no `match`
         store = FakeMemory(hits=[(FakeMessage(json.dumps(
@@ -640,8 +618,8 @@ class TestConcurrentRuns:
     """A batch runs its records at the same time, into one store per node."""
 
     def test_every_run_of_a_batch_keeps_its_entry(self, monkeypatch):
-        import memory_store
-        import runner
+        from studio.backend import memory_store
+        from studio.backend import runner
 
         # `save()` writes the whole corpus. A run that adds to the copy it
         # loaded when it started puts the store back as it was and loses every
@@ -678,20 +656,17 @@ class TestConcurrentRuns:
 
 class TestValidationAtSaveTime:
     def test_the_graph_refuses_a_field_the_node_does_not_have(self):
-        import graphs
-
+        from studio.backend import graphs
         with pytest.raises(graphs.GraphValidationError) as excinfo:
             graphs.validate_task_memory(graph_doc(outputs=["verdcit"])["tasks"])
         assert "verdcit" in str(excinfo.value)
 
     def test_a_valid_selection_passes(self):
-        import graphs
-
+        from studio.backend import graphs
         graphs.validate_task_memory(graph_doc(outputs=["verdict"])["tasks"])
 
     def test_the_policy_never_reaches_the_framework(self):
-        import graphs
-
+        from studio.backend import graphs
         stripped = graphs.strip_task(graph_doc(outputs=["verdict"])["tasks"][0])
         # The framework rejects task keys it does not know.
         assert "memory" not in stripped
@@ -705,8 +680,7 @@ class TestExportedProject:
         import io
         import zipfile
 
-        import export_api
-
+        from studio.backend import export_api
         _, payload = export_api.build_project(doc)
         archive = zipfile.ZipFile(io.BytesIO(payload))
         return {n.split("/", 1)[1]: archive.read(n).decode("utf-8")
@@ -768,7 +742,7 @@ class TestTheRunnerHoldsRecallToTheRunsOwnDate:
 
     @pytest.fixture
     def wired(self, tmp_path, monkeypatch):
-        import table_store
+        from studio.backend import table_store
         from evoagentx.agents.agent_manager import AgentManager
         from evoagentx.models import LiteLLMConfig
         from evoagentx.workflow.workflow_graph import SequentialWorkFlowGraph
@@ -804,8 +778,7 @@ class TestTheRunnerHoldsRecallToTheRunsOwnDate:
         return graph, manager, doc
 
     def prompt_for(self, wired, state):
-        import runner
-
+        from studio.backend import runner
         graph, manager, doc = wired
         # No vector store at all: a table node must not need one.
         runner._attach_ltm(manager, graph, doc, {}, state)
@@ -868,8 +841,7 @@ class TestTheExportedProjectDatesItsMemoryToo:
 
     @pytest.fixture
     def generated(self, memory_graph):
-        import export_api
-
+        from studio.backend import export_api
         files, _ = export_api.project_files(memory_graph, include_vendor=False)
         return files["workflow.py"]
 
@@ -887,7 +859,7 @@ class TestTheExportedProjectDatesItsMemoryToo:
     def test_it_carries_the_policy_rather_than_a_second_copy_of_it(self, memory_graph):
         # The cutoff lives in memory_policy; an export that reimplemented it
         # would be a place for the two to drift apart.
-        import export_api
+        from studio.backend import export_api
         files, _ = export_api.project_files(memory_graph, include_vendor=True)
 
         assert "vendor/memory_policy.py" in files
@@ -912,12 +884,12 @@ class TestTheStoreHoldsOneEntryPerSubject:
 
     @pytest.fixture
     def store(self, tmp_path, monkeypatch):
-        import memory_store
+        from studio.backend import memory_store
         monkeypatch.setattr(memory_store, "MEMORY_DIR", tmp_path / "memory")
         return memory_store
 
     def write(self, store, company, as_of, verdict):
-        import runner
+        from studio.backend import runner
         from evoagentx.core.message import Message, MessageType
 
         payload = {"task": "judge",
@@ -975,8 +947,7 @@ class TestTheStoreHoldsOneEntryPerSubject:
         assert seen == set(dates), f"lost {sorted(set(dates) - seen)}"
 
     def test_recall_reads_the_history_back(self, store):
-        import memory_policy
-
+        from studio.backend import memory_policy
         for month in (1, 3, 6):
             self.write(store, "Sleep Number", f"2026-{month:02d}-01", f"v{month}")
 
@@ -994,8 +965,7 @@ class TestTheExportedProjectKeepsTablesToo:
 
     @pytest.fixture
     def generated(self):
-        import export_api
-
+        from studio.backend import export_api
         graph = {
             "id": "g1", "name": "G", "goal": "g", "edges": [],
             "tasks": [{

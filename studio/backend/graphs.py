@@ -9,14 +9,8 @@ import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from studio_config import DATA_DIR
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-
-import sys
-
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+from .studio_config import DATA_DIR
 
 GRAPHS_DIR = DATA_DIR / "graphs"
 
@@ -125,9 +119,8 @@ def rename_graph(graph_id: str, name: str) -> dict:
 
 def _in_flight(graph_id: str) -> str:
     """What is still running for a workflow, as a phrase, or an empty string."""
-    import batch as batch_store
-    import runner
-
+    from . import batch as batch_store
+    from . import runner
     runs = sum(1 for r in runner.list_runs(graph_id=graph_id)
                if r.get("status") == "running")
     batches = sum(1 for b in batch_store.list_batches(graph_id=graph_id)
@@ -148,11 +141,10 @@ def _move_graph_data(old_id: str, new_id: str) -> None:
     """
     import shutil
 
-    import memory_store
-    import stm_store
-    import table_store
-    import workspace as workspace_mod
-
+    from . import memory_store
+    from . import stm_store
+    from . import table_store
+    from . import workspace as workspace_mod
     for old, new in ((workspace_mod.workspace_root(old_id), workspace_mod.workspace_root(new_id)),
                      (memory_store.MEMORY_DIR / old_id, memory_store.MEMORY_DIR / new_id),
                      (table_store.TABLES_DIR / old_id, table_store.TABLES_DIR / new_id),
@@ -175,9 +167,8 @@ def _repoint_history(old_id: str, new_id: str) -> None:
     it is renamed — the records are still there, filed under a name that no
     longer exists.
     """
-    import batch as batch_store
-    import runner
-
+    from . import batch as batch_store
+    from . import runner
     for directory in (runner.RUNS_DIR, batch_store.BATCHES_DIR):
         if not directory.is_dir():
             continue
@@ -299,8 +290,7 @@ def validate_tool_tasks(tasks: list[dict]) -> None:
     """Static checks for canvas tool nodes: the tool must exist, and its
     inputs must not depend on LLM-task outputs (v1 ordering limitation —
     attach the tool to an LLM node instead)."""
-    import tools_registry
-
+    from . import tools_registry
     llm_outputs = {
         out.get("name")
         for t in tasks or [] if not is_source_task(t) and not is_tool_task(t)
@@ -345,7 +335,7 @@ def parked_task_names(tasks: list[dict], edges: list[dict]) -> set:
 
 def validate_source_tasks(tasks: list[dict]) -> None:
     """Static checks for canvas source nodes (known type, required config)."""
-    from source_apis import SOURCE_TYPE_SCHEMAS
+    from .source_apis import SOURCE_TYPE_SCHEMAS
 
     for task in tasks or []:
         if not is_source_task(task):
@@ -448,8 +438,7 @@ def subgraph_from(tasks: list[dict], edges: list[dict],
 
 def validate_task_skills(tasks: list[dict]) -> None:
     """Reject references to skills that no longer exist."""
-    import skills_api
-
+    from . import skills_api
     try:
         skills_api.validate_skill_names(tasks)
     except skills_api.SkillError as e:
@@ -458,8 +447,7 @@ def validate_task_skills(tasks: list[dict]) -> None:
 
 def validate_task_memory(tasks: list[dict]) -> None:
     """Reject memory settings that would quietly keep nothing."""
-    import memory_policy
-
+    from . import memory_policy
     siblings = {t.get("name"): t for t in tasks if t.get("name")}
     errors = [e for task in tasks for e in memory_policy.validate(task, siblings)]
     if errors:

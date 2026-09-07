@@ -21,14 +21,10 @@ import json
 
 import pytest
 
-from conftest import make_task  # noqa: F401  (keeps the shared path setup)
-
-
 @pytest.fixture
 def agent(monkeypatch, tmp_path):
     """agent_api with a scripted LLM and an in-memory store."""
-    import agent_api
-
+    from studio.backend import agent_api
     scripted = []
 
     def script(*replies):
@@ -98,8 +94,7 @@ class TestAgentLoop:
         assert ask(agent, "what is it?") == "42"
 
     def test_a_tool_result_comes_back_as_an_observation(self, agent, studio_data):
-        import skills_api
-
+        from studio.backend import skills_api
         skills_api.save_skill({"name": "tone", "description": "d", "content": "Be brief."})
         agent.script(
             json.dumps({"tool": "load_skill", "args": {"name": "tone"}}),
@@ -174,8 +169,7 @@ class TestOpenAISurface:
     def client(self, agent, studio_data):
         from fastapi.testclient import TestClient
 
-        import app as studio_app
-
+        from studio.backend import app as studio_app
         return TestClient(studio_app.app)
 
     def test_models_lists_the_agent(self, client):
@@ -239,8 +233,7 @@ class TestAccessKey:
     def client(self, agent, studio_data):
         from fastapi.testclient import TestClient
 
-        import app as studio_app
-
+        from studio.backend import app as studio_app
         return TestClient(studio_app.app)
 
     def test_open_when_no_key_is_configured(self, client, agent, monkeypatch):

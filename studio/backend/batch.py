@@ -11,12 +11,9 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from pathlib import Path
-from studio_config import data_path
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-
-import runner
+from . import runner
+from .studio_config import data_path
 
 BATCHES_DIR = data_path("batches")
 
@@ -141,8 +138,7 @@ def _execute_batch(batch_id: str, graph: dict, records: list[dict], workers: int
     with ThreadPoolExecutor(max_workers=workers) as pool:
         list(pool.map(run_group, _grouped(zip(state["items"], records))))
     if state.get("metric"):
-        import evaluation
-
+        from . import evaluation
         with _lock:
             # Scored over what actually ran. A cancelled batch still reports a
             # mean, and `scored`/`total` show how much of the set it covers.
@@ -219,8 +215,7 @@ def _score_item(state: dict, item: dict, prediction) -> None:
     failing the batch: the runs themselves succeeded and are worth keeping,
     and the aggregate reports how many went unscored.
     """
-    import evaluation
-
+    from . import evaluation
     try:
         scored = evaluation.score_one(state["metric"], prediction, item.get("label"))
     except Exception as e:
@@ -302,7 +297,7 @@ def _node_names(state: dict) -> list[str]:
                 names.append(node.get("name"))
     if names:
         return names
-    import graphs as graph_store  # lazy: graphs has no dependency on batch
+    from . import graphs as graph_store  # lazy: graphs has no dependency on batch
 
     graph = graph_store.load_graph(state.get("graph_id") or "") or {}
     return [t.get("name") for t in graph.get("tasks", []) or []]

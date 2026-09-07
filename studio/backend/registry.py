@@ -267,7 +267,7 @@ Return ONLY JSON: {{"action": "alert"|"suppress", "risk_level": "low"|"medium"|"
 
 def source_presets() -> list[dict]:
     """Canvas input-source presets (kind="source" — executed in Python, not LLM)."""
-    from source_apis import SOURCE_TYPE_SCHEMAS
+    from .source_apis import SOURCE_TYPE_SCHEMAS
 
     presets = []
     for type_, schema in SOURCE_TYPE_SCHEMAS.items():

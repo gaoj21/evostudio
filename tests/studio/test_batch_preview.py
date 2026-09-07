@@ -34,11 +34,10 @@ def stepped_records(samples=3, dates=6):
 def client(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
-    import app as studio_app
-    import batch as batch_module
-    import graphs as graph_store
-    import sources
-
+    from studio.backend import app as studio_app
+    from studio.backend import batch as batch_module
+    from studio.backend import graphs as graph_store
+    from studio.backend import sources
     monkeypatch.setattr(graph_store, "GRAPHS_DIR", tmp_path / "graphs")
     monkeypatch.setattr(batch_module, "BATCHES_DIR", tmp_path / "batches")
     batch_module._batches.clear()
@@ -91,7 +90,7 @@ class TestTheCount:
         assert body["steps"] == 1
 
     def test_uneven_windows_report_a_range(self, client, monkeypatch):
-        import sources
+        from studio.backend import sources
         short = [r for r in stepped_records()
                  if r["sample_id"] != "sample_0" or r["as_of"] < "2024-04-01"]
         monkeypatch.setattr(sources, "records_from_source_node", lambda node: short)
@@ -110,8 +109,7 @@ class TestTheCount:
 
 class TestItOnlyLooks:
     def test_previewing_starts_nothing(self, client):
-        import batch as batch_module
-
+        from studio.backend import batch as batch_module
         preview(client)
         assert batch_module._batches == {}
         assert batch_module.list_batches() == []
@@ -139,8 +137,7 @@ class TestItAgreesWithTheRealThing:
         # start_batch is stubbed rather than let run: a real one spawns worker
         # threads that outlive the fixture's monkeypatch, and they then persist
         # into the developer's own studio/data. That has happened.
-        import app as studio_app
-
+        from studio.backend import app as studio_app
         handed = {}
 
         def capture(graph, mapped, source, **kw):

@@ -18,7 +18,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from studio_config import data_path
+from .studio_config import data_path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -166,8 +166,9 @@ def _writeback(review: dict) -> None:
         "final_action": review["final_action"],
         "review_note": review.get("note") or "",
     }
-    import batch as batch_mod  # lazy: batch imports runner, runner imports review
-    import runner as runner_mod  # lazy: runner imports this module
+    # Lazy imports break the batch -> runner -> review cycle.
+    from . import batch as batch_mod
+    from . import runner as runner_mod
 
     runner_mod.apply_review_outcome(run_id, outcome)
     batch_mod.apply_review_outcome(run_id, review)

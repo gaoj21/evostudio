@@ -25,7 +25,7 @@ import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 
-from sources import SourceError
+from .sources import SourceError
 
 UA = {"User-Agent": "EvoAgentX Studio research (contact: research@example.com)"}
 HTTP_TIMEOUT = 30

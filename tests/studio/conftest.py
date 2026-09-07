@@ -4,26 +4,14 @@ Test files here carry a `studio_` prefix where the basename could clash with
 one under `tests/src/`: pytest imports test modules by basename when there is
 no package `__init__.py`, and two `test_skills.py` files abort collection.
 
-Studio's backend modules import each other by bare name (`import graphs`), so
-`studio/backend` has to be importable. Every test also runs against throwaway
-data directories: the module-level paths point at the developer's real
-`studio/data/`, and a test that creates a graph or saves a tool must never
-touch it.
+Studio's backend is imported through the regular `studio.backend` package.
+Every test also runs against throwaway data directories: the module-level
+paths point at the developer's real `studio/data/`, and a test that creates a
+graph or saves a tool must never touch it.
 """
 
 import os
-import sys
-from pathlib import Path
-
 import pytest
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-BACKEND = REPO_ROOT / "studio" / "backend"
-
-if str(BACKEND) not in sys.path:
-    sys.path.insert(0, str(BACKEND))
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 # Skipping is for a bare checkout without the studio extra. In CI the deps are
 # installed, so a skip there means the dependency list drifted — and a silently
@@ -40,10 +28,9 @@ else:
 @pytest.fixture
 def studio_data(tmp_path, monkeypatch):
     """Point graphs, custom tools and skills at a temporary directory."""
-    import custom_tools
-    import graphs
-    import skills_api
-
+    from studio.backend import custom_tools
+    from studio.backend import graphs
+    from studio.backend import skills_api
     monkeypatch.setattr(graphs, "GRAPHS_DIR", tmp_path / "graphs")
     monkeypatch.setattr(custom_tools, "TOOLS_DIR", tmp_path / "tools")
     monkeypatch.setattr(skills_api, "SKILLS_DIR", tmp_path / "skills")

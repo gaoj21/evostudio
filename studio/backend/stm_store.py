@@ -17,7 +17,7 @@ capped by how many entries the node asked for.
 
 import threading
 from pathlib import Path
-from studio_config import data_path
+from .studio_config import data_path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 

@@ -297,7 +297,7 @@ def records_from_source_node(node: dict) -> list[dict]:
             seed=int(config.get("seed") or 42),
             step=config.get("step"),
         )
-    from source_apis import SOURCE_TYPE_SCHEMAS, fetch_source_record
+    from .source_apis import SOURCE_TYPE_SCHEMAS, fetch_source_record
 
     if type_ not in SOURCE_TYPE_SCHEMAS:
         raise SourceError(

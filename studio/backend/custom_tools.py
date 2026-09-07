@@ -57,7 +57,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from studio_config import data_path
+from .studio_config import data_path
 
 from fastapi import APIRouter, Body, HTTPException
 
@@ -440,7 +440,7 @@ def make_toolkit(spec: dict):
     exactly match its own params — the framework's Tool metaclass validates
     that at class creation.
     """
-    from evoagentx.tools.tool import Tool, Toolkit
+    from evoagentx.tools.tool import Toolkit
 
     return Toolkit(name=spec["name"],
                    tools=[_make_tool(t)() for t in tools_of(spec)])
@@ -505,8 +505,7 @@ def list_custom():
 
 @router.post("/tools/custom")
 def save_custom(body: dict = Body(...)):
-    import tools_registry
-
+    from . import tools_registry
     try:
         spec = validate_spec(body, tools_registry.builtin_names())
     except CustomToolError as e:

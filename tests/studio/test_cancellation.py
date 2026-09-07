@@ -14,8 +14,7 @@ import pytest
 
 @pytest.fixture
 def batch_store(tmp_path, monkeypatch):
-    import batch as batch_module
-
+    from studio.backend import batch as batch_module
     monkeypatch.setattr(batch_module, "BATCHES_DIR", tmp_path / "batches")
     batch_module._batches.clear()
     batch_module._threads.clear()
@@ -37,8 +36,7 @@ def slow_runner(monkeypatch, batch_store):
     Records which items actually started, which is the whole question: a
     cancelled batch must leave the rest untouched.
     """
-    import runner
-
+    from studio.backend import runner
     started: list[dict] = []
     # One permit per item allowed through, so a test can let exactly as many
     # items run as it means to; without that the batch races to completion
@@ -139,8 +137,7 @@ class TestCancelBatch:
     def test_a_cancelled_evaluation_still_scores_what_it_covered(
         self, batch_store, slow_runner, monkeypatch
     ):
-        import evaluation
-
+        from studio.backend import evaluation
         monkeypatch.setattr(evaluation, "score_one",
                             lambda metric, pred, label: {"score": 1.0})
         started, allow = slow_runner
@@ -206,8 +203,7 @@ class TestCancelBatch:
 class TestAbandonRun:
     @pytest.fixture
     def runs(self, tmp_path, monkeypatch):
-        import runner
-
+        from studio.backend import runner
         monkeypatch.setattr(runner, "RUNS_DIR", tmp_path / "runs")
         runner._runs.clear()
         return runner
@@ -277,9 +273,8 @@ class TestEndpoints:
     def client(self, batch_store, tmp_path, monkeypatch):
         from fastapi.testclient import TestClient
 
-        import app as studio_app
-        import runner
-
+        from studio.backend import app as studio_app
+        from studio.backend import runner
         monkeypatch.setattr(runner, "RUNS_DIR", tmp_path / "runs")
         runner._runs.clear()
         return TestClient(studio_app.app)
@@ -319,8 +314,7 @@ class TestEndpoints:
         assert res.json()["cancelled"] is False
 
     def test_abandoning_a_run(self, client, batch_store):
-        import runner
-
+        from studio.backend import runner
         runner._runs["r1"] = {"run_id": "r1", "status": "running", "nodes": []}
         res = client.post("/api/runs/r1/abandon")
         assert res.status_code == 200

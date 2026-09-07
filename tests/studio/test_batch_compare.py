@@ -8,9 +8,7 @@ it is and is not comparing.
 
 import pytest
 
-import batch_compare
-
-
+from studio.backend import batch_compare
 def batch(bid, scored, *, metric="exact_match", created="2026-09-01T00:00:00+00:00",
           field="city"):
     """`scored` is [(input_value, score_or_None), ...]."""
@@ -178,9 +176,8 @@ class TestEndpoint:
     def client(self, tmp_path, monkeypatch):
         from fastapi.testclient import TestClient
 
-        import app as studio_app
-        import batch as batch_module
-
+        from studio.backend import app as studio_app
+        from studio.backend import batch as batch_module
         monkeypatch.setattr(batch_module, "BATCHES_DIR", tmp_path / "batches")
         batch_module._batches.clear()
         batch_module._threads.clear()
