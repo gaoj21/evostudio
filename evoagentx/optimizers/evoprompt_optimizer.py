@@ -1,4 +1,6 @@
 # -----------------------------------------------------------------------------
+
+from __future__ import annotations
 # This file re-implements algorithms from the EvoPrompt project:
 #   Repo: GitHub - beeevita/EvoPrompt: Official implementation of the paper Connecting Large Language Models w
 #   Paper: "Connecting Large Language Models with Evolutionary Algorithms
@@ -20,7 +22,7 @@ import os
 import csv
 import time
 import itertools
-from typing import Callable, Dict, List
+from typing import TYPE_CHECKING, Callable, Dict, List
 from datetime import datetime
 
 import numpy as np
@@ -28,11 +30,13 @@ from tqdm.asyncio import tqdm as aio_tqdm
 import matplotlib.pyplot as plt
 
 from evoagentx.agents import CustomizeAgent
-from evoagentx.benchmark.bigbenchhard import BIGBenchHard
 from evoagentx.core.logging import logger
 from evoagentx.models import OpenAILLMConfig
 from evoagentx.optimizers.engine.base import BaseOptimizer
 from evoagentx.optimizers.engine.registry import ParamRegistry
+
+if TYPE_CHECKING:
+    from evoagentx.benchmark.bigbenchhard import BIGBenchHard
 
 
 class EvopromptOptimizer(BaseOptimizer):

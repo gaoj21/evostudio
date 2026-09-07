@@ -9,9 +9,7 @@ from ..core.message import Message, MessageType
 from ..core.module import BaseModule
 from ..core.module_utils import generate_id
 from ..core.registry import MODEL_REGISTRY
-from ..memory.long_term_memory import LongTermMemory
-from ..memory.memory import ShortTermMemory
-from ..memory.memory_manager import MemoryManager
+from ..memory.memory import BaseMemory, ShortTermMemory
 from ..models.base_model import BaseLLM
 from ..models.model_configs import LLMConfig
 from ..storages.base import StorageHandler
@@ -46,8 +44,8 @@ class Agent(BaseModule):
     short_term_memory: Optional[ShortTermMemory] = Field(default_factory=ShortTermMemory) # store short term memory for a single workflow.
     use_long_term_memory: Optional[bool] = False
     storage_handler: Optional[StorageHandler] = None
-    long_term_memory: Optional[LongTermMemory] = None
-    long_term_memory_manager: Optional[MemoryManager] = None
+    long_term_memory: Optional[BaseMemory] = None
+    long_term_memory_manager: Optional[BaseModule] = None
     actions: List[Action] = Field(default=None)
     n: int = Field(default=None, description="number of latest messages used to provide context for action execution. It uses all the messages in short term memory by default.")
     is_human: bool = Field(default=False)
@@ -321,6 +319,9 @@ class Agent(BaseModule):
         """
         Initialize long-term memory components.
         """
+        from ..memory.long_term_memory import LongTermMemory
+        from ..memory.memory_manager import MemoryManager
+
         assert self.storage_handler is not None, "must provide ``storage_handler`` when use_long_term_memory=True"
         # TODO revise the initialisation of long_term_memory and long_term_memory_manager
         if not self.long_term_memory:

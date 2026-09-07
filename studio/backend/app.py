@@ -20,7 +20,6 @@ from . import batch_export
 from . import chat_api
 from . import custom_tools
 from . import evaluation
-from . import evolve_api
 from . import export_api
 from . import graphs as graph_store
 from . import memory_api
@@ -35,6 +34,16 @@ from . import tools_registry
 from . import watcher
 from . import workspace
 from . import workspace_api
+
+try:
+    from . import evolve_api
+except ModuleNotFoundError as exc:
+    if exc.name not in {"dspy", "optuna"}:
+        raise
+    evolve_api = None
+    _EVOLVE_IMPORT_ERROR = exc.name
+else:
+    _EVOLVE_IMPORT_ERROR = None
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIST = _REPO_ROOT / "studio" / "frontend" / "dist"
@@ -115,13 +124,36 @@ async def _lifespan(_app: FastAPI):
 
 app = FastAPI(title="EvoAgentX Studio", lifespan=_lifespan)
 app.include_router(memory_api.router)
-app.include_router(evolve_api.router)
+if evolve_api is not None:
+    app.include_router(evolve_api.router)
 app.include_router(workspace_api.router)
 app.include_router(custom_tools.router)
 app.include_router(chat_api.router)
 app.include_router(skills_api.router)
 app.include_router(export_api.router)
 app.include_router(agent_api.router)
+
+if evolve_api is None:
+    def _evolve_unavailable():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Workflow evolution requires the optimizer dependencies. "
+                "Install the 'optimizers' extra; missing package: "
+                f"{_EVOLVE_IMPORT_ERROR}."
+            ),
+        )
+
+    @app.api_route(
+        "/api/evolve{path:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    )
+    def evolve_unavailable(path: str = ""):
+        _evolve_unavailable()
+
+    @app.post("/api/graphs/{graph_id}/evolve")
+    def graph_evolve_unavailable(graph_id: str):
+        _evolve_unavailable()
 
 app.add_middleware(
     CORSMiddleware,

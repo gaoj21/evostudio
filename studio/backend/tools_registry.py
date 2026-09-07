@@ -42,70 +42,83 @@ TOOL_REGISTRY: dict[str, dict] = {
         "factory": _make("evoagentx.tools.file_tool", "FileToolkit"),
         "description": "Read, write and append files (read_file, write_file, append_file). Paths come from the LLM and are NOT redirected to the workspace.",
         "requires": [],
+        "tool_names": ["read_file", "write_file", "append_file"],
     },
     "StorageToolkit": {
         "factory": _make("evoagentx.tools.storage_file", "StorageToolkit"),
         "description": "File storage operations (save, read, append, delete, move, copy, create_directory, list_files, exists). Rooted at the graph workspace files/ dir during runs.",
         "requires": [],
         "storage": True,
+        "tool_names": ["save", "read", "append", "delete", "move", "copy", "create_directory", "list_files", "exists"],
     },
     "CMDToolkit": {
         "factory": _make("evoagentx.tools.cmd_toolkit", "CMDToolkit"),
         "description": "Execute shell commands (execute_command). Storage rooted at the graph workspace files/ dir during runs.",
         "requires": [],
         "storage": True,
+        "tool_names": ["execute_command"],
     },
     "PythonInterpreterToolkit": {
         "factory": _make("evoagentx.tools.interpreter_python", "PythonInterpreterToolkit"),
         "description": "Execute Python code snippets or script files (python_execute, python_execute_script). Storage rooted at the graph workspace files/ dir during runs.",
         "requires": [],
         "storage": True,
+        "tool_names": ["python_execute", "python_execute_script"],
     },
     "ArxivToolkit": {
         "factory": _make("evoagentx.tools.request_arxiv", "ArxivToolkit"),
         "description": "Search and download arXiv papers (arxiv_search, arxiv_download).",
         "requires": [],
+        "tool_names": ["arxiv_search", "arxiv_download"],
     },
     "RequestToolkit": {
         "factory": _make("evoagentx.tools.request", "RequestToolkit"),
         "description": "Generic HTTP requests (http_request).",
         "requires": [],
+        "tool_names": ["http_request"],
     },
     "WikipediaSearchToolkit": {
         "factory": _make("evoagentx.tools.search_wiki", "WikipediaSearchToolkit"),
         "description": "Search Wikipedia (wikipedia_search).",
         "requires": [],
+        "tool_names": ["wikipedia_search"],
     },
     "DDGSSearchToolkit": {
         "factory": _make("evoagentx.tools.search_ddgs", "DDGSSearchToolkit"),
         "description": "DuckDuckGo web search (ddgs_search).",
         "requires": [],
+        "tool_names": ["ddgs_search"],
     },
     "RSSToolkit": {
         "factory": _make("evoagentx.tools.rss_feed", "RSSToolkit"),
         "description": "Fetch and validate RSS feeds (rss_fetch, rss_validate).",
         "requires": [],
+        "tool_names": ["rss_fetch", "rss_validate"],
     },
     "ObligorMatchToolkit": {
-        "factory": _make("obligor_tool", "ObligorMatchToolkit"),
+        "factory": _make("studio.backend.obligor_tool", "ObligorMatchToolkit"),
         "description": "Match company names / SEC CIKs against the internal credit-risk obligor list (match_company_name, match_cik).",
         "requires": [],
+        "tool_names": ["match_company_name", "match_cik"],
     },
     # --- listed but unavailable until credentials exist ---------------------
     "GoogleSearchToolkit": {
         "factory": _make("evoagentx.tools.search_google", "GoogleSearchToolkit"),
         "description": "Google web search (google_search).",
         "requires": ["GOOGLE_API_KEY", "GOOGLE_SEARCH_ENGINE_ID"],
+        "tool_names": ["google_search"],
     },
     "SerperAPIToolkit": {
         "factory": _make("evoagentx.tools.search_serperapi", "SerperAPIToolkit"),
         "description": "Serper API web search.",
         "requires": ["SERPERAPI_KEY"],
+        "tool_names": ["serperapi_search"],
     },
     "ExaSearchToolkit": {
         "factory": _make("evoagentx.tools.search_exa", "ExaSearchToolkit"),
         "description": "Exa neural web search.",
         "requires": ["EXA_API_KEY"],
+        "tool_names": ["exa_search"],
     },
     # Skills as a tool: lets a node discover and load skills on demand instead
     # of having them pasted into its system prompt. Attach skills directly to a
@@ -115,6 +128,7 @@ TOOL_REGISTRY: dict[str, dict] = {
         "factory": _skill_toolkit,
         "description": "Discover and load Studio skills on demand (list_skills, load_skill).",
         "requires": [],
+        "tool_names": ["list_skills", "load_skill"],
     },
 }
 
@@ -124,12 +138,7 @@ def builtin_names() -> list[str]:
     tool colliding with either would break tool resolution)."""
     names = set(TOOL_REGISTRY)
     for entry in TOOL_REGISTRY.values():
-        if entry["requires"]:
-            continue  # gated toolkits can't instantiate without keys
-        try:
-            names.update(entry["factory"]().get_tool_names())
-        except Exception:
-            continue
+        names.update(entry.get("tool_names", ()))
     return sorted(names)
 
 
@@ -158,11 +167,7 @@ def find_tool(name: str):
             continue
         if any(var for var in entry["requires"] if not os.getenv(var)):
             continue
-        try:
-            tk = entry["factory"]()
-        except Exception:
-            continue
-        if name in tk.get_tool_names():
+        if name in entry.get("tool_names", ()):
             return ("builtin", toolkit_name)
     return None
 

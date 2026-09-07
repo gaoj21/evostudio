@@ -13,6 +13,8 @@ These cover three bugs found while running a real TextGrad optimization:
 
 import pytest
 
+pytest.importorskip("textgrad", reason="requires the optimizers extra")
+
 from evoagentx.models import LiteLLM, LiteLLMConfig
 from evoagentx.optimizers import TextGradOptimizer
 from evoagentx.prompts.optimizers.textgrad_optimizer import (
