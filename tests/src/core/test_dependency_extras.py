@@ -67,24 +67,11 @@ def test_core_dependencies_do_not_include_server_packages():
     assert all(not any(dep.startswith(pkg) for pkg in forbidden) for dep in core_deps)
 
 
-def test_requirements_do_not_include_legacy_server_packages():
+def test_requirements_delegates_to_pyproject():
     text = read_requirements_text()
-    forbidden = {
-        "fastapi",
-        "uvicorn",
-        "motor",
-        "redis",
-        "celery",
-        "python-jose",
-        "passlib",
-        "python-multipart",
-        "bcrypt",
-        "asgi-lifespan",
-        "jwt",
-    }
     requirements = [
         line.strip()
         for line in text.splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
-    assert all(not any(req.startswith(pkg) for pkg in forbidden) for req in requirements)
+    assert requirements == ["-e .[all,dev,studio]"]
