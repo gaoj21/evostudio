@@ -69,7 +69,7 @@ vi.mock('./components/SchedulePanel.jsx', () => ({
 }));
 vi.mock('./components/MemorySettings.jsx', () => ({ memorySiblings: () => [] }));
 vi.mock('./components/ChatPanel.jsx', () => ({
-  default: () => <div>Chat</div>,
+  default: () => <div data-testid="chat-panel">Chat panel</div>,
   renameChatHistory: vi.fn(),
 }));
 vi.mock('./components/WorkspacePanel.jsx', () => ({
@@ -140,6 +140,16 @@ async function loadedApp() {
 }
 
 describe('workflow-level interactions', () => {
+  it('gives an empty canvas a direct path to Chat', async () => {
+    const { user } = await loadedApp();
+    expect(screen.getByRole('heading', { name: 'What should this workflow do?' }))
+      .toBeInTheDocument();
+    expect(screen.queryByTestId('chat-panel')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Ask Chat' }));
+    expect(screen.getByTestId('chat-panel')).toBeInTheDocument();
+  });
+
   it('keeps only one feature overlay active at a time', async () => {
     const { user } = await loadedApp();
     await user.click(screen.getByRole('button', { name: 'Review' }));

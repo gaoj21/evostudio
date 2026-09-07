@@ -110,6 +110,7 @@ export function Studio() {
     compactPane,
     leftTab,
     libraryOpen,
+    openChat,
     openLeft,
     openRight,
     openWorkspace,
@@ -996,6 +997,21 @@ export function Studio() {
         <Controls />
         {layout === 'desktop' && <MiniMap pannable zoomable />}
       </ReactFlow>
+      {!runMode && nodes.length === 0 && (
+        <div className="canvas-empty">
+          <div className="canvas-empty-card">
+            <span className="canvas-empty-kicker">New workflow</span>
+            <h2>What should this workflow do?</h2>
+            <p>Add a task directly, choose a template from the node library, or describe it in Chat.</p>
+            <div className="canvas-empty-actions">
+              <button type="button" className="primary" onClick={() => addNode(FALLBACK_PALETTE[0])}>
+                + Add LLM task
+              </button>
+              <button type="button" onClick={openChat}>Ask Chat</button>
+            </div>
+          </div>
+        </div>
+      )}
       {runMode && batch && (
         <div className="run-badge-group">
           <button

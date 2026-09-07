@@ -2,8 +2,29 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { toolDefaults } from './ToolsPanel.jsx';
 
+function PaletteSection({ title, count, initiallyOpen = false, searching, children }) {
+  const [open, setOpen] = useState(initiallyOpen);
+  if (!count) return null;
+  const visible = searching || open;
+  return (
+    <section className="palette-section">
+      <button
+        type="button"
+        className="palette-section-toggle"
+        aria-expanded={visible}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span>{title}</span>
+        <span className="palette-section-meta">{count} {visible ? '⌃' : '⌄'}</span>
+      </button>
+      {visible && <div className="palette-section-body">{children}</div>}
+    </section>
+  );
+}
+
 export default function Palette({ templates, sources, graphTemplates, onAdd, onLoadTemplate, disabled }) {
   const [toolCatalog, setToolCatalog] = useState([]);
+  const [query, setQuery] = useState('');
 
   useEffect(() => {
     api.listTools().then((r) => setToolCatalog(r.tools || [])).catch(() => {});
@@ -32,6 +53,25 @@ export default function Palette({ templates, sources, graphTemplates, onAdd, onL
   const toolItems = toolCatalog
     .filter((t) => t.available)
     .flatMap((t) => (t.tools || []).map((sub) => ({ toolkit: t.name, ...sub })));
+
+  const matches = (entry) => {
+    const haystack = [entry.label, entry.name, entry.type, entry.description, entry.toolkit]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return haystack.includes(query.trim().toLowerCase());
+  };
+  const domain = (templates || []).filter((tpl) => /^CR\b/i.test(tpl.label || ''));
+  const core = (templates || []).filter((tpl) => !domain.includes(tpl));
+  const filtered = {
+    core: core.filter(matches),
+    domain: domain.filter(matches),
+    sources: (sources || []).filter(matches),
+    graphTemplates: (graphTemplates || []).filter(matches),
+    tools: toolItems.filter(matches),
+  };
+  const searching = query.trim().length > 0;
+  const resultCount = Object.values(filtered).reduce((total, entries) => total + entries.length, 0);
   const toolNode = (sub) => (
     <div
       key={`${sub.toolkit}:${sub.name}`}
@@ -48,57 +88,69 @@ export default function Palette({ templates, sources, graphTemplates, onAdd, onL
 
   return (
     <aside className="palette">
-      <h3>Nodes</h3>
-      <button
-        type="button"
-        className="palette-custom-add"
-        disabled={disabled}
-        onClick={() =>
-          onAdd({
-            type: 'custom',
-            label: 'Custom node',
-            defaults: {
-              description: '',
-              inputs: [{ name: 'input', type: 'str', description: '', required: true }],
-              outputs: [{ name: 'output', type: 'str', description: '', required: true }],
-              prompt: '',
-              system_prompt: '',
-              parse_mode: 'str',
-            },
-          })
-        }
-      >
-        + Custom node
-      </button>
-      <p className="palette-hint">Drag or click to add</p>
-      {templates.map(item)}
-      {(sources || []).length > 0 && (
-        <>
-          <h3>Input Sources</h3>
-          <p className="palette-hint">Feed data into the workflow</p>
-          {sources.map(item)}
-        </>
-      )}
-      {(graphTemplates || []).length > 0 && (
-        <>
-          <h3>Templates</h3>
-          <p className="palette-hint">Load a ready-made graph</p>
-          {graphTemplates.map((t) => (
+      <div className="palette-title-row">
+        <h3>Node library</h3>
+        <span className="muted small">Click or drag</span>
+      </div>
+      <input
+        className="palette-search"
+        type="search"
+        aria-label="Search node library"
+        placeholder="Search nodes and tools…"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+      />
+      <PaletteSection title="Core nodes" count={filtered.core.length} initiallyOpen searching={searching}>
+        {!searching && (
+          <button
+            type="button"
+            className="palette-custom-add"
+            disabled={disabled}
+            onClick={() =>
+              onAdd({
+                type: 'custom',
+                label: 'Custom node',
+                defaults: {
+                  description: '',
+                  inputs: [{ name: 'input', type: 'str', description: '', required: true }],
+                  outputs: [{ name: 'output', type: 'str', description: '', required: true }],
+                  prompt: '',
+                  system_prompt: '',
+                  parse_mode: 'str',
+                },
+              })
+            }
+          >
+            + Custom node
+          </button>
+        )}
+        {filtered.core.map(item)}
+      </PaletteSection>
+      <PaletteSection title="Input sources" count={filtered.sources.length} searching={searching}>
+        {filtered.sources.map(item)}
+      </PaletteSection>
+      <PaletteSection title="Credit risk" count={filtered.domain.length} searching={searching}>
+        {filtered.domain.map(item)}
+      </PaletteSection>
+      <PaletteSection title="Workflow templates" count={filtered.graphTemplates.length} searching={searching}>
+        {filtered.graphTemplates.map((template) => (
             <div
-              key={t.id}
+              key={template.id}
               className={`palette-item${disabled ? ' disabled' : ''}`}
-              onClick={() => !disabled && onLoadTemplate(t.id)}
-              title={t.description}
+              onClick={() => !disabled && onLoadTemplate(template.id)}
+              title={template.description}
             >
-              <div className="palette-label">{t.name}</div>
-              <div className="palette-desc">{t.description}</div>
+              <div className="palette-label">{template.name}</div>
+              <div className="palette-desc">{template.description}</div>
             </div>
-          ))}
-        </>
+        ))}
+      </PaletteSection>
+      <PaletteSection title="Tools" count={filtered.tools.length} searching={searching}>
+        {filtered.tools.map(toolNode)}
+      </PaletteSection>
+      {searching && resultCount === 0 && (
+        <p className="palette-empty">No nodes or tools match “{query.trim()}”.</p>
       )}
-      <h3>Tools</h3>
-      <p className="palette-hint">Drag onto the canvas as a tool node; manage custom tools in the "Tools" tab</p>
-      {toolItems.map(toolNode)}
     </aside>
   );
 }

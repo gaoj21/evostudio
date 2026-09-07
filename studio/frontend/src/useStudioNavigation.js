@@ -21,6 +21,14 @@ export function useStudioNavigation(layout) {
     setLibraryOpen(false);
   }, []);
 
+  const openChat = useCallback(() => {
+    setRightTab('chat');
+    if (layout !== 'desktop') {
+      setCompactPane('chat');
+      setLibraryOpen(false);
+    }
+  }, [layout]);
+
   const openWorkspace = useCallback(() => {
     setLeftTab('workspace');
     if (layout === 'phone') {
@@ -56,6 +64,7 @@ export function useStudioNavigation(layout) {
     compactPane,
     leftTab,
     libraryOpen,
+    openChat,
     openLeft,
     openRight,
     openWorkspace,

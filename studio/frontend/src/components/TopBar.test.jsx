@@ -125,3 +125,25 @@ describe('renaming the open workflow', () => {
     expect(onSelectGraph).toHaveBeenCalledWith('other');
   });
 });
+
+describe('action hierarchy', () => {
+  it('keeps secondary actions out of the desktop primary row', async () => {
+    const onReview = vi.fn();
+    const { user } = setup({ onReview });
+
+    expect(screen.queryByRole('button', { name: 'Review queue' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
+    await user.click(screen.getByRole('button', { name: 'Review queue' }));
+
+    expect(onReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('groups project and automation actions under readable labels', async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
+
+    expect(screen.getByText('Inspect')).toBeInTheDocument();
+    expect(screen.getByText('Improve & automate')).toBeInTheDocument();
+    expect(screen.getByText('Project')).toBeInTheDocument();
+  });
+});

@@ -39,4 +39,18 @@ describe('studio navigation', () => {
     act(() => result.current.revealSelection('detect'));
     expect(result.current.compactPane).toBe('chat');
   });
+
+  it('uses the visible chat destination for each layout', () => {
+    const { result, rerender } = renderHook(
+      ({ layout }) => useStudioNavigation(layout),
+      { initialProps: { layout: 'desktop' } }
+    );
+    act(() => result.current.openChat());
+    expect(result.current.rightTab).toBe('chat');
+
+    rerender({ layout: 'phone' });
+    act(() => result.current.showCompact('setup'));
+    act(() => result.current.openChat());
+    expect(result.current.compactPane).toBe('chat');
+  });
 });

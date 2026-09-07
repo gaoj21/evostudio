@@ -339,19 +339,15 @@ function PreprocessSelect({ value, disabled, onChange }) {
 function GraphSettings({ graph, onGraphChange, runMode }) {
   return (
     <aside className="inspector">
-      <h3>Workflow</h3>
+      <h3>Workflow settings</h3>
       {!graph ? (
         <p className="muted">No workflow open.</p>
       ) : (
         <>
-          <div className="field">
-            <label>Name</label>
-            <input
-              value={graph.name || ''}
-              disabled={runMode}
-              onChange={(e) => onGraphChange({ name: e.target.value })}
-            />
-          </div>
+          <p className="workflow-settings-name">
+            <strong>{graph.name}</strong>
+            <span className="muted small">Rename from the workflow picker above.</span>
+          </p>
           <div className="field">
             <label>Goal</label>
             <textarea

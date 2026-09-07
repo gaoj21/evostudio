@@ -77,13 +77,13 @@ export default function TopBar({
         </select>
         <button
           type="button"
-          className="icon-btn"
+          className={compact ? 'icon-btn' : 'rename-workflow-btn'}
           title="Rename this workflow"
           aria-label="Rename this workflow"
           disabled={runMode || !graphId}
           onClick={() => setRenaming(current?.name || '')}
         >
-          ✎
+          {compact ? '✎' : 'Rename'}
         </button>
       </>
     )
@@ -98,18 +98,82 @@ export default function TopBar({
     return () => document.removeEventListener('mousedown', close);
   }, [menuOpen]);
 
-  const secondary = [
-    { label: 'New', onClick: onNew, disabled: runMode },
-    { label: 'Export project', onClick: onExport, disabled: !graphId },
-    { label: 'Import project', onClick: onImport },
-    { label: 'Run history', onClick: onRuns, disabled: !graphId },
-    { label: 'Schedule', onClick: onSchedule, disabled: !graphId },
-    { label: 'Delete', onClick: onDelete, disabled: runMode || !graphId, danger: true },
-    { label: 'Evolve', onClick: onEvolve, disabled: !graphId },
-    { label: 'Review', onClick: onReview },
-    { label: watching ? 'Stop watching' : 'Watch', onClick: onToggleWatch },
-    { label: 'Workspace', onClick: onWorkspace, disabled: !graphId },
+  const menuGroups = [
+    {
+      label: 'Inspect',
+      items: [
+        { label: 'Run history', onClick: onRuns, disabled: !graphId },
+        { label: 'Workspace files', onClick: onWorkspace, disabled: !graphId },
+      ],
+    },
+    {
+      label: 'Improve & automate',
+      items: [
+        { label: 'Evolve prompts', onClick: onEvolve, disabled: !graphId },
+        { label: 'Review queue', onClick: onReview },
+        { label: 'Schedule runs', onClick: onSchedule, disabled: !graphId },
+        {
+          key: 'watch',
+          label: watching ? 'Stop watching' : 'Watch sources',
+          onClick: onToggleWatch,
+          disabled: !graphId,
+        },
+      ],
+    },
+    {
+      label: 'Project',
+      items: [
+        ...(compact ? [{ label: 'New workflow', onClick: onNew, disabled: runMode }] : []),
+        { label: 'Export project', onClick: onExport, disabled: !graphId },
+        { label: 'Import project', onClick: onImport },
+        { label: 'Delete workflow', onClick: onDelete, disabled: runMode || !graphId, danger: true },
+      ],
+    },
   ];
+
+  const moreMenu = (label) => (
+    <div className="topbar-menu-wrap" ref={menuRef}>
+      <button
+        type="button"
+        className="topbar-more"
+        aria-label="More actions"
+        aria-expanded={menuOpen}
+        onClick={() => setMenuOpen((open) => !open)}
+      >
+        {label}
+      </button>
+      {menuOpen && (
+        <div className="topbar-menu">
+          {menuGroups.map((group) => (
+            <div className="topbar-menu-group" key={group.label}>
+              <div className="topbar-menu-label">{group.label}</div>
+              {group.items.map((item) => (
+                <button
+                  key={item.label}
+                  type="button"
+                  className={item.danger ? 'danger-ghost' : ''}
+                  disabled={item.disabled}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    item.onClick?.();
+                  }}
+                >
+                  {item.label}
+                  {item.key === 'watch' && watching && <span className="watch-dot" />}
+                </button>
+              ))}
+            </div>
+          ))}
+          {compact && (
+            <div className="topbar-menu-theme">
+              <span className="muted small">Theme</span>
+              <ThemeToggle />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 
   if (compact) {
     return (
@@ -136,31 +200,7 @@ export default function TopBar({
               </button>
             </>
           )}
-          <div className="topbar-menu-wrap" ref={menuRef}>
-            <button type="button" className="icon-btn" title="More" onClick={() => setMenuOpen((o) => !o)}>
-              ⋯
-            </button>
-            {menuOpen && (
-              <div className="topbar-menu">
-                {secondary.map((item) => (
-                  <button
-                    key={item.label}
-                    type="button"
-                    className={item.danger ? 'danger-ghost' : ''}
-                    disabled={item.disabled}
-                    onClick={() => { setMenuOpen(false); item.onClick && item.onClick(); }}
-                  >
-                    {item.label}
-                    {item.label === 'Watch' && watching && <span className="watch-dot" />}
-                  </button>
-                ))}
-                <div className="topbar-menu-theme">
-                  <span className="muted small">Theme</span>
-                  <ThemeToggle />
-                </div>
-              </div>
-            )}
-          </div>
+          {moreMenu('⋯')}
         </div>
       </header>
     );
@@ -181,9 +221,6 @@ export default function TopBar({
         <button onClick={onNew} disabled={runMode}>
           New
         </button>
-        <button className="danger-ghost" onClick={onDelete} disabled={runMode || !graphId}>
-          Delete
-        </button>
         <span className="spacer" />
         {runMode ? (
           <button onClick={onBackToEdit}>← Back to edit</button>
@@ -198,40 +235,10 @@ export default function TopBar({
               {saving ? 'Saving…' : 'Save'}
               {dirty && !saving && <span className="dirty-dot" />}
             </button>
-            <button onClick={onEvolve} disabled={!graphId}>
-              Evolve
-            </button>
-            <button onClick={onReview}>Review</button>
-            <button onClick={onRuns} disabled={!graphId} title="Past runs of this workflow">
-              Runs
-            </button>
-            <button
-              onClick={onSchedule}
-              disabled={!graphId}
-              title="Run this workflow on a timer"
-            >
-              Schedule
-            </button>
-            <button
-              className={watching ? 'watching' : ''}
-              onClick={onToggleWatch}
-              title="Watch scheduled source nodes"
-            >
-              {watching ? <span className="watch-dot" /> : null}
-              {watching ? 'Watching' : 'Watch'}
-            </button>
-            <button onClick={onWorkspace} disabled={!graphId}>
-              Workspace
-            </button>
-            <button onClick={onExport} disabled={!graphId} title="Download this workflow as a standalone project">
-              Export
-            </button>
-            <button onClick={onImport} title="Create a workflow from an exported project or graph.json">
-              Import
-            </button>
             <button className="primary" onClick={onRun} disabled={!graphId}>
               Run ▶
             </button>
+            {moreMenu('More ▾')}
           </>
         )}
         <span className="topbar-divider" />

@@ -709,6 +709,66 @@ button.primary:hover:not(:disabled) {
   color: var(--text-3);
 }
 
+.palette-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.palette-title-row h3 {
+  margin: 0;
+}
+
+.palette-search {
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+.palette-section {
+  border-top: 1px solid var(--border);
+}
+
+.palette-section:last-of-type {
+  border-bottom: 1px solid var(--border);
+}
+
+.palette-section-toggle {
+  width: 100%;
+  padding: 10px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+}
+
+.palette-section-toggle:hover:not(:disabled) {
+  border-color: transparent;
+  background: transparent;
+  color: var(--accent-text);
+}
+
+.palette-section-meta {
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.palette-section-body {
+  padding-bottom: 7px;
+}
+
+.palette-empty {
+  margin: 18px 4px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .palette-hint {
   margin: 0 0 10px;
   font-size: 12px;
@@ -763,6 +823,15 @@ button.primary:hover:not(:disabled) {
   background: var(--accent-soft);
   color: var(--accent-text);
   font-weight: 600;
+}
+
+.workflow-settings-name {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0 0 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
 }
 
 .palette-custom-add:hover:not(:disabled) {
@@ -933,6 +1002,53 @@ button.primary:hover:not(:disabled) {
   position: relative;
   min-width: 0;
   background: var(--canvas-bg);
+}
+
+.canvas-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  pointer-events: none;
+}
+
+.canvas-empty-card {
+  width: min(430px, 90%);
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 1.5);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+  pointer-events: auto;
+}
+
+.canvas-empty-kicker {
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.canvas-empty-card h2 {
+  margin: 8px 0;
+  font-size: 20px;
+}
+
+.canvas-empty-card p {
+  margin: 0 auto 18px;
+  max-width: 350px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+.canvas-empty-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
 }
 
 /* Doubled class so these beat xyflow's own `.react-flow.dark` block, which is
@@ -2504,7 +2620,7 @@ button.dirty {
   top: calc(100% + 6px);
   right: 0;
   z-index: 40;
-  min-width: 190px;
+  min-width: 220px;
   padding: 6px;
   display: flex;
   flex-direction: column;
@@ -2513,6 +2629,30 @@ button.dirty {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-lg);
+}
+
+.topbar-more {
+  white-space: nowrap;
+}
+
+.topbar-compact .topbar-more {
+  width: 32px;
+  padding-inline: 7px;
+}
+
+.topbar-menu-group + .topbar-menu-group {
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+.topbar-menu-label {
+  padding: 5px 8px 3px;
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .topbar-menu button {
