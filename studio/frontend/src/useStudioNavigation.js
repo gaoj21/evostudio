@@ -1,0 +1,67 @@
+import { useCallback, useState } from 'react';
+
+/**
+ * One navigation model shared by desktop, tablet and phone shells.
+ *
+ * Layout decides where a destination is displayed; callers only ask to open a
+ * destination. This keeps actions such as Workspace and node selection from
+ * updating a tab that is currently hidden on compact layouts.
+ */
+export function useStudioNavigation(layout) {
+  const [leftTab, setLeftTab] = useState('nodes');
+  const [rightTab, setRightTab] = useState('inspector');
+  const [compactPane, setCompactPane] = useState('chat');
+  const [libraryOpen, setLibraryOpen] = useState(false);
+
+  const openLeft = useCallback((tab) => setLeftTab(tab), []);
+  const openRight = useCallback((tab) => setRightTab(tab), []);
+
+  const showCompact = useCallback((pane) => {
+    setCompactPane(pane);
+    setLibraryOpen(false);
+  }, []);
+
+  const openWorkspace = useCallback(() => {
+    setLeftTab('workspace');
+    if (layout === 'phone') {
+      setCompactPane('nodes');
+      setLibraryOpen(false);
+    } else if (layout === 'tablet') {
+      setLibraryOpen(true);
+    }
+  }, [layout]);
+
+  const revealSelection = useCallback((id) => {
+    if (id && layout === 'phone') {
+      setCompactPane('setup');
+      setLibraryOpen(false);
+    }
+  }, [layout]);
+
+  const toggleLibrary = useCallback(() => {
+    if (layout === 'phone') {
+      setCompactPane('nodes');
+      setLibraryOpen(false);
+    } else if (layout === 'tablet') {
+      setLibraryOpen((open) => !open);
+    } else {
+      setLeftTab('nodes');
+    }
+  }, [layout]);
+
+  const closeLibrary = useCallback(() => setLibraryOpen(false), []);
+
+  return {
+    closeLibrary,
+    compactPane,
+    leftTab,
+    libraryOpen,
+    openLeft,
+    openRight,
+    openWorkspace,
+    revealSelection,
+    rightTab,
+    showCompact,
+    toggleLibrary,
+  };
+}

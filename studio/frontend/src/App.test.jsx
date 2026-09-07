@@ -58,9 +58,15 @@ vi.mock('./components/ToolNode.jsx', () => ({ default: () => null }));
 vi.mock('./components/Palette.jsx', () => ({ default: () => <div>Node palette</div> }));
 vi.mock('./components/ToolsPanel.jsx', () => ({ default: () => null }));
 vi.mock('./components/MemoryPanel.jsx', () => ({ default: () => null }));
-vi.mock('./components/ReviewPanel.jsx', () => ({ default: () => null }));
-vi.mock('./components/RunsPanel.jsx', () => ({ default: () => null }));
-vi.mock('./components/SchedulePanel.jsx', () => ({ default: () => null }));
+vi.mock('./components/ReviewPanel.jsx', () => ({
+  default: ({ open }) => open ? <div>Review overlay</div> : null,
+}));
+vi.mock('./components/RunsPanel.jsx', () => ({
+  default: ({ open }) => open ? <div>Runs overlay</div> : null,
+}));
+vi.mock('./components/SchedulePanel.jsx', () => ({
+  default: ({ open }) => open ? <div>Schedule overlay</div> : null,
+}));
 vi.mock('./components/MemorySettings.jsx', () => ({ memorySiblings: () => [] }));
 vi.mock('./components/ChatPanel.jsx', () => ({
   default: () => <div>Chat</div>,
@@ -81,15 +87,19 @@ vi.mock('./components/RunDialog.jsx', () => ({
     ? <button type="button" onClick={() => onSubmit({})}>Start test run</button>
     : null,
 }));
-vi.mock('./components/EvolvePanel.jsx', () => ({ default: () => null }));
+vi.mock('./components/EvolvePanel.jsx', () => ({
+  default: ({ open }) => open ? <div>Evolve overlay</div> : null,
+}));
 vi.mock('./components/TopBar.jsx', () => ({
-  default: ({ dirty, onRun, onImport, onWorkspace, onToggleWatch }) => (
+  default: ({ dirty, onRun, onImport, onWorkspace, onToggleWatch, onReview, onRuns }) => (
     <div>
       <span data-testid="dirty">{dirty ? 'dirty' : 'clean'}</span>
       <button type="button" onClick={onRun}>Run</button>
       <button type="button" onClick={onImport}>Import</button>
       <button type="button" onClick={onWorkspace}>Workspace</button>
       <button type="button" onClick={onToggleWatch}>Watch</button>
+      <button type="button" onClick={onReview}>Review</button>
+      <button type="button" onClick={onRuns}>Runs</button>
     </div>
   ),
 }));
@@ -130,6 +140,16 @@ async function loadedApp() {
 }
 
 describe('workflow-level interactions', () => {
+  it('keeps only one feature overlay active at a time', async () => {
+    const { user } = await loadedApp();
+    await user.click(screen.getByRole('button', { name: 'Review' }));
+    expect(screen.getByText('Review overlay')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Runs' }));
+    expect(screen.queryByText('Review overlay')).not.toBeInTheDocument();
+    expect(screen.getByText('Runs overlay')).toBeInTheDocument();
+  });
+
   it('creates only one initial workflow when StrictMode replays effects', async () => {
     api.listGraphs.mockResolvedValue([]);
     api.createGraph.mockResolvedValue(GRAPH);
@@ -180,6 +200,15 @@ describe('workflow-level interactions', () => {
 
   it('opens Workspace visibly on a phone layout', async () => {
     state.layout = 'phone';
+    const { user } = await loadedApp();
+    expect(screen.queryByText('Workspace is visible')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Workspace' }));
+    expect(await screen.findByText('Workspace is visible')).toBeInTheDocument();
+  });
+
+  it('opens Workspace in the tablet drawer', async () => {
+    state.layout = 'tablet';
     const { user } = await loadedApp();
     expect(screen.queryByText('Workspace is visible')).not.toBeInTheDocument();
 

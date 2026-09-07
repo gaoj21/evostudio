@@ -16,6 +16,7 @@ import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panel
 import { graphToFlow, flowToGraph, uniqueName } from './convert.js';
 import { useLayoutMode } from './useLayoutMode.js';
 import { BATCH_SETTLED, useExecutionSession } from './useExecutionSession.js';
+import { useStudioNavigation } from './useStudioNavigation.js';
 import TaskNode from './components/TaskNode.jsx';
 import SourceNode from './components/SourceNode.jsx';
 import ToolNode from './components/ToolNode.jsx';
@@ -101,19 +102,22 @@ export function Studio() {
   const [errors, setErrors] = useState(null);
   const [notices, setNotices] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [runDialogOpen, setRunDialogOpen] = useState(false);
+  const [activeOverlay, setActiveOverlay] = useState(null);
   const [copied, setCopied] = useState(false);
-  const [evolveOpen, setEvolveOpen] = useState(false);
-  const [reviewOpen, setReviewOpen] = useState(false);
-  const [runsOpen, setRunsOpen] = useState(false);
-  const [scheduleOpen, setScheduleOpen] = useState(false);
-  const [leftTab, setLeftTab] = useState('nodes'); // 'nodes' | 'tools' | 'workspace'
-  const [rightTab, setRightTab] = useState('inspector'); // 'inspector' | 'chat'
   const layout = useLayoutMode();
-  // Which pane the compact layouts show. Chat is the default: it is the one
-  // pane that is fully usable on a narrow screen.
-  const [compactPane, setCompactPane] = useState('chat');
-  const [drawerNodes, setDrawerNodes] = useState(false);
+  const {
+    closeLibrary,
+    compactPane,
+    leftTab,
+    libraryOpen,
+    openLeft,
+    openRight,
+    openWorkspace,
+    revealSelection,
+    rightTab,
+    showCompact,
+    toggleLibrary,
+  } = useStudioNavigation(layout);
   const [dirty, setDirty] = useState(false);
   const [confirmState, setConfirmState] = useState(null);
   // Serialisation of the last saved/loaded state. Comparing against it beats a
@@ -144,6 +148,8 @@ export function Studio() {
     setErrors(Array.isArray(error) ? error : extractErrors(error));
   }, []);
   const clearSelection = useCallback(() => setSelectedId(null), []);
+  const openOverlay = useCallback((name) => setActiveOverlay(name), []);
+  const closeOverlay = useCallback(() => setActiveOverlay(null), []);
   const execution = useExecutionSession({
     graphId: graph?.id,
     onError: reportExecutionError,
@@ -420,15 +426,6 @@ export function Studio() {
       setEdges((eds) => (eds.some((e) => e.id === id) ? eds : [...eds, { id, source: conn.source, target: conn.target }]));
     },
     [setEdges]
-  );
-
-  // Tapping a node on a compact layout should take you to its editor: the
-  // Inspector is not on screen next to the canvas there.
-  const revealSelection = useCallback(
-    (id) => {
-      if (id && layout === 'phone') setCompactPane('setup');
-    },
-    [layout]
   );
 
   const onSelectionChange = useCallback(({ nodes: sel }) => {
@@ -746,10 +743,10 @@ export function Studio() {
 
   const openPastRun = useCallback(
     async (listedRun) => {
-      setRunsOpen(false);
+      closeOverlay();
       await openExecutionRun(listedRun);
     },
-    [openExecutionRun]
+    [closeOverlay, openExecutionRun]
   );
 
   // Reopening a batch is also how a still-running one is picked back up after
@@ -757,10 +754,10 @@ export function Studio() {
   // reattaches the canvas to work that never stopped.
   const openPastBatch = useCallback(
     async (listedBatch) => {
-      setRunsOpen(false);
+      closeOverlay();
       await openExecutionBatch(listedBatch);
     },
-    [openExecutionBatch]
+    [closeOverlay, openExecutionBatch]
   );
 
   const applyChatGraph = useCallback(
@@ -791,19 +788,19 @@ export function Studio() {
         const { run_id: runId } = await api.runGraph(current.id, inputs, startAt, session);
         return { run_id: runId, status: 'running', nodes: [], result: null, error: null };
       });
-      setRunDialogOpen(false);
+      closeOverlay();
       return runId;
     },
-    [graph?.id, launchRun, saveCurrent]
+    [graph?.id, launchRun, saveCurrent, closeOverlay]
   );
 
   // ---- batch run: canvas-level progress ----
   const onBatchStart = useCallback((batchId) => {
     // Close the dialog: aggregate progress lives on the canvas (per-node
     // counters plus a status badge) and per-record detail in the drawer.
-    setRunDialogOpen(false);
+    closeOverlay();
     beginBatch(batchId);
-  }, [beginBatch]);
+  }, [beginBatch, closeOverlay]);
 
   // ---- watch (scheduled source nodes) ----
   const onToggleWatch = useCallback(async () => {
@@ -829,11 +826,11 @@ export function Studio() {
       // Optimization runs on the server-side graph, so make sure it is the
       // same version the user is looking at before opening the panel.
       if (dirty) await saveCurrent();
-      setEvolveOpen(true);
+      openOverlay('evolve');
     } catch (err) {
       setErrors(extractErrors(err));
     }
-  }, [graph?.id, dirty, saveCurrent]);
+  }, [graph?.id, dirty, saveCurrent, openOverlay]);
 
   const openSchedule = useCallback(async () => {
     if (!graph?.id) return;
@@ -841,17 +838,11 @@ export function Studio() {
     try {
       // A schedule executes the stored workflow later, not the live canvas.
       if (dirty) await saveCurrent();
-      setScheduleOpen(true);
+      openOverlay('schedule');
     } catch (err) {
       setErrors(extractErrors(err));
     }
-  }, [graph?.id, dirty, saveCurrent]);
-
-  const openWorkspace = useCallback(() => {
-    setLeftTab('workspace');
-    if (layout === 'phone') setCompactPane('nodes');
-    if (layout === 'tablet') setDrawerNodes(true);
-  }, [layout]);
+  }, [graph?.id, dirty, saveCurrent, openOverlay]);
 
   // poll watch status while watching (fires may trigger runs)
   useEffect(() => {
@@ -932,13 +923,13 @@ export function Studio() {
   const renderSidebar = (collapsible) => (
     <div className="left-sidebar">
       <div className="sidebar-tabs">
-        <button type="button" className={leftTab === 'nodes' ? 'primary' : ''} onClick={() => setLeftTab('nodes')}>
+        <button type="button" className={leftTab === 'nodes' ? 'primary' : ''} onClick={() => openLeft('nodes')}>
           Nodes
         </button>
-        <button type="button" className={leftTab === 'tools' ? 'primary' : ''} onClick={() => setLeftTab('tools')}>
+        <button type="button" className={leftTab === 'tools' ? 'primary' : ''} onClick={() => openLeft('tools')}>
           Tools
         </button>
-        <button type="button" className={leftTab === 'workspace' ? 'primary' : ''} onClick={() => setLeftTab('workspace')}>
+        <button type="button" className={leftTab === 'workspace' ? 'primary' : ''} onClick={openWorkspace}>
           Workspace
         </button>
         {collapsible && (
@@ -958,7 +949,7 @@ export function Studio() {
         )}
         {leftTab === 'tools' && <ToolsPanel onAdd={(tpl) => addNode(tpl)} disabled={runMode} />}
         {leftTab === 'workspace' && (
-          <WorkspacePanel open graphId={graph?.id} onClose={() => setLeftTab('nodes')} />
+          <WorkspacePanel open graphId={graph?.id} onClose={() => openLeft('nodes')} />
         )}
       </div>
     </div>
@@ -1085,14 +1076,14 @@ export function Studio() {
         <button
           type="button"
           className={rightTab === 'inspector' ? 'primary' : ''}
-          onClick={() => setRightTab('inspector')}
+          onClick={() => openRight('inspector')}
         >
           Inspector
         </button>
         <button
           type="button"
           className={rightTab === 'chat' ? 'primary' : ''}
-          onClick={() => setRightTab('chat')}
+          onClick={() => openRight('chat')}
         >
           Chat
         </button>
@@ -1149,15 +1140,15 @@ export function Studio() {
         onNew={onNew}
         onDelete={onDeleteGraph}
         onSave={onSave}
-        onRun={() => setRunDialogOpen(true)}
+        onRun={() => openOverlay('run')}
         onEvolve={openEvolve}
-        onReview={() => setReviewOpen(true)}
+        onReview={() => openOverlay('review')}
         watching={!!watchInfo?.watching}
         onToggleWatch={onToggleWatch}
         onWorkspace={openWorkspace}
         onExport={onExport}
         onImport={() => importInputRef.current?.click()}
-        onRuns={() => setRunsOpen(true)}
+        onRuns={() => openOverlay('runs')}
         onSchedule={openSchedule}
         onRename={onRename}
         onBackToEdit={exitRunMode}
@@ -1234,8 +1225,8 @@ export function Studio() {
           {layout === 'phone' && compactPane === 'nodes' && (
             <div className="compact-side compact-full">{renderSidebar(false)}</div>
           )}
-          {layout === 'tablet' && drawerNodes && (
-            <div className="compact-drawer-backdrop" onClick={() => setDrawerNodes(false)}>
+          {layout === 'tablet' && libraryOpen && (
+            <div className="compact-drawer-backdrop" onClick={closeLibrary}>
               <div className="compact-drawer" onClick={(e) => e.stopPropagation()}>
                 {renderSidebar(false)}
               </div>
@@ -1245,7 +1236,7 @@ export function Studio() {
             <button
               type="button"
               className={compactPane === 'chat' ? 'primary' : ''}
-              onClick={() => { setCompactPane('chat'); setDrawerNodes(false); }}
+              onClick={() => showCompact('chat')}
             >
               Chat
             </button>
@@ -1253,7 +1244,7 @@ export function Studio() {
               <button
                 type="button"
                 className={compactPane === 'canvas' ? 'primary' : ''}
-                onClick={() => { setCompactPane('canvas'); setDrawerNodes(false); }}
+                onClick={() => showCompact('canvas')}
               >
                 Canvas
               </button>
@@ -1261,17 +1252,14 @@ export function Studio() {
             <button
               type="button"
               className={compactPane === 'setup' ? 'primary' : ''}
-              onClick={() => { setCompactPane('setup'); setDrawerNodes(false); }}
+              onClick={() => showCompact('setup')}
             >
               {selectedNode ? 'Node' : 'Setup'}
             </button>
             <button
               type="button"
-              className={(layout === 'phone' ? compactPane === 'nodes' : drawerNodes) ? 'primary' : ''}
-              onClick={() => {
-                if (layout === 'phone') setCompactPane('nodes');
-                else setDrawerNodes((d) => !d);
-              }}
+              className={(layout === 'phone' ? compactPane === 'nodes' : libraryOpen) ? 'primary' : ''}
+              onClick={toggleLibrary}
             >
               Nodes
             </button>
@@ -1354,7 +1342,7 @@ export function Studio() {
             <button
               type="button"
               title="Open the artifacts folder"
-              onClick={() => { setLeftTab('workspace'); if (layout !== 'desktop') setCompactPane('nodes'); }}
+              onClick={openWorkspace}
             >
               Files
             </button>
@@ -1488,34 +1476,34 @@ export function Studio() {
         </div>
       )}
       <RunDialog
-        open={runDialogOpen}
+        open={activeOverlay === 'run'}
         graphId={graph?.id}
         workflowInputs={workflowInputs}
         hasCanvasSource={hasCanvasSource}
         submitting={runStarting}
-        onCancel={() => setRunDialogOpen(false)}
+        onCancel={closeOverlay}
         onSubmit={startRun}
         beforeRun={saveCurrent}
         onBatchStart={onBatchStart}
       />
       <EvolvePanel
-        open={evolveOpen}
+        open={activeOverlay === 'evolve'}
         graphId={graph?.id}
-        onClose={() => setEvolveOpen(false)}
+        onClose={closeOverlay}
         onApplied={(g) => {
           refreshList().then(() => openGraph(g.id));
         }}
       />
-      <ReviewPanel open={reviewOpen} onClose={() => setReviewOpen(false)} />
+      <ReviewPanel open={activeOverlay === 'review'} onClose={closeOverlay} />
       <SchedulePanel
-        open={scheduleOpen}
+        open={activeOverlay === 'schedule'}
         graphId={graph?.id}
-        onClose={() => setScheduleOpen(false)}
+        onClose={closeOverlay}
       />
       <RunsPanel
-        open={runsOpen}
+        open={activeOverlay === 'runs'}
         graphId={graph?.id}
-        onClose={() => setRunsOpen(false)}
+        onClose={closeOverlay}
         onOpenRun={openPastRun}
         onOpenBatch={openPastBatch}
       />
