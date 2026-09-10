@@ -8,6 +8,12 @@ around that core, not dependencies of it.
 
 ## Start it
 
+For the complete application (built frontend and API together), run `./start.sh`
+from the repository root. See the [startup options](../README.md#local-configuration).
+It installs the chat harness, Mem0 and optimizer integrations by default.
+
+For a manually managed backend-only environment:
+
 From the repository root:
 
 ```bash
