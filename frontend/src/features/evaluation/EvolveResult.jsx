@@ -1,0 +1,148 @@
+import React, { useState } from 'react';
+import { api } from '../../api.js';
+import JsonView from '../../components/JsonView.jsx';
+import { STAGES, elapsed, fmt } from './format.js';
+
+function Progress({ task }) {
+  const saved = ['saved_batch', 'saved_run'].includes(task.source?.type || task.params?.source?.type);
+  const stages = saved ? (task.params?.mode === 'evaluate' ? ['queued', 'scoring saved results'] : ['queued', 'scoring saved results', 'proposing prompts']) : task.params?.mode === 'evaluate' ? ['queued', 'evaluating'] : STAGES;
+  const reached = task.status === 'done' ? stages.length : stages.indexOf(task.stage);
+  return (
+    <div className="evolve-progress">
+      {stages.map((name, i) => (
+        <span key={name} className={`evolve-stage ${i < reached ? 'done' : i === reached && task.status === 'running' ? 'now' : ''}`}>
+          {name}
+        </span>
+      ))}
+      <span className="muted small">{task.status === 'running' ? elapsed(task) : task.status}</span>
+    </div>
+  );
+}
+
+export function TaskDetail({ task, onApplied }) {
+  const [applying, setApplying] = useState(null);
+  const [applyError, setApplyError] = useState(null);
+  const [showUnchanged, setShowUnchanged] = useState(false);
+  const [showExamples, setShowExamples] = useState(false);
+  const evaluationOnly = task.params?.mode === 'evaluate';
+  const baseline = task.baseline?.metrics?.score;
+  const optimized = task.optimized?.metrics?.score;
+  const delta = baseline != null && optimized != null ? optimized - baseline : null;
+
+  const apply = async (mode) => {
+    setApplying(mode);
+    setApplyError(null);
+    try {
+      onApplied(await api.applyEvolve(task.task_id, mode), mode);
+    } catch (err) {
+      setApplyError(err?.body?.detail || err.message);
+    } finally {
+      setApplying(null);
+    }
+  };
+
+  const diffs = task.diff || [];
+  const changed = diffs.filter((d) => d.changed);
+  const p = task.params || {};
+  const trajectory = task.baseline?.report;
+  return (
+    <div className="evolve-detail">
+      <div className="muted small">
+        {evaluationOnly || ['saved_batch', 'saved_run'].includes((task.source || p.source)?.type) ? `${task.task_id} · ${evaluationOnly ? 'Evaluation only' : 'Prompt proposals'} · ${p.n_dev} records · metric ${task.metric}` : <>{task.task_id} · {p.preset || 'custom'} · {p.num_candidates} candidates × {p.max_steps} rounds ·
+        {' '}{p.n_train} teach / {p.n_dev} judge · metric {task.metric}</>}
+        {(task.source || p.source)?.dataset && ` · Dataset ${(task.source || p.source).dataset} / ${(task.source || p.source).split || 'all'}`}
+        {task.elapsed_seconds != null && ` · ${elapsed(task)}`}
+      </div>
+      {['saved_batch', 'saved_run'].includes((task.source || p.source)?.type) && <p className="muted small">Saved results · {(task.source || p.source)?.batch_id || (task.source || p.source)?.run_id} · no workflow replay</p>}
+      {(task.source || p.source)?.matched_records != null && <p className="muted small">{(task.source || p.source).matched_records} matched records · {(task.source || p.source).matched_cases} trajectories · {(task.source || p.source).missing_cases || 0} dataset trajectories without saved results</p>}
+      {task.validation_status === 'not_run' && <p role="status">Prompt suggestions are not validated. No workflow was rerun; there is no after score. {task.evidence_records} saved traces were used.</p>}
+      {task.baseline?.metrics?.unscored > 0 && <p className="muted small">{task.baseline.metrics.unscored} records have no usable score. Missing labels are not treated as negative outcomes.</p>}
+      {trajectory && <section aria-label="Trajectory evaluation summary">
+        <h4>Evaluation completed · {trajectory.companies?.length || 0} trajectories</h4>
+        <div className="evolve-scores">
+          <div className="evolve-score"><div className="muted small">Verified event cases detected</div><div className="evolve-score-value">{trajectory.all.detected} / {trajectory.all.positives}</div></div>
+          <div className="evolve-score"><div className="muted small">Mean lead time (detected cases)</div><div className="evolve-score-value">{trajectory.all.mean_lead_days ?? '—'} days</div></div>
+        </div>
+        <p className="muted small">{trajectory.failed_steps || 0} unsuccessful steps. Daily accuracy requires reviewed daily labels; it is not inferred from eventual events.</p>
+      </section>}
+      {task.baseline?.report && <details><summary>Trajectory evaluation report</summary><JsonView value={task.baseline.report} startOpen={false} /></details>}
+      <Progress task={task} />
+      {task.error && <pre className="json-view batch-output batch-error">{task.error}</pre>}
+      {task.status === 'done' && (
+        <>
+          {(!trajectory || baseline != null) && <div className="evolve-scores">
+            <div className="evolve-score">
+              <div className="muted small">{evaluationOnly ? 'Score' : 'Before'}</div>
+              <div className="evolve-score-value">{fmt(baseline)}</div>
+            </div>
+            {!evaluationOnly && task.optimized && <><div className="evolve-score-arrow">→</div>
+            <div className="evolve-score">
+              <div className="muted small">After</div>
+              <div className="evolve-score-value">{fmt(optimized)}</div>
+            </div>
+            </>}
+            {delta != null && (
+              <span className={`evolve-delta ${delta > 0 ? 'up' : delta < 0 ? 'down' : ''}`}>
+                {delta > 0 ? '+' : ''}{delta.toFixed(3)}
+              </span>
+            )}
+            <span className="muted small">on the {p.n_dev} judging record{p.n_dev === 1 ? '' : 's'}</span>
+          </div>}
+          {!evaluationOnly && <>
+          <div className="evolve-apply">
+            <button type="button" className="primary" onClick={() => apply('replace')} disabled={applying != null || changed.length === 0}>
+              {applying === 'replace' ? 'Applying…' : 'Apply to this workflow'}
+            </button>
+            <button type="button" onClick={() => apply('new')} disabled={applying != null}>
+              {applying === 'new' ? 'Saving…' : 'Save as new workflow'}
+            </button>
+            <span className="muted small">Apply keeps a copy named “… (before evolve)”.</span>
+          </div>
+          {applyError && <div className="muted small batch-error">{String(applyError)}</div>}
+          <h4>{changed.length} prompt{changed.length === 1 ? '' : 's'} changed</h4>
+          {changed.length === 0 && <div className="muted small">The optimizer kept every prompt as it was.</div>}
+          {changed.map((d) => (
+            <div className="evolve-diff" key={d.name}>
+              <div className="evolve-diff-name">{d.name}</div>
+              <div className="evolve-diff-cols">
+                <div><div className="muted small">before</div><pre className="json-view">{d.before}</pre></div>
+                <div><div className="muted small">after</div><pre className="json-view">{d.after}</pre></div>
+              </div>
+            </div>
+          ))}
+          {diffs.length > changed.length && (
+            <button type="button" className="link small" onClick={() => setShowUnchanged((v) => !v)}>
+              {showUnchanged ? 'Hide' : 'Show'} {diffs.length - changed.length} unchanged
+            </button>
+          )}
+          {showUnchanged && diffs.filter((d) => !d.changed).map((d) => (
+            <div className="evolve-diff" key={d.name}>
+              <div className="evolve-diff-name">{d.name} <span className="muted small">{d.optimized === false ? '(not optimized)' : '(unchanged)'}</span></div>
+              <pre className="json-view">{d.before}</pre>
+            </div>
+          ))}
+          </>}
+          <button type="button" className="link small" onClick={() => setShowExamples((v) => !v)}>
+            {showExamples ? 'Hide' : 'Show'} the judging records
+          </button>
+          {showExamples && (
+            <div className="batch-list">
+              {Object.entries((task.optimized || task.baseline)?.records || {}).map(([id, r]) => (
+                <div className="batch-item" key={id}>
+                  <div className="batch-item-head">
+                    <span>{id}</span>
+                    <span className="muted small">
+                      {!task.optimized ? `score ${fmt(r.metrics?.score)}` : `before ${fmt(task.baseline?.records?.[id]?.metrics?.score)} · after ${fmt(r.metrics?.score)}`} · expected {JSON.stringify(r.label)}
+                    </span>
+                  </div>
+                  <JsonView value={r.prediction} className="batch-output" startOpen={false} />
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+

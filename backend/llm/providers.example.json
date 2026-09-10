@@ -1,0 +1,15 @@
+{
+  "default": "example",
+  "providers": {
+    "example": {
+      "type": "openai_compatible",
+      "model": "YOUR_MODEL_ID",
+      "base_url": "https://YOUR_API_HOST/v1",
+      "api_key_env": "LLM_API_KEY",
+      "enabled": true,
+      "params": {
+        "timeout": 120
+      }
+    }
+  }
+}

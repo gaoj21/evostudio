@@ -1,0 +1,15 @@
+{
+  "reviewed_at": "2026-09-09",
+  "method": "manual inspection of cross-company identical nonempty bodies; exact SHA256 of stripped text",
+  "action": "quarantine body only, retain headline and provenance; raw text preserved in parent release",
+  "body_hashes": {
+    "53f4c2b21e73d7e0692170d94ca4516b232e48224aed4d03059bdc497e5f891f": "generic market homepage replacing unrelated historical articles",
+    "1c59f47e2282b34a0030fe78bf56afcea22e69dc5ab5e8401482adf133b07441": "publisher access restriction",
+    "d68692ea94f4c542f46f00090caff800ddb41b5a645e940e81f3f985f5852b9d": "generic market homepage replacing unrelated historical articles",
+    "ee1003f93991eb163b82d274901e7d23b846eefc113c04afdd95a5a9ed37bba8": "navigation only",
+    "a28ca03a0054b87335adac231f7bfbbeee794785f69d1fe76f7fb512b0e56204": "publisher shutdown notice replacing historical article",
+    "5ecbb3d6aaa7bd6a204d5c84400e6d99be1d60318b964460cb5fd4520b52cbd3": "geographic access restriction",
+    "edb0deb9b4676320bed7d974b037cd181fc3f07906a8587a2958c934ac5add8c": "cookie policy only",
+    "1f5f89c23e8c81de80a170e839293762769db8296d403e92a43529506c70ede2": "human verification challenge"
+  }
+}

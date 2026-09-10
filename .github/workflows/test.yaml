@@ -1,0 +1,80 @@
+name: test
+
+on:
+  push: {branches: [main]}
+  pull_request: {}
+
+jobs:
+  core:
+    name: core / py${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - run: uv sync --frozen --extra dev
+      - name: Core tests
+        run: >-
+          uv run pytest -q
+          tests/src/agents tests/src/core tests/src/evaluator tests/src/hitl
+          tests/src/models tests/src/skills tests/src/storages tests/src/workflow
+          tests/src/test_memory_package_imports.py tests/src/test_tools_package_imports.py
+
+  studio:
+    name: studio / py${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - run: uv sync --frozen --extra dev --extra studio --extra rag
+      - name: Studio tests
+        run: uv run pytest -q tests/studio
+
+  optional:
+    name: ${{ matrix.layer }} / py3.12
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - layer: rag
+            extras: --extra rag
+            tests: tests/src/rag
+          - layer: optimizers
+            extras: --extra optimizers --extra viz
+            tests: tests/src/optimizers
+          - layer: tools
+            extras: --extra tools
+            tests: tests/src/test_tools_package_imports.py tests/src/skills
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen --extra dev ${{ matrix.extras }}
+      - name: Optional integration tests
+        run: uv run pytest -q ${{ matrix.tests }}
+
+  collect-all:
+    name: collect all tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen --extra dev --extra studio
+      - run: uv run pytest --collect-only -q

@@ -1,0 +1,4 @@
+# Compatibility entry point for contributors who still use pip.
+# Dependency versions and groups are defined once in pyproject.toml; uv.lock
+# provides the reproducible resolution used by CI.
+-e .[all,dev,studio]
