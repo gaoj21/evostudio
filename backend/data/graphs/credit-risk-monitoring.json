@@ -1,0 +1,642 @@
+{
+  "id": "credit-risk-monitoring",
+  "name": "Credit Risk Monitoring",
+  "goal": "Monitor credit risk end to end: source news and 8-K filings, ground against the obligor list, then detect, investigate, reflect and decide alert or suppress.",
+  "output_dir": "runs",
+  "project_id": null,
+  "task_id": null,
+  "preprocess": null,
+  "memory_resources": [],
+  "memory_positions": {
+    "mem:decide": {
+      "x": 1344.688055597843,
+      "y": 379.6494731413001
+    },
+    "mem:investigate": {
+      "x": 829.6364298075483,
+      "y": 371.25629851396116
+    }
+  },
+  "flow_version": 2,
+  "tasks": [
+    {
+      "name": "feed",
+      "kind": "source",
+      "description": "credit_risk feed: samples.jsonl sampler",
+      "source": {
+        "type": "credit_risk",
+        "split": "dev",
+        "n": 0,
+        "seed": 5,
+        "schedule": {
+          "mode": "ondemand"
+        },
+        "step": "monthly",
+        "dataset": "2026-09-10-random-dev-test-v1"
+      },
+      "outputs": [
+        {
+          "name": "sample_id",
+          "type": "str",
+          "description": "credit_risk feed field",
+          "required": false
+        },
+        {
+          "name": "company",
+          "type": "str",
+          "description": "credit_risk feed field",
+          "required": false
+        },
+        {
+          "name": "symbol",
+          "type": "str",
+          "description": "credit_risk feed field",
+          "required": false
+        },
+        {
+          "name": "cik",
+          "type": "str",
+          "description": "credit_risk feed field",
+          "required": false
+        },
+        {
+          "name": "window_start",
+          "type": "str",
+          "description": "credit_risk feed field",
+          "required": false
+        },
+        {
+          "name": "window_end",
+          "type": "str",
+          "description": "credit_risk feed field",
+          "required": false
+        },
+        {
+          "name": "news_batch",
+          "type": "str",
+          "description": "credit_risk feed field",
+          "required": false
+        },
+        {
+          "name": "filing_batch",
+          "type": "str",
+          "description": "credit_risk feed field",
+          "required": false
+        },
+        {
+          "name": "sample_json",
+          "type": "str",
+          "description": "credit_risk feed field",
+          "required": false
+        },
+        {
+          "name": "as_of",
+          "type": "str",
+          "description": "the date this observation was made",
+          "required": true
+        }
+      ],
+      "save_output": true,
+      "enabled": true,
+      "x": -234,
+      "y": 162
+    },
+    {
+      "name": "source_news",
+      "description": "Extract main-subject companies from the news batch.",
+      "inputs": [
+        {
+          "name": "news_batch",
+          "type": "str",
+          "description": "News items, one per line",
+          "required": true
+        },
+        {
+          "name": "company",
+          "type": "str",
+          "description": "Watch-list candidate name",
+          "required": true
+        },
+        {
+          "name": "as_of",
+          "type": "str",
+          "description": "Current observation date (YYYY-MM-DD)",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "news_entities",
+          "type": "str",
+          "description": "JSON: {\"companies\": [...]}",
+          "required": true
+        }
+      ],
+      "prompt": "You are the sourcing step of a credit-risk monitoring pipeline. Work only from the news items supplied below. Do not use outside knowledge.\n\nWatch-list candidate (context only): {company}\nAs-of date: {as_of}\n\nNews items:\n{news_batch}\n\nFor each news item, identify each company that is a MAIN SUBJECT of that item. A company is a main subject only if the item is centrally about that company. Merely mentioned entities do not count: counterparties, peers, competitors, investors, analysts, exchanges, regulators, law firms, and other list entries must be excluded. The watch-list candidate is not a main subject unless the news item itself is centrally about it.\n\nReturn ONLY JSON in exactly this shape:\n{{\"companies\": [\"<main-subject company name>\", ...]}}\n\nRules:\n- Use names as they appear in the news items; do not invent, normalize, or expand names.\n- Deduplicate while preserving first-seen order.\n- If no news item has a clear company as a main subject, return {{\"companies\": []}}.\n- Output valid JSON only, with no markdown or extra text.",
+      "system_prompt": "You are the sourcing agent of a credit-risk monitoring pipeline. Output valid JSON only.",
+      "parse_mode": "str",
+      "tool_names": [],
+      "skill_names": [],
+      "use_long_term_memory": false,
+      "save_output": true,
+      "enabled": true,
+      "x": 49,
+      "y": 49
+    },
+    {
+      "name": "source_8k",
+      "description": "Extract CIK and item numbers from 8-K filings.",
+      "inputs": [
+        {
+          "name": "filing_batch",
+          "type": "str",
+          "description": "8-K filings: date, form, items, text",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "filing_entities",
+          "type": "str",
+          "description": "JSON: {\"cik\": ..., \"items\": [...]}",
+          "required": true
+        }
+      ],
+      "prompt": "You are the 8-K sourcing step of a credit-risk monitoring pipeline. Use only the filing text supplied below; do not use outside knowledge or infer missing metadata.\n\nFilings:\n{filing_batch}\n\nExtract:\n1. The registrant CIK number from the filing header/metadata. Return digits only, without labels, prefixes, or punctuation.\n2. The reported 8-K item numbers, exactly as written in the filing text. Include only distinct item numbers actually present.\n\nReturn ONLY JSON in exactly this shape:\n{{\"cik\": \"<digits>\", \"items\": [\"<item number>\", ...]}}\n\nRules:\n- If no CIK can be found, return {{\"cik\": \"\", \"items\": []}}.\n- Deduplicate item numbers and keep their first-seen order.\n- Do not invent CIKs, item numbers, or filing facts.\n- Output valid JSON only, with no markdown or extra text.",
+      "system_prompt": "You are the 8-K sourcing agent of a credit-risk monitoring pipeline. Output valid JSON only.",
+      "parse_mode": "str",
+      "tool_names": [],
+      "skill_names": [],
+      "use_long_term_memory": false,
+      "save_output": true,
+      "enabled": true,
+      "x": 57,
+      "y": 297
+    },
+    {
+      "name": "grounding",
+      "description": "Ground candidates against the internal obligor list.",
+      "inputs": [
+        {
+          "name": "company",
+          "type": "str",
+          "description": "Watch-list candidate name",
+          "required": true
+        },
+        {
+          "name": "news_entities",
+          "type": "str",
+          "description": "JSON from the news sourcing step",
+          "required": true
+        },
+        {
+          "name": "filing_entities",
+          "type": "str",
+          "description": "JSON from the 8-K sourcing step",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "grounding",
+          "type": "str",
+          "description": "JSON: matched, obligor, cik, how",
+          "required": true
+        }
+      ],
+      "prompt": "You are the grounding step of a credit-risk monitoring pipeline. Use only the provided inputs and the matching tools; do not use outside knowledge to decide whether a company is the obligor.\n\nWatch-list candidate: {company}\nMain-subject companies extracted from news: {news_entities}\n8-K filing metadata: {filing_entities}\n\nProcedure:\n1. Parse the news_entities and filing_entities JSON. Treat missing or unparseable values as empty.\n2. If the filing metadata contains a non-empty CIK, call the match_cik tool with that CIK first. This is the strongest evidence.\n3. If no CIK match is returned, call the match_company_name tool for the watch-list candidate and for each company name in news_entities.\n4. If any tool returns matched=true, set matched=true and use that tool's canonical obligor, CIK, and how value. Prefer a CIK match over an exact name match, and an exact name match over a fuzzy match.\n5. If no tool returns matched=true, set matched=false, obligor=\"\", cik=\"\", and how=\"none\".\n\nReturn ONLY JSON in exactly this shape:\n{{\"matched\": true|false, \"obligor\": \"<canonical name from the tool, or empty>\", \"cik\": \"<cik or empty>\", \"how\": \"exact|fuzzy|cik|none\"}}\n\nmatched may be true ONLY when a tool returned matched=true. When matched=false, downstream steps must drop this item. Output valid JSON only, with no markdown or extra text.",
+      "system_prompt": "You are the grounding agent of a credit-risk monitoring pipeline. Use the provided tools. Output valid JSON only.",
+      "parse_mode": "str",
+      "tool_names": [
+        "ObligorMatchToolkit"
+      ],
+      "skill_names": [],
+      "use_long_term_memory": false,
+      "save_output": true,
+      "enabled": true,
+      "x": 330,
+      "y": 170
+    },
+    {
+      "name": "detect",
+      "description": "Detect credit-risk events about the obligor from the news batch.",
+      "inputs": [
+        {
+          "name": "company",
+          "type": "str",
+          "description": "The obligor under watch",
+          "required": true
+        },
+        {
+          "name": "news_batch",
+          "type": "str",
+          "description": "News items, one per line",
+          "required": true
+        },
+        {
+          "name": "as_of",
+          "type": "str",
+          "description": "Current observation date (YYYY-MM-DD)",
+          "required": true
+        },
+        {
+          "name": "grounding",
+          "type": "str",
+          "description": "Grounding JSON; matched=false drops the item",
+          "required": true
+        },
+        {
+          "name": "filing_batch",
+          "type": "str",
+          "description": "SEC 8-K filings available by the observation date",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "detection",
+          "type": "str",
+          "description": "JSON: is_main_subject, topic, severity, confidence, summary",
+          "required": true
+        }
+      ],
+      "prompt": "You are the detection step of a credit-risk monitoring pipeline. Judge only from the material supplied below. Do not use outside knowledge; if the material does not state a fact, it is not known. Never mention an event, filing, or date not present in the material.\n\nObligor under watch: {company}\nAs-of date: {as_of}\n\nGrounding result:\n{grounding}\n\nNews items:\n{news_batch}\n\nSEC 8-K filings available as of {as_of}:\n{filing_batch}\n\nFirst, if the grounding result has \"matched\": false, return ONLY JSON:\n{{\"is_main_subject\": false, \"topic\": \"none\", \"severity\": \"low\", \"confidence\": 1.0, \"source\": \"none\", \"summary\": \"obligor not covered, dropped at grounding\"}}\nand do nothing else.\n\nOtherwise, assess whether {company} is the MAIN SUBJECT of the news items or the registrant of the filings. If not, return is_main_subject=false with topic \"none\", severity \"low\", confidence 1.0, source \"none\", and a one-line summary.\n\nIf yes, classify the current credit-risk event using the taxonomy below. Use only event types in the taxonomy. If no taxonomy event is present, use topic \"none\", severity \"low\", source \"none\".\nIf multiple events are present, choose the most credit-risk-relevant event with the highest severity, and mention the concrete facts in the summary.\nSource must be:\n- \"news\" if the deciding evidence is in the news items,\n- \"8-K\" if it is in the supplied SEC 8-K text,\n- \"both\" if both independently support the event,\n- \"none\" if no event.\nA matching CIK or item number alone does not establish a risk event; cite the concrete disclosure.\n\n--- Credit Risk Event Taxonomy ---\n| event_type | description | typical severity |\n|---|---|---|\n| debt_default | missed bond/loan payment, bankruptcy filing, debt restructuring | critical |\n| rating_downgrade | credit rating or outlook cut by a rating agency | high |\n| liquidity_stress | cash crunch, asset fire-sales, credit line freeze, going-concern doubts | high |\n| lawsuit_regulatory | major lawsuit, fraud probe, regulatory penalty, asset freeze | medium-high |\n| earnings_warning | profit warning, large loss, covenant breach risk | medium |\n| management_turmoil | CFO/CEO sudden departure, auditor resignation, board crisis | medium |\n| operational_shock | plant shutdown, supply chain collapse, major contract loss | medium |\n| positive_development | refinancing success, rating upgrade, strong earnings, strategic investment | positive |\n\nReturn ONLY JSON in exactly this shape:\n{{\"is_main_subject\": true|false, \"topic\": \"...\", \"severity\": \"critical|high|medium|low|positive\", \"confidence\": 0.0, \"source\": \"news|8-K|both|none\", \"summary\": \"one line citing concrete facts\"}}\n\nOutput valid JSON only, with no markdown or extra text.",
+      "system_prompt": "You are the detection agent of a credit-risk monitoring pipeline. Output valid JSON only.",
+      "parse_mode": "str",
+      "tool_names": [],
+      "skill_names": [],
+      "use_long_term_memory": false,
+      "save_output": true,
+      "enabled": true,
+      "x": 586,
+      "y": 181
+    },
+    {
+      "name": "investigate",
+      "description": "Gather the obligor's context pack from memory.",
+      "inputs": [
+        {
+          "name": "company",
+          "type": "str",
+          "description": "The obligor under watch",
+          "required": true
+        },
+        {
+          "name": "detection",
+          "type": "str",
+          "description": "Detection JSON from the detect step",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "context",
+          "type": "str",
+          "description": "JSON: profile, past_alerts, cases",
+          "required": true
+        }
+      ],
+      "prompt": "Evidence rule: judge ONLY from the material given to you (the detection and the long-term memory context supplied below). Do not use outside knowledge. Never mention an event, filing, or date that is not present in that material. If the material does not say it happened, it has not happened yet.\n\nYou are the investigation step of a credit-risk monitoring pipeline. Assemble a compact context pack for the obligor using only:\n- the current detection below, and\n- the long-term memories appended at the end of this prompt, limited to earlier observations of this same obligor.\n\nObligor: {company}\n\nDetection:\n{detection}\n\nRules:\n- The dated final decisions are the record of actual past alerts. A prior context pack is supporting context, not proof that an alert was issued.\n- Carry forward unresolved confirmed risks from the supplied memories.\n- Distinguish suppressed repeats from new alerts.\n- Do not invent similar cases when none are supplied.\n- If a field has no supplied evidence, use the string \"None\".\n\nReturn ONLY JSON in exactly this shape:\n{{\"profile\": \"current risk picture of the obligor, or 'None'\", \"past_alerts\": \"relevant past alerts, or 'None'\", \"cases\": \"similar historical cases, or 'None'\"}}\n\nOutput valid JSON only, with no markdown or extra text.",
+      "system_prompt": "You are the investigation agent of a credit-risk monitoring pipeline. Output valid JSON only.",
+      "parse_mode": "str",
+      "tool_names": [],
+      "skill_names": [],
+      "use_long_term_memory": true,
+      "memory": {
+        "outputs": null,
+        "inputs": [
+          "company"
+        ],
+        "when": "success",
+        "retrieve": 3,
+        "session_recall": 0,
+        "match": "company",
+        "context": [
+          "as_of",
+          "window_start",
+          "window_end",
+          "detection.source"
+        ],
+        "at": "as_of",
+        "read_from": [
+          "investigate",
+          "decide"
+        ],
+        "read": [
+          "context",
+          "decision"
+        ],
+        "kind": "table"
+      },
+      "save_output": true,
+      "enabled": true,
+      "x": 843,
+      "y": 177
+    },
+    {
+      "name": "reflect",
+      "description": "Calibrate the detection against profile and history.",
+      "inputs": [
+        {
+          "name": "company",
+          "type": "str",
+          "description": "The obligor under watch",
+          "required": true
+        },
+        {
+          "name": "detection",
+          "type": "str",
+          "description": "Detection JSON from the detect step",
+          "required": true
+        },
+        {
+          "name": "context",
+          "type": "str",
+          "description": "Context pack JSON from the investigate step",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "reflection",
+          "type": "str",
+          "description": "JSON: topic, severity, confidence, adjusted, rationale",
+          "required": true
+        }
+      ],
+      "prompt": "Evidence rule: judge ONLY from the detection and context pack supplied below. Do not use outside knowledge. Never mention an event, filing, or date that is not present in that material. If the material does not say it happened, it has not happened yet.\n\nObligor: {company}\n\nDetection under review:\n{detection}\n\nContext pack (risk profile, past alerts, similar cases; 'None' if none yet):\n{context}\n\nRevalidate the detection:\n- Does the obligor's supplied history support this topic and severity?\n- Escalation against unresolved confirmed events in the profile must be upheld.\n- Re-reports of already-alerted facts with no new content should be damped.\n- If there is no history or the context is \"None\", do not invent support or contradiction.\n- Is the confidence honest given the supplied evidence?\n\nSet adjusted=true only if you change the topic, severity, or confidence from the detection. Otherwise set adjusted=false.\n\nReturn ONLY JSON in exactly this shape:\n{{\"topic\": \"...\", \"severity\": \"...\", \"confidence\": 0.0, \"adjusted\": true|false, \"rationale\": \"one line\"}}\n\nOutput valid JSON only, with no markdown or extra text.",
+      "system_prompt": "You are the reflection agent of a credit-risk monitoring pipeline. You calibrate, you do not invent facts. Output valid JSON only.",
+      "parse_mode": "str",
+      "tool_names": [],
+      "skill_names": [],
+      "use_long_term_memory": false,
+      "save_output": true,
+      "enabled": true,
+      "x": 1098,
+      "y": 177
+    },
+    {
+      "name": "decide",
+      "description": "Decide alert or suppress following the scoring rubric.",
+      "inputs": [
+        {
+          "name": "company",
+          "type": "str",
+          "description": "The obligor under watch",
+          "required": true
+        },
+        {
+          "name": "detection",
+          "type": "str",
+          "description": "Validated detection JSON",
+          "required": true
+        },
+        {
+          "name": "reflection",
+          "type": "str",
+          "description": "Reflection JSON from the reflect step",
+          "required": true
+        },
+        {
+          "name": "context",
+          "type": "str",
+          "description": "Context pack JSON from the investigate step",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "decision",
+          "type": "str",
+          "description": "JSON: action, risk_level, score, rationale",
+          "required": true
+        }
+      ],
+      "prompt": "Evidence rule: judge ONLY from the material given to you (the validated detection, reflection, and context pack supplied below). Do not use outside knowledge. Never mention an event, filing, or date that is not present in that material. If the material does not say it happened, it has not happened yet.\n\nYou are the decision step of a credit-risk monitoring pipeline — the chief credit officer's delegate. Apply the scoring rubric below and issue an action.\n\n--- Risk scoring rubric ---\nRisk levels:\n| risk_level | score band | meaning |\n|---|---|---|\n| low | 0-29 | no material negative events; financially sound signals |\n| medium | 30-59 | isolated negative events, no confirmed default signal; monitor |\n| high | 60-84 | multiple/severe negative events or confirmed critical event; elevated default risk |\n| critical | 85-100 | confirmed default, bankruptcy, or imminent payment failure |\n\nScoring rules:\n- A confirmed critical event (e.g. debt_default) alone justifies at least 80.\n- An unconfirmed rumor caps the score at 70 until corroborated.\n- Trend matters: if historical memory shows the same risk theme recurring or worsening over time (escalation), raise the score by 10-20 versus judging the current events in isolation. If history shows improvement, lower it.\n- confidence is high when events are confirmed and consistent, low when based on rumors or a single source.\n- key_evidence must quote only facts present in the input events or history. Never invent facts.\n--- End rubric ---\n\nObligor: {company}\n\nDetection (validated):\n{detection}\n\nReflection:\n{reflection}\n\nContext pack:\n{context}\n\nDecision rules:\n- \"alert\" only for material, credit-relevant developments; routine or duplicate content is \"suppress\".\n- Confirmed unresolved events already in the context/profile dominate: a weaker new item must NOT lower the level below what they imply.\n- If the detection found no relevant event, CARRY FORWARD the existing view (suppress the alert).\n- Floors. A CONFIRMED going-concern warning, missed or deferred debt payment, covenant breach, lender demanding repayment, forbearance, or a bankruptcy filing by the company or a subsidiary is at least \"high\" (score >= 60) — and stays at least \"high\" in every later step while unresolved, whether or not this step's item is a duplicate. A confirmed filing by the company itself is \"critical\".\n- Ceilings. A single lawsuit or investigation, a single analyst's opinion or price-target cut, a fine or settlement the company can pay, store closures, layoffs or other cost cuts, a failed trial or product setback: at most \"medium\" on their own. They reach \"high\" only together with liquidity evidence (cash running out, financing failing, payments missed).\n\nReturn ONLY JSON in exactly this shape:\n{{\"action\": \"alert\"|\"suppress\", \"risk_level\": \"low\"|\"medium\"|\"high\"|\"critical\", \"score\": 0-100, \"rationale\": \"one line\"}}\n\nOutput valid JSON only, with no markdown or extra text.",
+      "system_prompt": "You are the decision agent of a credit-risk monitoring pipeline — the chief credit officer's delegate. Output valid JSON only.",
+      "parse_mode": "str",
+      "tool_names": [],
+      "skill_names": [],
+      "use_long_term_memory": true,
+      "memory": {
+        "outputs": null,
+        "inputs": [
+          "company"
+        ],
+        "when": "success",
+        "retrieve": 3,
+        "session_recall": 0,
+        "match": "company",
+        "context": [
+          "as_of",
+          "window_start",
+          "window_end",
+          "detection.source"
+        ],
+        "at": "as_of",
+        "read_from": [
+          "decide"
+        ],
+        "read": [
+          "decision"
+        ],
+        "kind": "table"
+      },
+      "save_output": true,
+      "enabled": true,
+      "x": 1351,
+      "y": 178
+    }
+  ],
+  "edges": [
+    {
+      "source": "feed",
+      "target": "source_news",
+      "mappings": [
+        {
+          "from": "company",
+          "to": "company"
+        },
+        {
+          "from": "as_of",
+          "to": "as_of"
+        },
+        {
+          "from": "news_batch",
+          "to": "news_batch"
+        }
+      ]
+    },
+    {
+      "source": "feed",
+      "target": "source_8k",
+      "mappings": [
+        {
+          "from": "filing_batch",
+          "to": "filing_batch"
+        }
+      ]
+    },
+    {
+      "source": "source_news",
+      "target": "grounding",
+      "mappings": [
+        {
+          "from": "news_entities",
+          "to": "news_entities"
+        }
+      ]
+    },
+    {
+      "source": "source_8k",
+      "target": "grounding",
+      "mappings": [
+        {
+          "from": "filing_entities",
+          "to": "filing_entities"
+        }
+      ]
+    },
+    {
+      "source": "grounding",
+      "target": "detect",
+      "mappings": [
+        {
+          "from": "grounding",
+          "to": "grounding"
+        }
+      ]
+    },
+    {
+      "source": "detect",
+      "target": "investigate",
+      "mappings": [
+        {
+          "from": "detection",
+          "to": "detection"
+        }
+      ]
+    },
+    {
+      "source": "investigate",
+      "target": "reflect",
+      "mappings": [
+        {
+          "from": "context",
+          "to": "context"
+        }
+      ]
+    },
+    {
+      "source": "reflect",
+      "target": "decide",
+      "mappings": [
+        {
+          "from": "reflection",
+          "to": "reflection"
+        }
+      ]
+    },
+    {
+      "source": "feed",
+      "target": "grounding",
+      "mappings": [
+        {
+          "from": "company",
+          "to": "company"
+        }
+      ],
+      "implied": true
+    },
+    {
+      "source": "feed",
+      "target": "detect",
+      "mappings": [
+        {
+          "from": "company",
+          "to": "company"
+        },
+        {
+          "from": "news_batch",
+          "to": "news_batch"
+        },
+        {
+          "from": "as_of",
+          "to": "as_of"
+        },
+        {
+          "from": "filing_batch",
+          "to": "filing_batch"
+        }
+      ],
+      "implied": true
+    },
+    {
+      "source": "feed",
+      "target": "investigate",
+      "mappings": [
+        {
+          "from": "company",
+          "to": "company"
+        }
+      ],
+      "implied": true
+    },
+    {
+      "source": "feed",
+      "target": "reflect",
+      "mappings": [
+        {
+          "from": "company",
+          "to": "company"
+        }
+      ],
+      "implied": true
+    },
+    {
+      "source": "detect",
+      "target": "reflect",
+      "mappings": [
+        {
+          "from": "detection",
+          "to": "detection"
+        }
+      ],
+      "implied": true
+    },
+    {
+      "source": "feed",
+      "target": "decide",
+      "mappings": [
+        {
+          "from": "company",
+          "to": "company"
+        }
+      ],
+      "implied": true
+    },
+    {
+      "source": "detect",
+      "target": "decide",
+      "mappings": [
+        {
+          "from": "detection",
+          "to": "detection"
+        }
+      ],
+      "implied": true
+    },
+    {
+      "source": "investigate",
+      "target": "decide",
+      "mappings": [
+        {
+          "from": "context",
+          "to": "context"
+        }
+      ],
+      "implied": true
+    }
+  ],
+  "updated_at": "2026-09-10T08:41:51.148593+00:00"
+}

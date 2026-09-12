@@ -51,6 +51,20 @@ Only `2026-09-10-random-dev-test-v1` is distributed: 100 companies, 107 trajecto
 Unverified outcomes are not negative labels; the dataset does not support overall accuracy
 without a complete reviewed positive/negative ground truth.
 
+## Saved workflows
+
+Three saved workflows are included in `backend/data/graphs/`: credit-risk monitoring,
+its before-evolve version, and supplier credit-risk monitoring. With default runtime
+storage they appear after startup, with their prompts, connections and memory settings.
+The required `supplier_distress_rubric` skill definition is also included.
+Run outputs, memory contents and chat history are not included.
+If using `EAX_STUDIO_DATA_DIR`, copy these graph JSON files to its `graphs/` directory;
+also copy `backend/data/skills/supplier_distress_rubric/` into its `skills/` directory.
+Keep your existing definitions when an ID already exists.
+
+Custom input datasets and shared reference inputs are described in
+[custom-datasets.md](docs/custom-datasets.md).
+
 ## Publication boundary
 
 This snapshot excludes local credentials/provider configuration, runtime databases, chat sessions,

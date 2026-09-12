@@ -137,6 +137,8 @@ app.include_router(custom_tools.router)
 app.include_router(chat_api.router)
 app.include_router(result_chat.router)
 app.include_router(source_collection.router)
+from backend.features.data import user_datasets, input_composition
+app.include_router(user_datasets.router)
 app.include_router(skills_api.router)
 app.include_router(export_api.router)
 app.include_router(agent_api.router)
@@ -496,7 +498,7 @@ def _validate_source_nodes(graph: dict) -> None:
     for node in sources.find_source_nodes(graph):
         if node.get("name") not in wired:
             continue
-        if (node.get("source") or {}).get("type") == "credit_risk":
+        if (node.get("source") or {}).get("type") in {"credit_risk", "user_dataset"}:
             sources.records_from_source_node(node)
 
 
@@ -684,12 +686,13 @@ async def _batch_payload(graph_id: str, request: Request):
                 config = node["source"]
                 if body.get("collection_id"):
                     records, source = source_collection.records_for(graph, node, body["collection_id"])
-                elif config.get("type") != "credit_risk":
+                elif config.get("type") not in {"credit_risk", "user_dataset"}:
                     raise sources.SourceError("Collect this API source before starting the batch.")
                 else:
                     records = sources.records_from_source_node(node)
                     source = {"type": "canvas", "node": node.get("name"),
                               "dataset": config.get("dataset", "contemporary"),
+                              **({"dataset_id": config["dataset_id"], "config": config} if config.get("type") == "user_dataset" else {}),
                               "split": config.get("split"), "n": config.get("n", 1),
                               "seed": int(config.get("seed") or 42),
                               "step": config.get("step") or "none"}
@@ -718,6 +721,10 @@ async def _batch_payload(graph_id: str, request: Request):
             workers = int(body.get("workers") or 2)
             metric = body.get("metric") or None
             label_key = body.get("label_key") or None
+        # Collected records already contain the reference snapshot taken at collection start.
+        if not source.get('collection_id'):
+            main = source_collection.node_for(graph) if source.get('type') == 'canvas' else None
+            records = input_composition.merge(records, input_composition.snapshot(graph, main))
         # batch records must also cover fields provided by connected canvas
         # source nodes (they are excluded from workflow_inputs by design)
         wired = {e.get("source") for e in (graph.get("edges") or [])}
@@ -745,7 +752,7 @@ async def _batch_payload(graph_id: str, request: Request):
             records, labels = evaluation.split_labels(records, label_key)
         mapped = sources.map_to_workflow_inputs(records, mapping_inputs)
         if source.get('collection_id'):
-            declared = {o['name'] for o in node.get('outputs', [])}
+            declared = {o['name'] for o in input_composition.all_outputs(graph)}
             if any(declared - record.keys() for record in mapped):
                 raise sources.SourceError('Preprocessing removed source outputs. Preserve all source output fields so batch runs can use the collected data.')
     except sources.SourceError as e:
@@ -787,7 +794,7 @@ async def preview_batch(graph_id: str, request: Request):
                 node = source_collection.node_for(graph)
             except sources.SourceError as exc:
                 raise HTTPException(422, str(exc)) from exc
-            if node["source"].get("type") != "credit_risk":
+            if node["source"].get("type") not in {"credit_risk", "user_dataset"}:
                 config = node["source"]
                 return {"requires_collection": True, "source": {"node": node["name"],
                         **{key: config.get(key) for key in ('type', 'query', 'days', 'start_date', 'end_date', 'batch_step')}}}

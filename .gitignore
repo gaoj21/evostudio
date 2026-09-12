@@ -206,3 +206,19 @@ backend/data/memory-backups/
 .ruff_cache/
 # Frozen release distributed with this repository
 !projects/credit_risk/dataset/expansion/releases/2026-09-10-random-dev-test-v1/**
+
+# Saved workflow definitions only; all other runtime state stays private.
+!backend/data/
+backend/data/*
+!backend/data/graphs/
+backend/data/graphs/*
+!backend/data/graphs/credit-risk-monitoring.json
+!backend/data/graphs/credit-risk-monitoring-before-evolve.json
+!backend/data/graphs/supplier-credit-risk-monitor.json
+
+# Required definition for the published supplier workflow.
+!backend/data/skills/
+backend/data/skills/*
+!backend/data/skills/supplier_distress_rubric/
+backend/data/skills/supplier_distress_rubric/*
+!backend/data/skills/supplier_distress_rubric/SKILL.md

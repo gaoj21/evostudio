@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import JsonView from '../../components/JsonView.jsx';
 import { api } from '../../api.js';
 import MemorySettings from '../memory/MemorySettings.jsx';
+import DatasetInput from '../data/DatasetInput.jsx';
 
 const PARSE_MODES = ['str', 'json', 'title', 'xml'];
 const PARAM_TYPES = ['str', 'int', 'float', 'bool', 'list', 'dict'];
@@ -86,8 +87,10 @@ function SourceInspector({ node, onUpdate, onRename }) {
         <label>Name</label>
         <input value={d.editName ?? node.id} onChange={(e) => onUpdate(node.id, { editName: e.target.value })} onBlur={() => onRename(node.id, d.editName ?? node.id)} />
       </div>
+      {cfg.type === 'user_dataset' && <DatasetInput key={node.id} config={cfg}
+        onChange={(source, outputs) => onUpdate(node.id, { source, ...(outputs ? { outputs } : {}) })} />}
       {!schema && <p className="muted small">Loading source schema…</p>}
-      {(schema?.config || []).map((f) => (
+      {(cfg.type === 'user_dataset' ? [] : schema?.config || []).map((f) => (
         <div className="field" key={f.name}>
           <label htmlFor={`source-config-${f.name}`}>
             {f.label || f.name}

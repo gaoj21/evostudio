@@ -1,0 +1,241 @@
+{
+  "id": "supplier-credit-risk-monitor",
+  "name": "Supplier Credit Risk Monitor",
+  "goal": "Monitor supplier credit risk from news: search recent news for each supplier, extract distress signals, score each supplier against a distress rubric, and produce an alert list plus a monitoring briefing.",
+  "output_dir": "runs",
+  "project_id": null,
+  "task_id": "b516ae6cbeb648cbb8f400c819a12364",
+  "preprocess": null,
+  "memory_resources": [],
+  "memory_positions": {},
+  "flow_version": 2,
+  "tasks": [
+    {
+      "name": "collect_news",
+      "description": "Search recent news for each supplier being monitored.",
+      "inputs": [
+        {
+          "name": "suppliers",
+          "type": "str",
+          "description": "Comma-separated supplier names to monitor",
+          "required": true
+        },
+        {
+          "name": "lookback_days",
+          "type": "str",
+          "description": "How many days back to search, e.g. 14",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "news_digest",
+          "type": "str",
+          "description": "Dated, sourced news items grouped by supplier",
+          "required": true
+        }
+      ],
+      "prompt": "Monitor these suppliers: {suppliers}\nLook back {lookback_days} days.\n\nFor each supplier run several ddgs_search queries, for example:\n- \"<supplier> credit rating\"\n- \"<supplier> bankruptcy OR default OR restructuring\"\n- \"<supplier> financial results profit warning\"\n- \"<supplier> strike OR layoffs OR plant closure\"\n\nPrefer financial press, rating-agency statements, exchange filings and official notices.\n\nReturn a digest grouped by supplier. For every item give: date, headline, one-line summary, publisher, URL. Drop promotional, duplicated or off-topic results. If a supplier has nothing material, write \"no material news\".",
+      "system_prompt": "You are a supply-chain credit analyst collecting evidence, not opinions. Only report items you actually retrieved, always with date and URL.",
+      "parse_mode": "str",
+      "tool_names": [
+        "DDGSSearchToolkit"
+      ],
+      "skill_names": [],
+      "use_long_term_memory": false,
+      "save_output": true,
+      "enabled": true,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "name": "extract_signals",
+      "description": "Turn the raw news digest into structured distress signals per supplier.",
+      "inputs": [
+        {
+          "name": "news_digest",
+          "type": "str",
+          "description": "Dated, sourced news items grouped by supplier",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "signals",
+          "type": "str",
+          "description": "Distress signals per supplier, most severe first",
+          "required": true
+        }
+      ],
+      "prompt": "From the news digest below, extract only items that could signal supplier distress — financial, operational, legal, governance or supply-continuity.\n\nDigest:\n{news_digest}\n\nFor each signal output one line:\nsupplier | signal_type | date | severity (critical/high/medium/low) | one-sentence evidence | source URL\n\nGroup by supplier, most severe first. Discard anything that is not about the supplier itself. If a supplier has no signals, list it once with \"no signals\".",
+      "system_prompt": "You extract verifiable signals from evidence. Never invent an item, date or URL that is not in the digest.",
+      "parse_mode": "str",
+      "tool_names": [],
+      "skill_names": [],
+      "use_long_term_memory": false,
+      "save_output": true,
+      "enabled": true,
+      "x": 260,
+      "y": 0
+    },
+    {
+      "name": "score_supplier_risk",
+      "description": "Grade each supplier's credit risk against the distress rubric.",
+      "inputs": [
+        {
+          "name": "signals",
+          "type": "str",
+          "description": "Distress signals per supplier",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "risk_scores",
+          "type": "str",
+          "description": "Per-supplier tier, score, drivers and confidence",
+          "required": true
+        }
+      ],
+      "prompt": "Score each supplier's credit risk using the rubric in your system prompt.\n\nSignals:\n{signals}\n\nFor each supplier output:\nsupplier | tier (critical/high/medium/low) | score 0-100 | key drivers | evidence cited with URLs | confidence (high/medium/low) | what would change the tier\n\nBe explicit when evidence is thin or stale, and never let a single unverified article push a supplier to critical.",
+      "system_prompt": "You are a credit-risk officer applying a fixed rubric consistently across suppliers.",
+      "parse_mode": "str",
+      "tool_names": [],
+      "skill_names": [
+        "supplier_distress_rubric"
+      ],
+      "use_long_term_memory": false,
+      "save_output": true,
+      "enabled": true,
+      "x": 520,
+      "y": 0
+    },
+    {
+      "name": "flag_alerts",
+      "description": "Produce the actionable alert list for the risk team.",
+      "inputs": [
+        {
+          "name": "risk_scores",
+          "type": "str",
+          "description": "Per-supplier risk scores",
+          "required": true
+        },
+        {
+          "name": "signals",
+          "type": "str",
+          "description": "Distress signals per supplier",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "alerts",
+          "type": "str",
+          "description": "Suppliers needing attention with trigger and recommended action",
+          "required": true
+        }
+      ],
+      "prompt": "Produce the alert list for the risk team.\n\nRisk scores:\n{risk_scores}\n\nSignals:\n{signals}\n\nOutput one block per supplier that needs attention where:\n(1) the supplier is tiered critical or high, or\n(2) any single critical-severity signal is present, whatever the tier.\n\nEach block: supplier, trigger, why it matters for supply continuity, evidence URL, recommended immediate action, and an owner-type (procurement / finance / legal). Order by severity. If nothing qualifies, output exactly \"No alerts\".",
+      "system_prompt": "You are the credit-risk analyst deciding what interrupts the team's week. Be precise and do not cry wolf.",
+      "parse_mode": "str",
+      "tool_names": [],
+      "skill_names": [
+        "supplier_distress_rubric"
+      ],
+      "use_long_term_memory": false,
+      "save_output": true,
+      "enabled": true,
+      "x": 780,
+      "y": 150
+    },
+    {
+      "name": "draft_report",
+      "description": "Write the periodic supplier monitoring briefing.",
+      "inputs": [
+        {
+          "name": "risk_scores",
+          "type": "str",
+          "description": "Per-supplier risk scores",
+          "required": true
+        },
+        {
+          "name": "news_digest",
+          "type": "str",
+          "description": "Dated, sourced news items grouped by supplier",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "report",
+          "type": "str",
+          "description": "Supplier credit-risk monitoring briefing",
+          "required": true
+        }
+      ],
+      "prompt": "Write the supplier credit-risk monitoring briefing.\n\nRisk scores:\n{risk_scores}\n\nNews digest:\n{news_digest}\n\nStructure:\n1. Run summary — suppliers monitored and count per tier.\n2. Tier changes and what caused them.\n3. Supplier-by-supplier assessment with evidence and URLs.\n4. Watch list and leading indicators to re-check next period.\n5. Data gaps and confidence limits.\n\nEvery claim must trace to a cited item in the digest; do not speculate beyond the evidence.",
+      "system_prompt": "You write factual analyst briefings for a procurement and finance audience. Plain language, no filler.",
+      "parse_mode": "str",
+      "tool_names": [],
+      "skill_names": [],
+      "use_long_term_memory": false,
+      "save_output": true,
+      "enabled": true,
+      "x": 780,
+      "y": 0
+    }
+  ],
+  "edges": [
+    {
+      "source": "collect_news",
+      "target": "extract_signals",
+      "mappings": [
+        {
+          "from": "news_digest",
+          "to": "news_digest"
+        }
+      ]
+    },
+    {
+      "source": "extract_signals",
+      "target": "score_supplier_risk",
+      "mappings": [
+        {
+          "from": "signals",
+          "to": "signals"
+        }
+      ]
+    },
+    {
+      "source": "score_supplier_risk",
+      "target": "flag_alerts",
+      "mappings": [
+        {
+          "from": "risk_scores",
+          "to": "risk_scores"
+        }
+      ]
+    },
+    {
+      "source": "score_supplier_risk",
+      "target": "draft_report",
+      "mappings": [
+        {
+          "from": "risk_scores",
+          "to": "risk_scores"
+        }
+      ]
+    },
+    {
+      "source": "collect_news",
+      "target": "draft_report",
+      "mappings": [
+        {
+          "from": "news_digest",
+          "to": "news_digest"
+        }
+      ]
+    }
+  ],
+  "updated_at": "2026-09-10T03:32:47.417551+00:00"
+}

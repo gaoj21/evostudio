@@ -64,7 +64,9 @@ def _source_of(tasks, edges) -> dict | None:
     present. How many records it yields is what it was configured to yield.
     """
     wired = {e.get("source") for e in edges or []}
-    for task in tasks:
+    from backend.features.data.input_composition import is_reference
+    ordered = sorted(tasks, key=is_reference)
+    for task in ordered:
         if not graph_store.is_source_task(task) or task.get("name") not in wired:
             continue
         config = task.get("source") or {}

@@ -408,7 +408,8 @@ async def _walk(plan: dict, graph_doc: dict, inputs: dict, state: dict,
                 else:
                     try:
                         found = sources.records_from_source_node(task)
-                        index = state.get("record_index") or 0
+                        from backend.features.data.input_composition import is_reference
+                        index = 0 if is_reference(task) else (state.get("record_index") or 0)
                         out = {**dict(found[index]), **supplied}
                     except NodeError:
                         raise
@@ -599,7 +600,8 @@ def _run_source_nodes(source_nodes: list[dict], inputs: dict, state: dict,
         name = node.get("name")
         try:
             found = sources.records_from_source_node(node)
-            record = found[record_index or 0]
+            from backend.features.data.input_composition import is_reference
+            record = found[0 if is_reference(node) else (record_index or 0)]
         except Exception as e:
             infos.append({"name": name, "status": "failed",
                           "output": {"error": str(e)}})

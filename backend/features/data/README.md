@@ -5,6 +5,7 @@
 ## 文件职责
 
 - `datasets.py` — Discover versioned credit-risk data and keep evaluation outcomes out of inputs.
+- `user_datasets.py` — 用户数据集的上传、持久化、预览、重命名、删除和字段映射；独立于领域数据集与 LLM。
 - `sources.py` — Batch input sources for EvoAgentX Studio.
 - `source_apis.py` — API-backed canvas source nodes for EvoAgentX Studio.
 - `source_collection.py` — Collect canvas inputs once, persist them, then run the saved records.
@@ -20,3 +21,5 @@
 ## 验证
 
 `.venv/bin/python -m pytest tests/api tests/studio -q`（从仓库根目录）
+
+用户数据集的使用方法及格式见 [custom-datasets.md](../../../docs/custom-datasets.md)。

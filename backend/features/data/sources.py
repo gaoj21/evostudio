@@ -306,6 +306,9 @@ def records_from_source_node(node: dict) -> list[dict]:
     """
     config = node.get("source") or {}
     type_ = config.get("type")
+    if type_ == "user_dataset":
+        from backend.features.data.user_datasets import records
+        return records(config)
     if type_ == "credit_risk":
         n_raw = config.get("n")
         return credit_risk_records(

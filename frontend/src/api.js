@@ -184,6 +184,16 @@ export const api = {
   listSkills: () => req('/api/skills'),
   saveSkill: (spec) => req('/api/skills', { method: 'POST', body: spec }),
   deleteSkill: (name) => req(`/api/skills/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  listDatasets: () => req('/api/datasets'),
+  getDataset: id => req(`/api/datasets/${encodeURIComponent(id)}`),
+  uploadDataset: (file, name = '') => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('name', name);
+    return req('/api/datasets', { method: 'POST', formData });
+  },
+  renameDataset: (id, name) => req(`/api/datasets/${encodeURIComponent(id)}`, { method: 'PATCH', body: { name } }),
+  deleteDataset: id => req(`/api/datasets/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   listSourceTypes: () => req('/api/sources'),
   // Run a source config once and learn the fields of its first record.
   probeSource: (source) => req('/api/sources/probe', { method: 'POST', body: { source } }),

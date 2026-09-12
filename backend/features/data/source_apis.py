@@ -363,6 +363,15 @@ FETCHERS = {
 }
 
 SOURCE_TYPE_SCHEMAS = {
+    "user_dataset": {
+        "label": "My dataset",
+        "description": "Upload and reuse your own CSV, TSV, JSON or JSONL records.",
+        "config": [
+            {"name": "dataset_id", "label": "Dataset", "type": "text", "required": True},
+            {"name": "n", "label": "Record limit (0 = all)", "type": "number", "default": 0},
+        ],
+        "outputs": [],
+    },
     "credit_risk": {
         "label": "Credit Risk Feed",
         "description": "Sample news + 8-K filings from projects/credit_risk/dataset/contemporary.",

@@ -8,6 +8,7 @@ import queue
 from fastapi import APIRouter, Body, HTTPException
 from backend.api import graphs, sources, chat_control, batch, preprocess, evaluation, tools_registry
 from backend.api.studio_config import data_path
+from backend.features.data import input_composition as composition
 
 router = APIRouter()
 _lock = threading.RLock()
@@ -20,13 +21,13 @@ def directory():
     return path
 
 def node_for(graph):
-    wired = {e.get('source') for e in graph.get('edges', [])}
-    nodes = [n for n in sources.find_source_nodes(graph) if n['name'] in wired and n.get('enabled', True)]
-    if len(nodes) != 1:
-        raise sources.SourceError('Batch collection requires exactly one connected input source. Combine multiple sources into one source before collecting.')
-    return nodes[0]
+    return composition.primary(graph)
 
-def fingerprint(node):
+
+def fingerprint(node, graph=None):
+    refs = composition.references(graph, node) if graph else []
+    if refs:
+        node = {"primary": node, "references": refs}
     return hashlib.sha256(json.dumps(node, sort_keys=True).encode()).hexdigest()
 
 def save(job):
@@ -53,7 +54,7 @@ def read(graph_id, collection_id):
 
 def records_for(graph, node, collection_id):
     job = read(graph['id'], collection_id)
-    if job['fingerprint'] != fingerprint(node):
+    if job['fingerprint'] != fingerprint(node, graph):
         raise sources.SourceError('Input source changed. Collect again before running.')
     if job['status'] != 'ready':
         raise sources.SourceError('Input collection is not complete.')
@@ -62,20 +63,20 @@ def records_for(graph, node, collection_id):
 def public(job):
     job = copy.deepcopy(job)
     job['batches'] = [{**entry, 'status': (batch.get_batch(entry['id']) or {}).get('status', entry.get('status', 'pending'))} for entry in job.get('batches', [])]
-    return {k: v for k, v in job.items() if k not in ('records', 'fingerprint', 'config')} | {
+    return {k: v for k, v in job.items() if k not in ('records', 'fingerprint', 'config', 'reference_inputs')} | {
         'sample': job.get('records', [])[:3],
         'source': {key: job['config'].get(key) for key in ('type', 'query', 'days', 'start_date', 'end_date', 'batch_step')}}
 
 def mapped_chunk(graph, node, records, metric, label_key):
     _, inputs = graphs.validate_graph(graph)
-    inputs = [*inputs, *({'name': o['name'], 'required': False} for o in node.get('outputs', [])),
+    inputs = [*inputs, *composition.all_outputs(graph),
               {'name': 'sample_id', 'required': False}, {'name': 'as_of', 'required': False}]
     records = preprocess.apply(graph, records)
     labels = None
     if metric:
         records, labels = evaluation.split_labels(records, label_key)
     mapped = sources.map_to_workflow_inputs(records, inputs)
-    declared = {o['name'] for o in node.get('outputs', [])}
+    declared = {o['name'] for o in composition.all_outputs(graph)}
     if any(declared - r.keys() for r in mapped):
         raise sources.SourceError('Preprocessing removed source outputs; preserve them to avoid refetching.')
     return mapped, labels
@@ -92,6 +93,7 @@ def execute_collection(job, graph, node, control, workers, metric, label_key):
         control.check()
         if not isinstance(record, dict) or declared - record.keys():
             raise sources.SourceError('Source record is missing declared outputs.')
+        record = composition.merge([record], job.get('reference_inputs', {}))[0]
         with _lock:
             job['records'].append(record)
             job['record_count'] = len(job['records'])
@@ -189,7 +191,7 @@ def collect(graph_id: str, body: dict = Body(default={})):
         raise HTTPException(404, 'Task not found')
     try:
         node = copy.deepcopy(node_for(graph))
-        original = fingerprint(node)
+        original = fingerprint(node, graph)
         mode = body.get('mode', 'all')
         if mode not in ('all', 'stream'):
             raise sources.SourceError('Choose collect-all or streaming mode.')
@@ -210,7 +212,7 @@ def collect(graph_id: str, body: dict = Body(default={})):
                 if key in body:
                     node['source'][key] = body[key]
         job = {'id': uuid.uuid4().hex, 'graph_id': graph_id, 'fingerprint': original,
-               'config': node['source'], 'status': 'collecting', 'completed': 0, 'total': None,
+               'config': node['source'], 'reference_inputs': composition.snapshot(graph, node), 'status': 'collecting', 'completed': 0, 'total': None,
                'record_count': 0, 'records': [], 'error': None, 'mode': mode,
                'batch_size': batch_size, 'batches': [], 'submitted_records': 0, 'collection_complete': False}
         with _lock:
