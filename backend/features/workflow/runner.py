@@ -43,12 +43,10 @@ def _make_llm():
 
 
 def _model_for_run(state):
-    from backend.features.execution.provider_batch import options, require_factory
-    batch_options = options(state)
-    if batch_options:
-        require_factory(get_evoagentx_llm)
-        return get_evoagentx_llm(**batch_options)
+    from backend.features.execution.provider_batch import validate
+    validate({}, state.get('llm_batch_size'))
     return _make_llm()
+
 
 
 # Per-store LTM locks: concurrent runs of the same graph (parallel batch
@@ -529,6 +527,9 @@ def _execute_run(run_id: str, graph_doc: dict, inputs: dict) -> None:
                 node = one.nodes[0]
                 framework_nodes.append(node)
                 agents[node.name] = _agent_for_node(agent_manager, node)
+                if state.get('llm_batch_size'):
+                    from backend.features.execution.provider_batch import attach_workflow_model
+                    attach_workflow_model(agents[node.name].llm, state)
             graph = _Nodes(framework_nodes)
             state["_graph"] = graph
             _attach_ltm(agent_manager, graph, graph_doc, memories, state)

@@ -231,13 +231,10 @@ async def run_workflow_node(task, inputs, state, recall):
         activity = state.setdefault('harness_events', {}).setdefault(task['name'], [])
         activity.append(item)
         del activity[:-200]
-    from backend.features.execution.provider_batch import options, require_factory
-    model_options = options(state)
     native = {}
-    if model_options:
-        from llm import get_agent_model
-        require_factory(get_agent_model)
-        native['model'] = get_agent_model(settings.get('provider'), **model_options)
+    if state.get('llm_batch_size'):
+        from backend.features.execution.provider_batch import agent_model
+        native['model'] = agent_model(state)
     try:
         answer = await asyncio.to_thread(run_turn, graph, settings, 'workflow-' + uuid.uuid4().hex, message, emit, event, **native)
     except asyncio.CancelledError:
