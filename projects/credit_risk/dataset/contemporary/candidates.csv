@@ -1,0 +1,106 @@
+type,cik,name,query_name,symbol,ref_date
+positive,1656634,"Gritstone bio, Inc.  (GRTSQ)",Gritstone bio,GRTSQ,2025-01-03
+positive,1835972,"iLearningEngines, Inc.  (AILE, AILEW)",iLearningEngines,AILE,2025-01-03
+positive,1828852,"Mondee Holdings, Inc.  (MOND)",Mondee,MOND,2025-01-15
+positive,1580864,"Vroom, Inc.  (VRMMQ)",Vroom,VRMMQ,2025-01-15
+positive,1537028,"Independence Contract Drilling, Inc.  (ICDIQ)",Independence Contract,ICDIQ,2025-01-15
+positive,1750153,"Canoo Inc.  (GOEV, GOEVW)",Canoo,GOEV,2025-01-21
+positive,890447,Vertex Energy Inc.  (VTNRQ),Vertex Energy,VTNRQ,2025-01-22
+positive,1886799,Bright Green Corp  (BGXX),Bright Green,BGXX,2025-01-28
+positive,1411688,"Container Store Group, Inc.  (TCSGQ)",Container Store,TCSGQ,2025-01-29
+positive,1813914,"CareMax, Inc.  (CMAXQ)",CareMax,CMAXQ,2025-02-03
+positive,1438901,"Auto Parts 4Less Group, Inc.",Auto Parts,,2025-02-05
+positive,1723580,"BurgerFi International, Inc.",BurgerFi,,2025-02-10
+positive,1506928,Avinger Inc  (AVGR),Avinger,AVGR,2025-02-10
+positive,1850838,"Omega Therapeutics, Inc.  (OMGA)",Omega Therapeutics,OMGA,2025-02-14
+positive,1465470,NaturalShrimp Inc  (SHMP),NaturalShrimp,SHMP,2025-02-18
+positive,1731289,Nikola Corp  (NKLA),Nikola,NKLA,2025-02-19
+positive,1498710,"Spirit Airlines, Inc.  (SAVEQ)",Spirit Airlines,SAVEQ,2025-02-21
+positive,1098880,IntelGenx Technologies Corp.,IntelGenx Technologies,,2025-02-28
+positive,1162461,CUTERA INC  (CUTR),CUTERA,CUTR,2025-03-05
+positive,933738,ENGLOBAL CORP  (ENGC),ENGLOBAL,ENGC,2025-03-06
+positive,1101680,DZS INC.  (DZSI),DZS,DZSI,2025-03-14
+positive,1559998,"Gaucho Group Holdings, Inc.  (VINOQ)",Gaucho,VINOQ,2025-03-14
+positive,1779020,"Danimer Scientific, Inc.  (DNMR, DNMRW)",Danimer,DNMR,2025-03-18
+positive,1792581,"Kiromic Biopharma, Inc.  (KRBP)",Kiromic Biopharma,KRBP,2025-03-21
+positive,1804591,23andMe Holding Co.  (ME),23andMe,ME,2025-03-24
+positive,1830210,"Benson Hill, Inc.  (BHIL, BHILW)",Benson Hill,BHIL,2025-03-25
+positive,1876945,"Gold Flora Corp.  (GRAM, GRAMW)",Gold Flora,GRAM,2025-03-27
+positive,1099132,MANHATTAN SCIENTIFICS INC,MANHATTAN SCIENTIFICS,,2025-04-08
+positive,748790,"Global Clean Energy Holdings, Inc.  (GCEH)",Global Clean,GCEH,2025-04-18
+positive,1183765,"Molecular Templates, Inc.",Molecular Templates,,2025-04-24
+positive,105319,"WW INTERNATIONAL, INC.  (WW)",WeightWatchers,WW,2025-05-07
+positive,727207,"Accelerate Diagnostics, Inc  (AXDX)",Accelerate Diagnostics,AXDX,2025-05-08
+positive,1828811,Li-Cycle Holdings Corp.  (LICYF),Li-Cycle,LICYF,2025-05-19
+positive,1537561,"Arch Therapeutics, Inc.",Arch Therapeutics,,2025-05-23
+positive,1906133,iCoreConnect Inc.  (ICCT),iCoreConnect,ICCT,2025-06-03
+positive,1772695,Sunnova Energy International Inc.  (NOVA),Sunnova,NOVA,2025-06-09
+positive,1783875,4Front Ventures Corp.  (FFNTF),4Front Ventures,FFNTF,2025-06-10
+positive,895419,"WOLFSPEED, INC.  (WOLF)",Wolfspeed,WOLF,2025-07-01
+positive,1389002,MARIN SOFTWARE INC  (MRIN),MARIN SOFTWARE,MRIN,2025-07-03
+positive,1842356,"Wag! Group Co.  (PET, PETWW)",Wag!,PET,2025-07-21
+positive,799698,LadRx Corp  (LADX),LadRx,LADX,2025-07-31
+positive,844887,DIAMONDHEAD CASINO CORP  (DHCC),DIAMONDHEAD CASINO,DHCC,2025-08-04
+positive,1455684,"TPI COMPOSITES, INC  (TPIC)",TPI COMPOSITES,TPIC,2025-08-15
+positive,1220754,ModivCare Inc  (MODV),ModivCare,MODV,2025-08-21
+positive,1805024,Amergent Hospitality Group Inc.,Amergent,,2025-09-12
+positive,1210618,"SPI Energy Co., Ltd.  (SPIEF)",SPI Energy,SPIEF,2025-09-17
+positive,1893311,LUXURBAN HOTELS INC.,LUXURBAN HOTELS,,2025-09-18
+positive,1643988,"Loop Media, Inc.  (LPTV)",Loop Media,LPTV,2025-10-20
+positive,768835,FORMER BL STORES INC,FORMER BL,,2025-10-30
+positive,1456772,"OFFICE PROPERTIES INCOME TRUST  (OPI, OPINL)",OFFICE PROPERTIES,OPI,2025-10-31
+positive,1761510,TILT Holdings Inc.  (TLLTF),TILT,TLLTF,2025-11-07
+positive,1819395,"Sonder Holdings Inc.  (SOND, SONDW)",Sonder,SOND,2025-11-14
+positive,1539029,"Clearside Biomedical, Inc.  (CLSD)",Clearside Biomedical,CLSD,2025-11-25
+positive,1721741,"Lazydays Holdings, Inc.  (GORV)",Lazydays,GORV,2025-12-01
+positive,1159167,IROBOT CORP  (IRBT),iRobot,IRBT,2025-12-15
+positive,1758057,"Luminar Technologies, Inc./DE  (LAZR)",Luminar,LAZR,2025-12-15
+positive,846475,ZYNEX INC  (ZYXI),ZYNEX,ZYXI,2025-12-16
+positive,720875,DYNATRONICS CORP  (DYNT),DYNATRONICS,DYNT,2026-01-12
+positive,2011954,Twin Hospitality Group Inc.  (TWNP),Twin Hospitality,TWNP,2026-01-27
+positive,1705012,"Fat Brands, Inc  (FAT, FATBB, FATBP)",Fat Brands,FAT,2026-01-27
+positive,1532286,"Nine Energy Service, Inc.  (NINE)",Nine Energy,NINE,2026-02-02
+positive,1015155,CHARLES & COLVARD LTD,Charles & Colvard,,2026-03-04
+positive,1058623,CUMULUS MEDIA INC  (CMLS),CUMULUS MEDIA,CMLS,2026-03-05
+positive,1776738,Cannabist Co Holdings Inc.  (CBSTF),Cannabist,CBSTF,2026-03-24
+positive,764897,"Broad Street Realty, Inc.  (BRST)",Broad Street Realty,BRST,2026-03-26
+positive,1659323,Iterum Therapeutics plc  (ITRM),Iterum Therapeutics,ITRM,2026-03-27
+positive,1347242,LIPELLA PHARMACEUTICALS INC.  (LIPO),LIPELLA PHARMACEUTICALS,LIPO,2026-03-31
+positive,1865494,"IO Biotech, Inc.  (IOBT)",IO Biotech,IOBT,2026-03-31
+positive,1413754,"MARIZYME, INC.",MARIZYME,,2026-04-17
+positive,1355096,"QVC Group, Inc.  (QVCGA, QVCGB, QVCGP)",QVC,QVCGA,2026-04-17
+positive,1023994,OLENOX INDUSTRIES INC.  (OLOX),OLENOX INDUSTRIES,OLOX,2026-05-04
+positive,1817511,SOCIETY PASS INCORPORATED.  (SOPA),SOCIETY PASS,SOPA,2026-05-14
+positive,1901799,"Bitcoin Depot Inc.  (BTM, BTMWW)",Bitcoin Depot,BTM,2026-05-18
+positive,1519061,Trinseo PLC  (TSEOF),Trinseo,TSEOF,2026-05-26
+positive,720154,"Inotiv, Inc.  (NOTV)",Inotiv,NOTV,2026-06-03
+positive,1446687,"SILVER STAR PROPERTIES REIT, INC",SILVER STAR,,2026-06-08
+positive,1808220,"GoHealth, Inc.  (GOCO)",GoHealth,GOCO,2026-06-08
+positive,827187,Sleep Number Corp  (SNBR),Sleep Number,SNBR,2026-06-12
+positive,1001233,"SANGAMO THERAPEUTICS, INC  (SGMO)",SANGAMO THERAPEUTICS,SGMO,2026-06-23
+positive,842722,"Fuse Science, Inc.",Fuse Science,,2026-07-17
+positive,1415404,EchoStar CORP  (ECHO),EchoStar,ECHO,2026-08-03
+negative,100517,"United Airlines Holdings, Inc.",United Airlines,UAL,2025-08-04
+negative,1158463,JETBLUE AIRWAYS CORP,JetBlue,JBLU,2025-03-06
+negative,1670076,"Frontier Group Holdings, Inc.",Frontier Airlines,ULCC,2025-11-07
+negative,1318605,"Tesla, Inc.",Tesla,TSLA,2025-01-22
+negative,1874178,"Rivian Automotive, Inc. / DE",Rivian,RIVN,2025-02-03
+negative,1811210,"Lucid Group, Inc.",Lucid,LCID,2026-04-17
+negative,794367,"Macy's, Inc.",Macy's,M,2025-02-10
+negative,885639,KOHLS Corp,Kohl's,KSS,2025-09-18
+negative,1616707,Wayfair Inc.,Wayfair,W,2026-06-03
+negative,78003,PFIZER INC,Pfizer,PFE,2025-01-28
+negative,1682852,"Moderna, Inc.",Moderna,MRNA,2026-03-26
+negative,1776985,BioNTech SE,BioNTech,BNTX,2025-04-08
+negative,1469367,Sunrun Inc.,Sunrun,RUN,2025-01-15
+negative,1093691,PLUG POWER INC,Plug Power,PLUG,2025-02-10
+negative,1971213,"Sinclair, Inc.",Sinclair,SBGI,2025-12-15
+negative,1400891,"iHeartMedia, Inc.",iHeartMedia,IHRT,2025-12-01
+negative,30697,Wendy's Co,Wendy's,WEN,2025-01-29
+negative,49754,"Dine Brands Global, Inc.",Dine Brands,DIN,2025-05-07
+negative,1507605,"MARA Holdings, Inc.",MARA Holdings,MARA,2025-02-10
+negative,1585689,Hilton Worldwide Holdings Inc.,Hilton,HLT,2026-05-04
+negative,1559720,"Airbnb, Inc.",Airbnb,ABNB,2025-12-15
+negative,1411579,"AMC ENTERTAINMENT HOLDINGS, INC.",AMC,AMC,2025-01-28
+negative,1326380,GameStop Corp.,GameStop,GME,2026-05-18
+negative,1655210,"BEYOND MEAT, INC.",Beyond Meat,BYND,2025-02-19

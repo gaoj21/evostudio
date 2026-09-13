@@ -222,3 +222,8 @@ backend/data/skills/*
 !backend/data/skills/supplier_distress_rubric/
 backend/data/skills/supplier_distress_rubric/*
 !backend/data/skills/supplier_distress_rubric/SKILL.md
+
+# Candidate lists and review decisions used by dataset builders.
+!projects/credit_risk/dataset/candidates.csv
+!projects/credit_risk/dataset/contemporary/candidates.csv
+!projects/credit_risk/dataset/candidates_review.csv

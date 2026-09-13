@@ -1,0 +1,129 @@
+cik,company_name,event_date,key,raw_news,top_sym,top_share,phrase_ratio,verdict,reason
+945436,"SUNEDISON, INC.",2016-04-27,sunedison,1044,SUNE,0.240,1.000,ACCEPT,R3 single-token 'sunedison' ratio=1.00
+806085,LEHMAN BROTHERS HOLDINGS INC,2008-09-19,lehman brothers,447,,0.000,1.000,ACCEPT,R2 phrase 'lehman brothers' ratio=1.00
+1004980,"PG&E Corp  (PCG, PCG-PA, PCG-PB, PCG-PC, PCG-PD, PCG-PE, PCG-PG, PCG-PH, PCG-PI)",2019-01-14,pg e,369,PCG,0.724,1.000,ACCEPT,R1 symbol PCG share=0.72
+96289,RADIOSHACK CORP,2015-02-11,radioshack,334,RSH,0.473,1.000,ACCEPT,R1 symbol RSH share=0.47
+1401106,MF Global Holdings Ltd.,2011-11-03,mf global,292,IBKR,0.051,0.997,ACCEPT,R2 phrase 'mf global' ratio=1.00
+1310067,SEARS HOLDINGS CORP,2018-10-15,sears,285,SHLD,0.589,1.000,ACCEPT,R1 symbol SHLD share=0.59
+940510,BORDERS GROUP INC,2011-02-17,borders,212,BKS,0.108,1.000,ACCEPT,R3 single-token 'borders' ratio=1.00
+4515,AMERICAN AIRLINES INC,2011-11-29,american airlines,186,SAVE,0.016,0.892,ACCEPT,R2 phrase 'american airlines' ratio=0.89
+1064728,PEABODY ENERGY CORP  (BTU),2016-04-13,peabody energy,186,BTU,0.559,0.930,ACCEPT,R1 symbol BTU share=0.56
+1326428,"LINN ENERGY, LLC",2016-05-11,linn energy,180,LINE,0.483,1.000,ACCEPT,R1 symbol LINE share=0.48
+931336,DEAN FOODS CO,2019-11-12,dean foods,143,DF,0.448,0.993,ACCEPT,R1 symbol DF share=0.45
+726513,TRIBUNE CO,2008-12-11,tribune,142,,0.000,1.000,ACCEPT,R3 single-token 'tribune' ratio=1.00
+1330849,"HERCULES OFFSHORE, INC.",2015-08-17,hercules offshore,133,HERO,0.474,0.902,ACCEPT,R1 symbol HERO share=0.47
+47129,HERTZ CORP,2020-05-26,hertz,129,HTZ,0.729,1.000,ACCEPT,R1 symbol HTZ share=0.73
+1489137,"Molycorp, Inc.",2015-06-30,molycorp,125,MCP,0.600,1.000,ACCEPT,R1 symbol MCP share=0.60
+1282266,"WINDSTREAM HOLDINGS, INC.",2019-02-28,windstream,121,WIN,0.777,1.000,ACCEPT,R1 symbol WIN share=0.78
+40730,GENERAL MOTORS CORP,2009-06-03,general motors,120,,0.000,1.000,ACCEPT,R2 phrase 'general motors' ratio=1.00
+1304366,Community Bancorp,2009-08-28,community bancorp,105,,0.000,0.705,ACCEPT,R2 phrase 'community bancorp' ratio=0.70
+1458891,Noble Corp plc,2020-07-31,noble,100,NBL,0.410,1.000,ACCEPT,R1 symbol NBL share=0.41
+1169055,NOBLE CORP,2020-07-31,noble,100,NBL,0.410,1.000,ACCEPT,R1 symbol NBL share=0.41
+837173,"Walter Energy, Inc.",2015-07-15,walter energy,99,WLT,0.485,1.000,ACCEPT,R1 symbol WLT share=0.48
+1735828,Legacy Reserves Inc.,2019-06-21,legacy reserves,99,LGCY,0.626,1.000,ACCEPT,R1 symbol LGCY share=0.63
+933136,"WASHINGTON MUTUAL, INC  (COOP)",2008-09-30,washington mutual,99,,0.000,1.000,ACCEPT,R2 phrase 'washington mutual' ratio=1.00
+1336545,"AMERICAN APPAREL, INC",2015-10-08,american apparel,98,APP,0.276,0.929,ACCEPT,R2 phrase 'american apparel' ratio=0.93
+1301501,"Achaogen, Inc.",2019-04-15,achaogen,95,AKAO,0.674,1.000,ACCEPT,R1 symbol AKAO share=0.67
+1105055,"DYNEGY HOLDINGS, LLC",2011-11-08,dynegy,94,DYN,0.372,1.000,ACCEPT,R1 symbol DYN share=0.37
+1379895,DYNEGY INC.,2011-11-08,dynegy,94,DYN,0.372,1.000,ACCEPT,R1 symbol DYN share=0.37
+805305,QUIKSILVER INC,2015-09-11,quiksilver,93,ZQK,0.441,1.000,ACCEPT,R1 symbol ZQK share=0.44
+708819,MCDERMOTT INTERNATIONAL INC,2020-01-22,mcdermott,93,CRC,0.054,1.000,ACCEPT,R3 single-token 'mcdermott' ratio=1.00
+1553588,"SFX Entertainment, INC",2016-02-05,sfx entertainment,93,SFXE,0.538,0.989,ACCEPT,R1 symbol SFXE share=0.54
+1037676,ARCH COAL INC  (ARCH),2016-01-11,arch coal,88,BTU,0.193,1.000,ACCEPT,R2 phrase 'arch coal' ratio=1.00
+840889,DORAL FINANCIAL CORP,2015-03-02,doral financial,87,DRL,0.460,0.839,ACCEPT,R1 symbol DRL share=0.46
+863456,WET SEAL INC,2015-01-16,wet seal,83,WTSL,0.590,1.000,ACCEPT,R1 symbol WTSL share=0.59
+1167178,"A123 SYSTEMS, INC.",2012-10-17,a123 systems,81,JCI,0.062,0.975,ACCEPT,R2 phrase 'a123 systems' ratio=0.98
+727346,"GLOBAL HEALTHCARE REIT, INC.  (GBCS)",2019-10-23,global healthcare,77,GWPH,0.039,0.935,ACCEPT,R2 phrase 'global healthcare' ratio=0.94
+1516479,"Insys Therapeutics, Inc.",2019-06-10,insys therapeutics,74,INSY,0.581,1.000,ACCEPT,R1 symbol INSY share=0.58
+73887,Bristow Group Inc,2019-05-13,bristow,74,GOLD,0.081,1.000,ACCEPT,R3 single-token 'bristow' ratio=1.00
+1255474,WHITING PETROLEUM CORP,2020-04-01,whiting petroleum,73,WLL,0.863,1.000,ACCEPT,R1 symbol WLL share=0.86
+1376812,Patriot Coal CORP,2012-07-09,patriot coal,73,BTU,0.082,0.932,ACCEPT,R2 phrase 'patriot coal' ratio=0.93
+1112412,ENDEAVOUR INTERNATIONAL CORP,2014-10-14,endeavour,73,EXK,0.068,1.000,ACCEPT,R3 single-token 'endeavour' ratio=1.00
+1168213,AEROPOSTALE INC,2016-05-06,aeropostale,72,ARO,0.542,1.000,ACCEPT,R1 symbol ARO share=0.54
+895126,"CHESAPEAKE ENERGY CORP  (CHK, CHKEL, CHKEW, CHKEZ)",2020-06-29,chesapeake energy,71,CHK,0.521,0.803,ACCEPT,R1 symbol CHK share=0.52
+1648893,Nuvectra Corp,2019-11-13,nuvectra,70,IBB,0.043,1.000,ACCEPT,R3 single-token 'nuvectra' ratio=1.00
+1514242,Performance Sports Group Ltd.,2016-10-31,performance sports,68,PSG,0.529,0.956,ACCEPT,R1 symbol PSG share=0.53
+1159154,REPUBLIC AIRWAYS HOLDINGS INC,2016-02-26,republic airways,67,RJET,0.642,1.000,ACCEPT,R1 symbol RJET share=0.64
+1393066,AbitibiBowater Inc.,2009-04-22,abitibibowater,67,,0.000,1.000,ACCEPT,R3 single-token 'abitibibowater' ratio=1.00
+1573166,"Jones Energy, Inc.",2019-04-15,jones energy,65,JONE,0.354,0.738,ACCEPT,R1 symbol JONE share=0.35
+1031296,FIRSTENERGY CORP  (FE),2018-04-05,firstenergy,65,FE,0.600,1.000,ACCEPT,R1 symbol FE share=0.60
+1335190,MAGNUM HUNTER RESOURCES CORP,2015-12-15,magnum hunter resources,63,MHR,0.413,1.000,ACCEPT,R1 symbol MHR share=0.41
+904080,STONE ENERGY CORP,2016-12-14,stone energy,60,SGY,0.633,1.000,ACCEPT,R1 symbol SGY share=0.63
+701374,"SIX FLAGS, INC.",2009-06-15,six flags,60,,0.000,1.000,ACCEPT,R2 phrase 'six flags' ratio=1.00
+9779,FAIRCHILD CORP,2009-03-19,fairchild,60,,0.000,1.000,ACCEPT,R3 single-token 'fairchild' ratio=1.00
+1343719,Energy XXI Ltd,2016-04-14,energy xxi,59,EXXI,0.373,1.000,ACCEPT,R1 symbol EXXI share=0.37
+1394954,GT Advanced Technologies Inc.,2014-10-10,gt advanced technologies,58,AEIS,0.034,0.983,ACCEPT,R2 phrase 'gt advanced technologies' ratio=0.98
+1568832,RCS Capital Corp,2016-02-04,rcs capital,56,RCAP,0.375,0.964,ACCEPT,R1 symbol RCAP share=0.38
+31235,EASTMAN KODAK CO  (KODK),2012-01-19,eastman kodak,56,KKR,0.054,0.964,ACCEPT,R2 phrase 'eastman kodak' ratio=0.96
+1594590,PARAGON OFFSHORE PLC,2016-02-16,paragon offshore,56,PGN,0.554,1.000,ACCEPT,R1 symbol PGN share=0.55
+1419428,Vantage Drilling CO,2015-12-03,vantage drilling,56,VTG,0.464,1.000,ACCEPT,R1 symbol VTG share=0.46
+75208,OVERSEAS SHIPHOLDING GROUP INC,2012-11-15,overseas shipholding,56,FRO,0.071,1.000,ACCEPT,R2 phrase 'overseas shipholding' ratio=1.00
+1657853,"HERTZ GLOBAL HOLDINGS, INC  (HTZ, HTZWW)",2020-05-26,hertz global,52,HTZ,0.827,0.981,ACCEPT,R1 symbol HTZ share=0.83
+1293310,KALOBIOS PHARMACEUTICALS INC,2015-12-30,kalobios pharmaceuticals,52,KBIO,0.750,0.962,ACCEPT,R1 symbol KBIO share=0.75
+1111335,VISTEON CORP  (VC),2009-06-04,visteon,52,,0.000,1.000,ACCEPT,R3 single-token 'visteon' ratio=1.00
+1603923,Weatherford International plc  (WFRD),2019-07-02,weatherford,51,WFT,0.686,1.000,ACCEPT,R1 symbol WFT share=0.69
+874501,AMBAC FINANCIAL GROUP INC  (AMBC),2010-11-10,ambac financial,48,MMC,0.021,0.979,ACCEPT,R2 phrase 'ambac financial' ratio=0.98
+1022646,ULTRA PETROLEUM CORP,2016-05-03,ultra petroleum,48,UPL,0.708,1.000,ACCEPT,R1 symbol UPL share=0.71
+1347613,"SYNERGY PHARMACEUTICALS, INC.",2018-12-13,synergy pharmaceuticals,46,SGYP,0.696,1.000,ACCEPT,R1 symbol SGYP share=0.70
+1160165,"ShengdaTech, Inc.",2011-08-23,shengdatech,46,,0.000,1.000,ACCEPT,R3 single-token 'shengdatech' ratio=1.00
+1396279,"hhgregg, Inc.",2017-03-07,hhgregg,43,HGG,0.791,1.000,ACCEPT,R1 symbol HGG share=0.79
+1322705,Spansion Inc.,2009-03-02,spansion,43,,0.000,1.000,ACCEPT,R3 single-token 'spansion' ratio=1.00
+1076700,"KIT digital, Inc.",2013-04-26,kit digital,42,,0.000,0.976,ACCEPT,R2 phrase 'kit digital' ratio=0.98
+1106935,IVANHOE ENERGY INC,2015-02-26,ivanhoe energy,41,IVAN,0.341,1.000,ACCEPT,R1 symbol IVAN share=0.34
+1301206,"ECOTALITY, INC.",2013-09-17,ecotality,40,KNDI,0.025,1.000,ACCEPT,R3 single-token 'ecotality' ratio=1.00
+925178,MOVIE GALLERY INC,2007-10-17,movie gallery,40,,0.000,1.000,ACCEPT,R2 phrase 'movie gallery' ratio=1.00
+919013,WAVE SYSTEMS CORP,2016-02-01,wave systems,39,WAVX,0.462,0.923,ACCEPT,R1 symbol WAVX share=0.46
+1357371,Breitburn Energy Partners LP,2016-05-16,breitburn energy,38,LINE,0.184,0.974,ACCEPT,R2 phrase 'breitburn energy' ratio=0.97
+1171014,COSI INC,2016-09-28,cosi,38,COSI,0.579,1.000,ACCEPT,R1 symbol COSI share=0.58
+1301063,"Alpha Natural Resources, Inc.",2015-08-03,alpha natural resources,38,BTU,0.211,1.000,ACCEPT,R2 phrase 'alpha natural resources' ratio=1.00
+1490930,"Digital Domain Media Group, Inc.",2012-09-12,digital domain media,38,,0.000,1.000,ACCEPT,R2 phrase 'digital domain media' ratio=1.00
+1421182,Verso Corp,2016-01-26,verso,37,VRS,0.541,1.000,ACCEPT,R1 symbol VRS share=0.54
+314132,FLEETWOOD ENTERPRISES INC/DE/,2009-03-10,fleetwood,37,,0.000,1.000,ACCEPT,R3 single-token 'fleetwood' ratio=1.00
+92339,COLONIAL BANCGROUP INC,2009-08-20,colonial bancgroup,37,,0.000,1.000,ACCEPT,R2 phrase 'colonial bancgroup' ratio=1.00
+1282613,AMERICAN EAGLE ENERGY Corp,2015-05-12,american eagle energy,35,AMZG,0.543,0.943,ACCEPT,R1 symbol AMZG share=0.54
+1066134,CORINTHIAN COLLEGES INC,2015-05-06,corinthian colleges,35,COCO,0.257,0.914,ACCEPT,R2 phrase 'corinthian colleges' ratio=0.91
+1532543,"EveryWare Global, Inc.",2015-04-08,everyware global,35,EVRY,0.114,1.000,ACCEPT,R2 phrase 'everyware global' ratio=1.00
+1441849,CLOUD PEAK ENERGY INC.,2019-05-10,cloud peak energy,34,CLD,0.706,1.000,ACCEPT,R1 symbol CLD share=0.71
+6885,STAGE STORES INC,2020-05-12,stage stores,34,SSI,0.794,1.000,ACCEPT,R1 symbol SSI share=0.79
+1091862,Chemtura CORP,2009-03-23,chemtura,34,,0.000,1.000,ACCEPT,R3 single-token 'chemtura' ratio=1.00
+1609253,"California Resources Corp  (CRC, CRCQW)",2020-07-16,california resources,33,CRC,0.788,0.909,ACCEPT,R1 symbol CRC share=0.79
+1311486,Global Geophysical Services Inc,2014-03-27,global geophysical services,33,JRJC,0.030,1.000,ACCEPT,R2 phrase 'global geophysical services' ratio=1.00
+38984,FREMONT GENERAL CORP,2008-06-18,fremont general,33,,0.000,0.939,ACCEPT,R2 phrase 'fremont general' ratio=0.94
+947397,EVERGREEN SOLAR INC,2011-08-15,evergreen solar,32,JKS,0.062,0.938,ACCEPT,R2 phrase 'evergreen solar' ratio=0.94
+1555177,Emerge Energy Services LP,2019-07-17,emerge energy services,32,EMES,0.344,1.000,ACCEPT,R1 symbol EMES share=0.34
+1283843,"Emerald Oil, Inc.",2016-03-23,emerald oil,32,EOX,0.312,1.000,ACCEPT,R1 symbol EOX share=0.31
+1030749,GULFMARK OFFSHORE INC,2017-05-18,gulfmark offshore,32,GLF,0.625,1.000,ACCEPT,R1 symbol GLF share=0.62
+1351197,ARTES MEDICAL INC,2008-12-02,artes medical,32,,0.000,1.000,ACCEPT,R2 phrase 'artes medical' ratio=1.00
+1372326,Superior Offshore International Inc.,2008-04-25,superior offshore,32,,0.000,0.688,ACCEPT,R2 phrase 'superior offshore' ratio=0.69
+943861,GOODRICH PETROLEUM CORP,2016-04-15,goodrich petroleum,31,GDP,0.645,1.000,ACCEPT,R1 symbol GDP share=0.65
+1013871,"NRG ENERGY, INC.  (NRG)",2017-06-14,nrg energy,30,NRG,0.500,0.900,ACCEPT,R1 symbol NRG share=0.50
+351817,SWIFT ENERGY CO,2016-01-04,swift energy,30,SFY,0.567,1.000,ACCEPT,R1 symbol SFY share=0.57
+1385544,Horsehead Holding Corp,2016-02-02,horsehead,30,ZINC,0.700,1.000,ACCEPT,R1 symbol ZINC share=0.70
+1207070,FRANKLIN BANK CORP,2008-11-10,franklin bank,30,,0.000,0.967,ACCEPT,R2 phrase 'franklin bank' ratio=0.97
+50957,FURNITURE BRANDS INTERNATIONAL INC,2013-09-10,furniture brands,30,,0.000,1.000,ACCEPT,R2 phrase 'furniture brands' ratio=1.00
+813781,EXIDE TECHNOLOGIES,2013-06-10,exide technologies,30,,0.000,0.967,ACCEPT,R2 phrase 'exide technologies' ratio=0.97
+1234383,BANK HOLDINGS,2010-06-24,bank,9706,DB,0.002,1.000,REJECT,"no symbol consensus, no phrase dominance"
+750199,ENERGY PARTNERS LTD,2009-05-05,energy,6790,,0.000,1.000,REJECT,"no symbol consensus, no phrase dominance"
+49534,LIFE PARTNERS HOLDINGS INC,2015-01-26,life,2574,LNC,0.007,1.000,REJECT,"no symbol consensus, no phrase dominance"
+1259550,LOCAL Corp,2015-06-24,local,1299,LOCM,0.015,1.000,REJECT,"no symbol consensus, no phrase dominance"
+1116112,US FUEL CORP,2014-12-30,fuel,1198,PLUG,0.018,1.000,REJECT,"no symbol consensus, no phrase dominance"
+798949,"UNIT CORP  (UNTC, UNTCW)",2020-05-26,unit,451,UNT,0.020,1.000,REJECT,"no symbol consensus, no phrase dominance"
+1562594,"Liquid Holdings Group, Inc.",2016-02-02,liquid,321,LIQD,0.028,1.000,REJECT,"no symbol consensus, no phrase dominance"
+814068,CHAMPION ENTERPRISES INC,2009-11-20,champion,248,CLC,0.004,1.000,REJECT,"no symbol consensus, no phrase dominance"
+74273,OLD STONE CORP,2012-06-06,stone,214,SGY,0.145,1.000,REJECT,"no symbol consensus, no phrase dominance"
+1034258,"NOBLE INTERNATIONAL, LTD.",2009-04-16,noble,184,,0.000,1.000,REJECT,"no symbol consensus, no phrase dominance"
+1124394,HydroGen CORP,2008-10-23,hydrogen,166,,0.000,1.000,REJECT,"no symbol consensus, no phrase dominance"
+1145061,"Global Energy Holdings Group, Inc.",2009-11-25,global energy,152,A,0.007,0.329,REJECT,"no symbol consensus, no phrase dominance"
+1085734,BLOCKBUSTER INC,2010-09-24,blockbuster,150,NCR,0.020,1.000,REJECT,"no symbol consensus, no phrase dominance"
+1073429,US CONCRETE INC,2010-04-29,concrete,70,ACN,0.014,1.000,REJECT,"no symbol consensus, no phrase dominance"
+1000285,SOLUTION TECHNOLOGY INTERNATIONAL INC,2009-05-14,solution technology,66,,0.000,0.061,REJECT,"no symbol consensus, no phrase dominance"
+1132143,LEGEND INTERNATIONAL HOLDINGS INC,2016-05-09,legend,48,JD,0.062,1.000,REJECT,"no symbol consensus, no phrase dominance"
+1061580,UCBH HOLDINGS INC,2009-11-16,ucbh,43,ACAD,0.023,1.000,REJECT,"no symbol consensus, no phrase dominance"
+1416712,"IRON MINING GROUP, INC.",2011-08-30,iron mining,41,,0.000,0.146,REJECT,"no symbol consensus, no phrase dominance"
+895642,ENER1 INC,2012-01-26,ener1,40,IIN,0.025,1.000,REJECT,"no symbol consensus, no phrase dominance"
+834408,BROOKE CORP,2008-10-29,brooke,39,,0.000,1.000,REJECT,"no symbol consensus, no phrase dominance"
+946842,AMBASSADORS INTERNATIONAL INC,2011-04-07,ambassadors,36,,0.000,1.000,REJECT,"no symbol consensus, no phrase dominance"
+842162,LEAR CORP  (LEA),2009-07-07,lear,36,,0.000,1.000,REJECT,"no symbol consensus, no phrase dominance"
+1068084,PRIVATE MEDIA GROUP INC,2011-08-26,private media,35,GSVC,0.029,0.286,REJECT,"no symbol consensus, no phrase dominance"
+925464,SECURITY BANK CORP,2009-07-27,security bank,34,,0.000,0.412,REJECT,"no symbol consensus, no phrase dominance"
+1528837,Sanchez Energy Corp,2019-08-12,sanchez energy,30,SN,0.167,0.167,REJECT,"no symbol consensus, no phrase dominance"
