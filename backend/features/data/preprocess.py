@@ -65,3 +65,28 @@ def apply(graph: dict, records: list[dict]) -> list[dict]:
             )
         out.append(value)
     return out
+
+
+def apply_dataset(name: str, records: list[dict]) -> list[dict]:
+    """Call a list-to-list tool once, before dividing the processed dataset."""
+    import copy
+    from backend.api import chat_control
+    chat_control.check()
+    if not name:
+        raise PreprocessError('Choose a whole-dataset preprocessing tool before starting.')
+    found = custom_tools.find(name)
+    if found is None:
+        raise PreprocessError(f"Preprocessor '{name}' is not among the custom tools.")
+    param = _single_param(found[1])
+    arguments = {param: copy.deepcopy(records)}
+    if chat_control.current.get():
+        result = chat_control.worker('preprocess', {'name': name, 'arguments': arguments})
+    else:
+        result = custom_tools.run_custom_tool(name, arguments)
+    chat_control.check()
+    if isinstance(result, dict) and 'error' in result and 'result' not in result:
+        raise PreprocessError(f"Dataset preprocessor '{name}' failed: {result['error']}")
+    value = result.get('result') if isinstance(result, dict) else result
+    if not isinstance(value, list) or any(not isinstance(row, dict) for row in value):
+        raise PreprocessError('Whole-dataset preprocessing must return a list of record objects (an empty list is allowed).')
+    return value

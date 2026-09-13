@@ -32,6 +32,9 @@ def main():
             if config['type'] != 'gdelt_news':
                 for record in value:
                     emit(record)
+        elif kind == 'preprocess':
+            from backend.api.custom_tools import run_custom_tool
+            value = run_custom_tool(payload['name'], payload['arguments'])
         elif kind == 'generate':
             from backend.api.chat_api import _workflow_from_goal
             value = _workflow_from_goal(payload['goal'], on_stage=lambda text: (directory / 'stage.txt').write_text(text))

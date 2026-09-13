@@ -88,6 +88,8 @@ def execute_collection(job, graph, node, control, workers, metric, label_key):
     pending = queue.Queue()
     errors = []
     streaming = job['mode'] == 'stream'
+    prepared = job['mode'] == 'prepare'
+    run_graph = graph
     declared = {o['name'] for o in node.get('outputs', [])}
     def receive(record):
         control.check()
@@ -102,12 +104,12 @@ def execute_collection(job, graph, node, control, workers, metric, label_key):
             pending.put(record)
     def run_chunk(records):
         control.check()
-        mapped, labels = mapped_chunk(graph, node, records, metric, label_key)
+        mapped, labels = mapped_chunk(run_graph, node, records, metric, label_key)
         source = {'type': 'canvas', 'node': node['name'], 'collection_id': job['id'],
-                  'mode': 'stream', 'chunk': len(job['batches']) + 1}
+                  'mode': job['mode'], 'chunk': len(job['batches']) + 1}
         with _lock:
             control.check()
-            id = batch.start_batch(graph, mapped, source, workers=workers, metric=metric, labels=labels)
+            id = batch.start_batch(run_graph, mapped, source, workers=workers, metric=metric, labels=labels)
             job['batches'].append({'id': id, 'total': len(mapped)})
             job['submitted_records'] += len(records)
             save(job)
@@ -162,6 +164,22 @@ def execute_collection(job, graph, node, control, workers, metric, label_key):
             raise sources.SourceError('No records found. Adjust the query or date range.')
         with _lock:
             job['collection_complete'] = True
+        if prepared:
+            control.check()
+            with _lock:
+                job['phase'] = 'preprocessing'
+                save(job)
+            cleaned = preprocess.apply_dataset(job.get('preprocess_tool'), job['records'])
+            run_graph = {**graph, 'preprocess': None}
+            # Validate the complete transformed set before any expensive batch starts.
+            mapped_chunk(run_graph, node, cleaned, metric, label_key)
+            with _lock:
+                job['records'] = cleaned
+                job['processed_count'] = len(cleaned)
+                job['phase'] = 'running'
+                save(job)
+            for offset in range(0, len(cleaned), job['batch_size']):
+                run_chunk(cleaned[offset:offset + job['batch_size']])
     except chat_control.Cancelled:
         pass
     except Exception as exc:
@@ -175,9 +193,9 @@ def execute_collection(job, graph, node, control, workers, metric, label_key):
             if errors:
                 job.update(status='failed', error=errors[0])
             elif control.event.is_set():
-                job.update(status='cancelled', error='Stopped. Completed results are retained.' if streaming else 'Collection stopped. No workflow was started.')
+                job.update(status='cancelled', error='Stopped. Completed results are retained.' if streaming or prepared else 'Collection stopped. No workflow was started.')
             else:
-                job['status'] = 'completed' if streaming else 'ready'
+                job['status'] = 'completed' if streaming or prepared else 'ready'
             save(job)
             _controls.pop(job['id'], None)
             _jobs.pop(job['id'], None)
@@ -192,9 +210,16 @@ def collect(graph_id: str, body: dict = Body(default={})):
     try:
         node = copy.deepcopy(node_for(graph))
         original = fingerprint(node, graph)
+        from backend.features.execution import provider_batch
+        try:
+            size = provider_batch.validate(graph, body.get('llm_batch_size'))
+        except ValueError as exc:
+            raise sources.SourceError(str(exc)) from exc
+        if size is not None:
+            graph = {**graph, '_llm_batch_size': size}
         mode = body.get('mode', 'all')
-        if mode not in ('all', 'stream'):
-            raise sources.SourceError('Choose collect-all or streaming mode.')
+        if mode not in ('all', 'stream', 'prepare'):
+            raise sources.SourceError('Choose collect-all, streaming, or preprocess-all then batch mode.')
         try:
             batch_size = int(body.get('batch_size', 10))
             workers = int(body.get('workers', 2))
@@ -203,15 +228,22 @@ def collect(graph_id: str, body: dict = Body(default={})):
         if not 1 <= batch_size <= 1000 or not 1 <= workers <= batch.MAX_WORKERS:
             raise sources.SourceError('Batch size must be 1–1000; workers must be 1–64.')
         metric, label_key = body.get('metric') or None, body.get('label_key') or None
-        if mode == 'stream':
+        if mode in ('stream', 'prepare'):
             graphs.validate_graph(graph)
             from backend.api.app import _graph_tool_names
             tools_registry.validate_tool_names(_graph_tool_names(graph))
+        whole_tool = body.get('preprocess_tool') or ''
+        if mode == 'prepare':
+            found = preprocess.custom_tools.find(whole_tool) if isinstance(whole_tool, str) else None
+            if not found:
+                raise sources.SourceError('Choose an existing whole-dataset preprocessing tool.')
+            preprocess._single_param(found[1])
         if node['source']['type'] == 'gdelt_news':
             for key in ('start_date', 'end_date', 'batch_step'):
                 if key in body:
                     node['source'][key] = body[key]
         job = {'id': uuid.uuid4().hex, 'graph_id': graph_id, 'fingerprint': original,
+               'preprocess_tool': whole_tool, 'phase': 'collecting', 'llm_batch_size': size,
                'config': node['source'], 'reference_inputs': composition.snapshot(graph, node), 'status': 'collecting', 'completed': 0, 'total': None,
                'record_count': 0, 'records': [], 'error': None, 'mode': mode,
                'batch_size': batch_size, 'batches': [], 'submitted_records': 0, 'collection_complete': False}
@@ -222,7 +254,7 @@ def collect(graph_id: str, body: dict = Body(default={})):
             _controls[job['id']] = control
         threading.Thread(target=execute_collection, args=(job, copy.deepcopy(graph), node, control, workers, metric, label_key), daemon=True).start()
         return public(job)
-    except (sources.SourceError, graphs.GraphValidationError, tools_registry.ToolResolveError) as exc:
+    except (sources.SourceError, preprocess.PreprocessError, graphs.GraphValidationError, tools_registry.ToolResolveError) as exc:
         raise HTTPException(422, str(exc)) from exc
 
 @router.get('/api/graphs/{graph_id}/source-collections/{collection_id}')

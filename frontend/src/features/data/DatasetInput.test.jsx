@@ -64,3 +64,17 @@ it('switches an obligor dataset to a shared list output and preserves column map
   fireEvent.change(screen.getByLabelText('Input role'), {target:{value:'records'}});
   expect(change).toHaveBeenLastCalledWith(expect.objectContaining({input_mode:'records'}), [expect.objectContaining({name:'name'})]);
 });
+
+it('keeps advanced controls and dataset management collapsed until requested', async () => {
+  render(<Harness />);
+  await screen.findByText('Customers · 2 records');
+  fireEvent.change(screen.getByLabelText('My datasets'), {target:{value:'abc'}});
+  await screen.findByText('2 records ready');
+  expect(screen.getByLabelText('Input role')).toBeVisible();
+  expect(screen.getByLabelText('Record limit (0 = all)')).not.toBeVisible();
+  expect(screen.getByLabelText('Dataset name')).not.toBeVisible();
+  fireEvent.click(screen.getByText('Advanced settings'));
+  expect(screen.getByLabelText('Record limit (0 = all)')).toBeVisible();
+  fireEvent.click(screen.getByText('Manage dataset'));
+  expect(screen.getByLabelText('Dataset name')).toBeVisible();
+});

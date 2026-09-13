@@ -65,3 +65,38 @@ JSON 示例：
 单次运行的记录选择针对新闻，参考名单总是完整传入。批量运行、先采集后运行及边采集边运行均支持此模式。
 采集开始时固定参考名单快照；后续各批（含末尾不足一批的数据）使用同一版本。修改参考 Input 的配置后需要重新采集。
 记录字段与参考输出重名时直接报错，避免覆盖。名单不做自动匹配或截断；匹配逻辑由连接到的节点/工具决定。
+
+## 全量预处理后再分批
+
+Run → Batch → Canvas source node config → Execution mode：
+
+- **Run each batch as data arrives**：够一批就执行，沿用现有逐条预处理。
+- **Preprocess ALL data, then run batches**：读取完全部数据与参考名单后，调用一次全量预处理工具，再按 Records per batch 顺序执行处理后的记录。
+- **Collect everything, then run**：只先保存采集数据，之后手动启动普通 Batch Run。
+
+全量预处理工具在 Custom 中创建，在 **Whole-dataset preprocessor** 中选择。函数接受一个记录列表，返回记录列表，可以过滤、去重、重排或派生字段。每条记录包含已连接的 `obligor_list` 等共享参考数据。
+该模式使用选定的全量工具替代本次运行的逐条预处理，避免预处理重复执行；不会修改 workflow 保存的默认预处理配置。
+
+例如保留第一次出现的新闻（实际匹配字段按自己的数据定义调整）：
+
+```python
+def prepare_all(records: list) -> list:
+    """Deduplicate the complete input before running batches."""
+    seen = set()
+    result = []
+    for record in records:
+        key = record.get('news')
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(record)
+    return result
+```
+
+工具必须保留下游需要的字段和共享名单。系统在任何批次启动之前校验完整处理结果；失败即停止。返回空列表表示全部过滤掉，正常完成但不执行 Agent。
+界面分别显示采集条数、处理后条数和各批次结果。Stop 同时停止采集/预处理或当前批次；已经完成的结果保留。
+
+## 精简界面入口
+
+Input 默认只显示 Choose data 和 How to use it。Preview data、Advanced settings（记录上限、输出名、字段映射）和 Manage dataset（改名、删除）按需展开。
+Batch Run 默认使用画布输入；数据源切换、Run details、Evaluation 和 Parallel runs 默认折叠。底部只显示当前步骤需要的主按钮：采集、普通运行或全量预处理后运行。

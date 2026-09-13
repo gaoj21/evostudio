@@ -52,7 +52,11 @@ def start_batch(graph: dict, records: list[dict], source: dict, gray_zone=None,
     the ordinary batch so node progress, review routing and artifacts behave
     exactly as they do in a plain run.
     """
+    from backend.features.execution import provider_batch
+    size = provider_batch.validate(graph, graph.get('_llm_batch_size'))
     batch_id = uuid.uuid4().hex[:12]
+    if size is not None:
+        workers = min(size, MAX_WORKERS)
     workers = max(1, min(int(workers or 2), MAX_WORKERS))
     state = {
         "batch_id": batch_id,
@@ -63,6 +67,7 @@ def start_batch(graph: dict, records: list[dict], source: dict, gray_zone=None,
         "summary": None,
         "gray_zone": list(gray_zone) if gray_zone else None,
         "workers": workers,
+        "llm_batch_size": size,
         "total": len(records),
         "items": [
             {"index": i, "status": "pending", "run_id": None,
@@ -137,7 +142,8 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int) -> Non
             runner.start_run(graph, record, background=False,
                              gray_zone=state.get("gray_zone"),
                              run_id=item["run_id"], batch_id=batch_id,
-                             session_started_at=state.get("created_at"))
+                             session_started_at=state.get("created_at"),
+                             **({"llm_batch_size": state["llm_batch_size"]} if state.get("llm_batch_size") else {}))
             run = runner.get_run(item["run_id"]) or {}
             with _lock:
                 item["status"] = run.get("status", "failed")

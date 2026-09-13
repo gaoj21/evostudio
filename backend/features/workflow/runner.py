@@ -42,6 +42,15 @@ def _make_llm():
     return get_evoagentx_llm()  # default provider from llm/providers.json
 
 
+def _model_for_run(state):
+    from backend.features.execution.provider_batch import options, require_factory
+    batch_options = options(state)
+    if batch_options:
+        require_factory(get_evoagentx_llm)
+        return get_evoagentx_llm(**batch_options)
+    return _make_llm()
+
+
 # Per-store LTM locks: concurrent runs of the same graph (parallel batch
 # items, watcher fires) share a store dir — FAISS/SQLite writes must be
 # serialized to avoid corruption.
@@ -62,7 +71,8 @@ def start_run(graph: dict, inputs: dict, background: bool = True, gray_zone=None
               run_id: str | None = None, start_at: list[str] | None = None,
               session: str | None = None, record_index: int | None = None,
               plan_id: str | None = None, graph_revision: str | None = None,
-              batch_id: str | None = None, session_started_at: str | None = None) -> str:
+              batch_id: str | None = None, session_started_at: str | None = None,
+              llm_batch_size: int | None = None) -> str:
     """Start a run for a canvas graph; returns the run_id.
 
     With background=True (default) the run executes in a daemon thread;
@@ -103,6 +113,7 @@ def start_run(graph: dict, inputs: dict, background: bool = True, gray_zone=None
         "plan_id": plan_id,
         "graph_revision": graph_revision,
         "batch_id": batch_id,
+        "llm_batch_size": llm_batch_size,
         # When the thing the user started began: a batch's records all share
         # their batch's start, a single run its own. Names the run's folder.
         "session_started_at": session_started_at,
@@ -504,7 +515,7 @@ def _execute_run(run_id: str, graph_doc: dict, inputs: dict) -> None:
         agents: dict = {}
         framework_nodes = []
         if llm_tasks:
-            llm = _make_llm()
+            llm = _model_for_run(state)
             agent_manager = AgentManager()
             tools = tools_registry.resolve_tools(
                 sorted({n for t in llm_tasks for n in (t.get("tool_names") or [])}),

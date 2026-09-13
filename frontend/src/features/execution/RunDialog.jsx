@@ -448,9 +448,10 @@ function BatchPreview({ preview, loading, error, idle }) {
   return (
     <div className={`batch-preview${preview.total >= BIG_BATCH ? ' batch-preview-big' : ''}`}>
       <strong>{previewSummary(preview)}</strong>
+      {loading && <div role="status">Updating preview… Wait for the latest count before running.</div>}
+      <details className="input-disclosure"><summary>Run details</summary>
       {preview.nodes?.length > 0 && <div>Participating nodes: {preview.nodes.map((node) => node.name).join(', ')}</div>}
       {!!preview.skipped?.length && <div>Excluded nodes: {preview.skipped.join(', ')}</div>}
-      {loading && <div role="status">Updating preview… Wait for the latest count before running.</div>}
       {preview.node_count > 0 && (
         <div className="muted small">
           {`${preview.total} records × ${preview.node_count} nodes = up to `}
@@ -468,6 +469,7 @@ function BatchPreview({ preview, loading, error, idle }) {
       {preview.fields?.length > 0 && (
         <div className="muted small">Each run gets: {preview.fields.join(', ')}</div>
       )}
+      </details>
     </div>
   );
 }
@@ -489,6 +491,10 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
   const [error, setError] = useState(null);
   const [starting, setStarting] = useState(false);
   const [workers, setWorkers] = useState(2);
+  const [apiBatch, setApiBatch] = useState(false);
+  const [apiBatchSize, setApiBatchSize] = useState(32);
+  const executionParams = apiBatch ? {llm_batch_size: Number(apiBatchSize)} : {workers};
+  const invalidApiBatch = apiBatch && (!Number.isInteger(Number(apiBatchSize)) || Number(apiBatchSize) < 1 || Number(apiBatchSize) > 1024);
   // An evaluation is this same batch with a metric attached; leaving the metric
   // empty runs it as an ordinary batch.
   const [metric, setMetric] = useState('');
@@ -505,6 +511,10 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
   const [collecting, setCollecting] = useState(false);
   const [collectionOptions, setCollectionOptions] = useState({});
   const [collectionMode, setCollectionMode] = useState('all');
+  const [preprocessors, setPreprocessors] = useState([]);
+  useEffect(() => {
+    api.listCustomTools().then(r => setPreprocessors((r.tools || []).filter(t => (t.params || []).length === 1))).catch(() => setPreprocessors([]));
+  }, []);
   const [chunkSize, setChunkSize] = useState(10);
   const [collectionGraph, setCollectionGraph] = useState(graphId);
   useEffect(() => {
@@ -542,7 +552,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
       const saved = await beforeRunRef.current?.();
       const id = saved?.id || graphId;
       setCollectionGraph(id);
-      const value = await api.collectSource(id, { ...collectionOptions, mode: collectionMode, batch_size: Number(chunkSize), workers, ...(metric ? { metric, label_key: labelKey } : {}) });
+      const value = await api.collectSource(id, { ...collectionOptions, mode: collectionMode, batch_size: Number(chunkSize), ...executionParams, ...(metric ? { metric, label_key: labelKey } : {}) });
       setCollection(value);
       try { localStorage.setItem(`source-collection:${id}`, value.id); } catch { /* Storage can be unavailable. */ }
       if (value.status !== 'collecting') {
@@ -568,9 +578,10 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
   // Ask the server what this configuration would actually run. It resolves the
   // records the same way the batch does, so the count is the real one.
   useEffect(() => {
-    if (source === 'upload' && !file) {
+    if ((source === 'canvas' && collectionMode === 'prepare') || (source === 'upload' && !file)) {
       setPreview(null);
       setPreviewError(null);
+      setPreviewing(false);
       return undefined;
     }
     let cancelled = false;
@@ -585,16 +596,16 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
         // that is missing is found here, not eighteen runs later.
         const scoring = metric ? { metric, label_key: labelKey } : {};
         const res = source === 'upload'
-          ? await api.previewBatchUpload(activeGraphId, file, { workers, ...scoring })
+          ? await api.previewBatchUpload(activeGraphId, file, { ...executionParams, ...scoring })
           : source === 'canvas'
-            ? await api.previewBatchCanvas(activeGraphId, { workers, ...scoring, ...(collectionId ? { collection_id: collectionId } : {}) })
+            ? await api.previewBatchCanvas(activeGraphId, { ...executionParams, ...scoring, ...(collectionId ? { collection_id: collectionId } : {}) })
             : await api.previewBatchSource(activeGraphId, {
               ...(dataset !== 'contemporary' ? { dataset } : {}),
               split: split || undefined,
               n: fullSplit ? 0 : (Number(n) || 5),
               seed: Number(seed) || 42,
               step,
-              workers,
+              ...executionParams,
               ...scoring,
             });
         if (cancelled) return;
@@ -610,7 +621,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
       }
     }, 350);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [graphId, source, file, split, n, fullSplit, seed, step, metric, labelKey, workers, collectionId, dataset]);
+  }, [graphId, source, file, split, n, fullSplit, seed, step, metric, labelKey, workers, collectionId, dataset, collectionMode, apiBatch, apiBatchSize]);
 
   const start = async (e) => {
     e.preventDefault();
@@ -624,10 +635,10 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
       const scoring = metric ? { metric, label_key: labelKey } : {};
       const res =
         source === 'upload'
-          ? await api.runBatchUpload(activeGraphId, file, { workers, ...scoring })
+          ? await api.runBatchUpload(activeGraphId, file, { ...executionParams, ...scoring })
           : source === 'canvas'
-            ? await api.runBatchCanvas(activeGraphId, { workers, ...scoring, ...(collectionId ? { collection_id: collectionId } : {}) })
-            : await api.runBatchSource(activeGraphId, { ...(dataset !== 'contemporary' ? { dataset } : {}), split: split || undefined, n: fullSplit ? 0 : (Number(n) || 5), seed: Number(seed) || 42, step, workers, ...scoring });
+            ? await api.runBatchCanvas(activeGraphId, { ...executionParams, ...scoring, ...(collectionId ? { collection_id: collectionId } : {}) })
+            : await api.runBatchSource(activeGraphId, { ...(dataset !== 'contemporary' ? { dataset } : {}), split: split || undefined, n: fullSplit ? 0 : (Number(n) || 5), seed: Number(seed) || 42, step, ...executionParams, ...scoring });
       // Hand the batch to the canvas and close: progress belongs on the graph,
       // not in a window covering it.
       onBatchStart?.(res.batch_id);
@@ -644,9 +655,16 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
   const selfLabelled = (preview?.fields || []).includes('sample_json');
   const runLabel = preview?.total ? `Run batch (${preview.total})` : 'Run batch';
   // Nothing starts on a count that has not arrived, failed, or is zero.
-  const canStart = !!preview?.total && !previewing && !previewError && !starting && !collecting && !(source === 'canvas' && collectionSource && !collectionId);
+  const canStart = !invalidApiBatch && !(source === 'canvas' && collectionMode !== 'all') && !!preview?.total && !previewing && !previewError && !starting && !collecting && !(source === 'canvas' && collectionSource && !collectionId);
+  const needsCollection = source === 'canvas' && (collectionMode !== 'all' || (!!preview?.requires_collection && !collectionId));
+  const collectionInvalid = invalidApiBatch || collecting || starting || (collectionMode === 'prepare' && !collectionOptions.preprocess_tool)
+    || (collectionMode !== 'all' && (!Number.isInteger(Number(chunkSize)) || Number(chunkSize) < 1 || Number(chunkSize) > 1000));
+  const collectionLabel = collecting ? 'In progress…' : collectionMode === 'prepare'
+    ? 'Preprocess all and run batches' : collectionMode === 'stream' ? 'Start collecting and running' : 'Collect data';
   return (
     <form onClick={(e) => e.stopPropagation()} onSubmit={start}>
+      <details className="input-disclosure" open={!hasCanvasSource}>
+        <summary>{source === 'canvas' ? 'Using canvas inputs · change source' : 'Input source'}</summary>
       <div className="field">
         <label htmlFor="data-source">Data source</label>
         <select id="data-source" value={source} onChange={(e) => setSource(e.target.value)}>
@@ -655,20 +673,29 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
           <option value="credit_risk">credit_risk feed (samples.jsonl)</option>
         </select>
       </div>
+      </details>
       {source === 'canvas' ? (
         <div className="muted small">
-          Uses the connected input source. Choose when collected data starts running.
-          {(preview?.requires_collection || collection) && <div className="field">
+
+          {<div className="field">
             <label>Execution mode<select disabled={collecting || starting} value={collectionMode} onChange={e => { setCollectionMode(e.target.value); setCollection(null); }}>
-              <option value="all">Collect everything, then run</option>
-              <option value="stream">Run each batch as data arrives</option>
+              <option value="all">Use all available data</option>
+              <option value="stream">Run in batches as data arrives</option>
+              <option value="prepare">Clean all data first, then run batches</option>
             </select></label>
-            {collectionMode === 'stream' && <>
+            {collectionMode !== 'all' && <>
               <label>Records per batch<input type="number" min="1" max="1000" disabled={collecting} value={chunkSize} onChange={e => setChunkSize(e.target.value)} /></label>
-              <p>Start when this many records are collected. Collection continues while the batch runs. At the end, run any remaining records. Batches run in order.</p>
+              <p>{collectionMode === 'prepare' ? 'Clean the complete dataset once, then run it in batches.' : 'Start as each batch fills. The final batch includes any remaining records.'}</p>
             </>}
-            <strong>{collectionMode === 'stream' ? 'Collect and run' : '1. Collect input data'}</strong>
-            {collectionSource?.type === 'gdelt_news' && <>
+            {collectionMode === 'prepare' && <label>Whole-dataset preprocessor
+              <select disabled={collecting} value={collectionOptions.preprocess_tool || ''} onChange={e => setCollectionOptions(v => ({...v, preprocess_tool:e.target.value}))}>
+                <option value="">Choose a list-to-list custom tool</option>
+                {preprocessors.map(t => <option key={t.name} value={t.name}>{t.name}</option>)}
+              </select>
+              <p>Choose a saved cleanup tool from Library → Custom. It receives the full dataset, including shared lists.</p>
+            </label>}
+
+            {collectionSource?.type === 'gdelt_news' && <details className="input-disclosure"><summary>Date range & collection settings</summary>
               <p>Collects news titles and links. Empty windows are skipped.</p>
               <p>{collectionSource.query} · leave dates blank to use the source’s configured range or days back.</p>
               <label>Collection start date<input type="date" disabled={collecting} value={collectionOptions.start_date ?? collectionSource.start_date ?? ''} onChange={e => { setCollection(null); setCollectionOptions(v => ({ ...v, start_date: e.target.value })); }} /></label>
@@ -676,18 +703,16 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
               <label>One run per<select disabled={collecting} value={collectionOptions.batch_step ?? collectionSource.batch_step ?? 'daily'} onChange={e => { setCollection(null); setCollectionOptions(v => ({ ...v, batch_step: e.target.value })); }}>
                 <option value="daily">Day</option><option value="weekly">Week</option><option value="monthly">Month</option>
               </select></label>
-            </>}
-            <button type="button" disabled={collecting || starting || (collectionMode === 'stream' && (!Number.isInteger(Number(chunkSize)) || Number(chunkSize) < 1 || Number(chunkSize) > 1000))} onClick={collect}>{collecting ? 'In progress…' : collectionMode === 'stream' ? 'Start collecting and running' : collectionId ? 'Collect again' : 'Collect data'}</button>
-            {collecting && collection?.id && <button type="button" disabled={stoppingCollection} onClick={stopCollection}>{stoppingCollection ? 'Stopping…' : collection?.mode === 'stream' ? 'Stop collection and runs' : 'Stop collection'}</button>}
-            {collecting && <p role="status">{collection?.collection_complete ? 'Collection complete; finishing batches' : 'Collecting input data'}{collection?.total ? `: ${collection.completed} / ${collection.total} windows` : '…'} · {collection?.mode === 'stream' ? `${collection.record_count || 0} records collected, ${collection.submitted_records || 0} submitted to batches` : 'Workflow has not started.'}</p>}
-            {collection?.mode === 'stream' && <>
-              {collection.status === 'completed' && <p role="status">Collection and all batches completed · {collection.record_count} records.</p>}
+            </details>}
+            {collecting && <p role="status">{collection?.phase === 'preprocessing' ? 'Preprocessing the entire dataset; workflow has not started' : collection?.collection_complete ? 'Collection complete; finishing batches' : 'Collecting input data'}{collection?.total ? `: ${collection.completed} / ${collection.total} windows` : '…'} · {['stream', 'prepare'].includes(collection?.mode) ? `${collection.record_count || 0} records collected, ${collection.submitted_records || 0} submitted to batches` : 'Workflow has not started.'}</p>}
+            {['stream', 'prepare'].includes(collection?.mode) && <>
+              {collection.status === 'completed' && <p role="status">Collection and all batches completed · {collection.record_count} input records{collection.processed_count != null ? ` → ${collection.processed_count} processed records` : ''}.</p>}
               {(collection.batches || []).map((item, index) => <div key={item.id}>Batch {index + 1} · {item.total} records · {item.status || 'running'} <button type="button" onClick={() => onBatchStart?.(item.id)}>View batch {index + 1}</button></div>)}
             </>}
             {collectionId && <>
               <p role="status">Collection complete · {collection.record_count} saved records. Ready for batch run.</p>
               <details><summary>Preview collected inputs</summary><pre style={{ maxHeight: 240, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{JSON.stringify(collection.sample, null, 2)}</pre></details>
-              <strong>2. Run batch using saved data</strong>
+              <button type="button" className="link small" disabled={collecting} onClick={collect}>Refresh collected data</button>
             </>}
           </div>}
         </div>
@@ -754,6 +779,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
         idle={source === 'upload' && !file}
       />
       {error && <div className="muted small batch-error">{String(error)}</div>}
+      <details className="input-disclosure"><summary>Evaluation · {metric || 'off'}</summary>
       <div className="field">
         <label htmlFor="batch-metric">Score the results (evaluation)</label>
         <select id="batch-metric" disabled={collecting} value={metric} onChange={(e) => setMetric(e.target.value)}>
@@ -791,6 +817,21 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
           </div>
         </div>
       )}
+      </details>
+      <div className="field">
+        <label htmlFor="model-execution">Model execution</label>
+        <select id="model-execution" disabled={collecting || starting} value={apiBatch ? 'native' : 'standard'} onChange={e => setApiBatch(e.target.value === 'native')}>
+          <option value="standard">Standard API</option>
+          <option value="native">SafeChain / native batch API</option>
+        </select>
+      </div>
+      {apiBatch && <div className="field">
+        <label htmlFor="api-batch-size">API batch size</label>
+        <input id="api-batch-size" type="number" min="1" max="1024" disabled={collecting || starting} value={apiBatchSize} onChange={e => setApiBatchSize(e.target.value)} />
+        <p className="muted small">Maximum model requests per SafeChain batch. Different from records per workflow batch.</p>
+        {invalidApiBatch && <p role="alert">Enter a whole number from 1 to 1024.</p>}
+      </div>}
+      {!apiBatch && <details className="input-disclosure"><summary>Parallel runs · {workers} workers</summary>
       <div className="field">
         <label htmlFor="batch-workers">Workers (records run at the same time)</label>
         <div className="workers-row">
@@ -805,13 +846,16 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
           A sample's steps run one after another, so more workers than samples does nothing.
         </div>
       </div>
+      </details>}
       <div className="modal-actions">
         <button type="button" onClick={onCancel} disabled={starting}>
           Cancel
         </button>
-        <button type="submit" className="primary" disabled={!canStart}>
-          {starting ? 'Starting…' : runLabel}
-        </button>
+        {collecting && collection?.id && <button type="button" disabled={stoppingCollection} onClick={stopCollection}>
+          {stoppingCollection ? 'Stopping…' : ['stream', 'prepare'].includes(collection?.mode) ? 'Stop collection and runs' : 'Stop collection'}
+        </button>}
+        {needsCollection ? <button type="button" className="primary" disabled={collectionInvalid} onClick={collect}>{collectionLabel}</button>
+          : <button type="submit" className="primary" disabled={!canStart}>{starting ? 'Starting…' : runLabel}</button>}
       </div>
     </form>
   );

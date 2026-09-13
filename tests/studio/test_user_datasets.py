@@ -185,3 +185,46 @@ def test_collection_reference_snapshot_survives_delete_and_tail(client, monkeypa
     assert [len(chunk) for chunk in captured] == ([2,1] if mode == 'stream' else [])
     if captured:
         assert captured[-1][0]['news'] == 'C' and len(captured[-1][0]['obligor_list']) == 2
+
+
+@pytest.mark.parametrize('outcome', ['success', 'empty', 'invalid', 'failed'])
+def test_preprocess_entire_dataset_before_any_batch(client, monkeypatch, tmp_path, outcome):
+    from backend.api import source_collection as sc
+    from backend.features.data import input_composition as composition
+    graph, feed, reference = two_inputs(client)
+    monkeypatch.setattr(sc, 'data_path', lambda *parts: tmp_path.joinpath(*parts))
+    captured, calls, events = [], [], []
+    def worker(*args, **kwargs):
+        if args[0] == 'preprocess':
+            return process(args[1]['name'], args[1]['arguments'])
+        for value in ['A', 'B', 'A', 'C']:
+            kwargs['on_record']({'news':value})
+        events.append('collected')
+        return []
+    def process(name, args):
+        events.append('preprocessed')
+        calls.append(args['records'])
+        assert events[0] == 'collected' and captured == []
+        assert len(args['records']) == 4 and all(len(r['obligor_list']) == 2 for r in args['records'])
+        if outcome == 'failed': return {'error':'cannot preprocess'}
+        if outcome == 'invalid': return {'result':[{'wrong':'field'}]}
+        if outcome == 'empty': return {'result':[]}
+        return {'result':[args['records'][i] for i in (0, 1, 3)]}
+    monkeypatch.setattr(sc.chat_control, 'worker', worker)
+    monkeypatch.setattr(sc.preprocess.custom_tools, 'find', lambda name: ('kit', {'name':name,'params':[{'name':'records'}]}))
+    monkeypatch.setattr(sc.preprocess.custom_tools, 'run_custom_tool', process)
+    monkeypatch.setattr(sc.batch, 'start_batch', lambda graph, rows, source, **kw: captured.append(rows) or str(len(captured)))
+    monkeypatch.setattr(sc.batch, 'wait_for', lambda *a, **kw: True)
+    monkeypatch.setattr(sc.batch, 'get_batch', lambda *a, **kw: {'status':'succeeded'})
+    job = {'id':'e'*32, 'graph_id':graph['id'], 'mode':'prepare', 'batch_size':2,
+           'records':[], 'record_count':0, 'reference_inputs':composition.snapshot(graph, feed), 'batches':[],
+           'submitted_records':0, 'config':feed['source'], 'status':'collecting', 'preprocess_tool':'clean_all'}
+    sc.execute_collection(job, graph, feed, sc.chat_control.Control(), 1, None, None)
+    assert len(calls) == 1
+    if outcome in ('invalid','failed'):
+        assert job['status'] == 'failed' and captured == []
+    else:
+        assert job['status'] == 'completed'
+        assert job['record_count'] == 4
+        assert job['processed_count'] == (3 if outcome == 'success' else 0)
+        assert [len(chunk) for chunk in captured] == ([2,1] if outcome == 'success' else [])

@@ -82,7 +82,7 @@ function SourceInspector({ node, onUpdate, onRename }) {
 
   return (
     <aside className="inspector">
-      <h3>Source: {node.id}</h3>
+      <h3>Input: {node.id}</h3>
       <div className="field">
         <label>Name</label>
         <input value={d.editName ?? node.id} onChange={(e) => onUpdate(node.id, { editName: e.target.value })} onBlur={() => onRename(node.id, d.editName ?? node.id)} />
@@ -114,6 +114,7 @@ function SourceInspector({ node, onUpdate, onRename }) {
         </div>
       ))}
       {cfg.type === 'credit_risk' && cfg.dataset && cfg.dataset !== 'contemporary' && <p className="muted small">Samples selects trajectories. Walk each window chooses daily, weekly or monthly batches of new evidence; none runs the whole window once. Outcomes stay outside the inputs.</p>}
+      <details className="input-disclosure" open={cfg.type !== 'user_dataset'}><summary>Scheduling & node settings</summary>
       <div className="field">
         <label>Schedule</label>
         {(() => {
@@ -172,6 +173,7 @@ function SourceInspector({ node, onUpdate, onRename }) {
       )}
       <EnabledToggle node={node} onUpdate={onUpdate} />
         <SaveOutputToggle node={node} onUpdate={onUpdate} />
+      </details>
     </aside>
   );
 }

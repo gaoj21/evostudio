@@ -721,6 +721,13 @@ async def _batch_payload(graph_id: str, request: Request):
             workers = int(body.get("workers") or 2)
             metric = body.get("metric") or None
             label_key = body.get("label_key") or None
+        from backend.features.execution import provider_batch
+        try:
+            size = provider_batch.validate(graph, form.get('llm_batch_size') if content_type.startswith('multipart/form-data') else body.get('llm_batch_size'))
+        except ValueError as exc:
+            raise sources.SourceError(str(exc)) from exc
+        if size is not None:
+            graph = {**graph, '_llm_batch_size': size}
         # Collected records already contain the reference snapshot taken at collection start.
         if not source.get('collection_id'):
             main = source_collection.node_for(graph) if source.get('type') == 'canvas' else None

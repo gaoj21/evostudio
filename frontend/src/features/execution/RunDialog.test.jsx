@@ -18,6 +18,7 @@ vi.mock('../../api.js', () => ({
     runGraph: vi.fn(),
     creditRiskSource: vi.fn(),
     listMetrics: vi.fn(),
+    listCustomTools: vi.fn(),
     previewBatchCanvas: vi.fn(),
     previewBatchSource: vi.fn(),
     previewBatchUpload: vi.fn(),
@@ -51,6 +52,7 @@ beforeEach(() => {
   api.runPlan.mockResolvedValue(PLAN);
   api.creditRiskSource.mockResolvedValue({ splits: { test: 41 }, fields: ['company'] });
   api.listMetrics.mockResolvedValue({ metrics: [] });
+  api.listCustomTools.mockResolvedValue({ tools: [] });
   api.previewBatchCanvas.mockResolvedValue(STEPPED);
   api.previewBatchSource.mockResolvedValue({ total: 3, samples: 3, steps: 1, steps_min: 1 });
 });
@@ -636,7 +638,7 @@ describe('collect API inputs before batch execution', () => {
     const user = open();
     await batchTab(user);
     await user.click(await screen.findByRole('button', { name: 'Collect data' }));
-    expect(screen.getByRole('button', { name: 'Run batch' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Run batch' })).not.toBeInTheDocument();
     expect(api.runBatchCanvas).not.toHaveBeenCalled();
     await screen.findByText(/Collection complete/, {}, { timeout: 2500 });
     const run = await screen.findByRole('button', { name: 'Run batch (2)' });
@@ -657,7 +659,7 @@ describe('collect API inputs before batch execution', () => {
     await user.click(await screen.findByRole('button', { name: 'Stop collection' }));
     expect(api.stopSourceCollection).toHaveBeenCalledWith('g1', 'collection-2');
     await screen.findByText('Collection stopped.', {}, { timeout: 2500 });
-    expect(screen.getByRole('button', { name: 'Run batch' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Run batch' })).not.toBeInTheDocument();
     expect(api.runBatchCanvas).not.toHaveBeenCalled();
   });
 });
@@ -675,7 +677,7 @@ it('offers streaming batches with a record threshold and no duplicate final run'
   expect(api.collectSource).toHaveBeenCalledWith('g1', expect.objectContaining({ mode: 'stream', batch_size: 3, workers: 2 }));
   await screen.findByText(/Collection and all batches completed/, {}, { timeout: 2500 });
   expect(screen.getByRole('button', { name: 'View batch 3' })).toBeEnabled();
-  expect(screen.getByRole('button', { name: 'Run batch' })).toBeDisabled();
+  expect(screen.queryByRole('button', { name: 'Run batch' })).not.toBeInTheDocument();
   expect(api.runBatchCanvas).not.toHaveBeenCalled();
 });
 
@@ -696,4 +698,33 @@ it('uses the selected release in both batch preview and batch start', async () =
  await waitFor(()=>expect(screen.getByRole('button',{name:'Run batch (707)'})).toBeEnabled());
  await user.click(screen.getByRole('button',{name:'Run batch (707)'}));
  expect(api.runBatchSource).toHaveBeenCalledWith('g1',expect.objectContaining({dataset:version,split:'test',step:'weekly'}));
+});
+
+it('offers whole-dataset preprocessing for a saved local input and submits it before batches', async () => {
+  api.listCustomTools.mockResolvedValue({tools:[{name:'prepare_all', params:[{name:'records'}]}]});
+  api.collectSource.mockResolvedValue({id:'prepare-job', status:'completed', mode:'prepare', record_count:4, processed_count:3, batches:[]});
+  open();
+  await userEvent.click(screen.getByRole('button', {name:'Batch run'}));
+  await userEvent.selectOptions(screen.getByLabelText('Execution mode'), 'prepare');
+  const start = screen.getByRole('button', {name:'Preprocess all and run batches'});
+  expect(start).toBeDisabled();
+  await userEvent.selectOptions(screen.getByLabelText(/Whole-dataset preprocessor/), 'prepare_all');
+  await userEvent.click(start);
+  await waitFor(() => expect(api.collectSource).toHaveBeenCalledWith('g1', expect.objectContaining({mode:'prepare', preprocess_tool:'prepare_all', batch_size:10})));
+  expect(api.runBatchCanvas).not.toHaveBeenCalled();
+  expect(await screen.findByText(/4 input records.*3 processed records/)).toBeInTheDocument();
+});
+
+it('sends native API batch size instead of workers to preview and run', async () => {
+  api.runBatchCanvas.mockResolvedValue({batch_id:'native'});
+  const user = open(); await batchTab(user);
+  await user.selectOptions(screen.getByLabelText('Model execution'), 'native');
+  await user.clear(screen.getByLabelText('API batch size'));
+  await user.type(screen.getByLabelText('API batch size'), '16');
+  expect(screen.queryByLabelText('Workers (records run at the same time)')).not.toBeInTheDocument();
+  await waitFor(() => expect(api.previewBatchCanvas).toHaveBeenLastCalledWith('g1', {llm_batch_size:16}));
+  const run = await screen.findByRole('button', {name:'Run batch (24)'});
+  await waitFor(() => expect(run).toBeEnabled());
+  await user.click(run);
+  expect(api.runBatchCanvas).toHaveBeenCalledWith('g1', {llm_batch_size:16});
 });
