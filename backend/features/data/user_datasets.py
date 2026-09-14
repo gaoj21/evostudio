@@ -2,18 +2,23 @@
 import csv
 import io
 import json
+import os
+import sys
 import re
 import threading
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 from backend.api.studio_config import data_path
 from backend.api.sources import SourceError
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
-MAX_BYTES = 20 * 1024 * 1024
-MAX_ROWS = 50000
+# Zero means no application-level cap; deployments may opt into limits.
+MAX_BYTES = max(0, int(os.getenv('EVO_DATASET_MAX_BYTES', '0')))
+MAX_ROWS = max(0, int(os.getenv('EVO_DATASET_MAX_ROWS', '0')))
+csv.field_size_limit(sys.maxsize)
 _lock = threading.RLock()
 
 
@@ -82,8 +87,8 @@ def public(item, preview=False):
 
 
 def parse(filename, content):
-    if len(content) > MAX_BYTES:
-        raise SourceError("Dataset exceeds 20 MB. Split the file before uploading; nothing was truncated.")
+    if MAX_BYTES and len(content) > MAX_BYTES:
+        raise SourceError("Dataset exceeds the configured upload size limit; nothing was truncated.")
     try:
         text = content.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -102,26 +107,17 @@ def parse(filename, content):
                 if None in row or any(v is None for v in row.values()):
                     raise SourceError(f"Row {i}: column count does not match the header.")
                 records.append(row)
-                if len(records) > MAX_ROWS:
-                    raise SourceError("Dataset exceeds 50,000 records. Split the file first.")
-        elif ext == "json":
-            records = json.loads(text)
-            if isinstance(records, dict) and isinstance(records.get("records"), list):
-                records = records["records"]
-        elif ext == "jsonl":
-            records = []
-            for i, line in enumerate(text.splitlines(), 1):
-                if line.strip():
-                    try:
-                        records.append(json.loads(line))
-                    except ValueError:
-                        raise SourceError(f"JSONL line {i}: invalid JSON.") from None
+                if MAX_ROWS and len(records) > MAX_ROWS:
+                    raise SourceError("Dataset exceeds the configured row limit; nothing was truncated.")
+        elif ext in ('json', 'jsonl'):
+            from .json_records import parse_json_records
+            records = parse_json_records(text, MAX_ROWS)
         else:
             raise SourceError("Choose a CSV, TSV, JSON or JSONL file. Export Excel sheets as CSV first.")
         if not isinstance(records, list) or not records:
             raise SourceError('Provide a non-empty array of objects, JSONL objects, or a CSV/TSV table.')
-        if len(records) > MAX_ROWS:
-            raise SourceError("Dataset exceeds 50,000 records. Split the file first.")
+        if MAX_ROWS and len(records) > MAX_ROWS:
+            raise SourceError("Dataset exceeds the configured row limit; nothing was truncated.")
         for i, row in enumerate(records, 1):
             if not isinstance(row, dict) or not row or any(not k.strip() for k in row):
                 raise SourceError(f"Record {i}: expected an object with non-empty field names.")
@@ -213,17 +209,17 @@ async def upload_dataset(request: Request):
     if not hasattr(file, "read"):
         raise HTTPException(422, "Choose a dataset file.")
     try:
-        content = await file.read(MAX_BYTES + 1)
+        content = await file.read(MAX_BYTES + 1 if MAX_BYTES else -1)
         filename = (file.filename or "dataset").replace("\\", "/").rsplit("/", 1)[-1]
-        rows, fields = parse(filename, content)
+        rows, fields = await run_in_threadpool(parse, filename, content)
         name = str(form.get("name") or filename).strip()
         if not name or len(name) > 120:
             raise SourceError("Dataset name must be between 1 and 120 characters.")
         item = {"id": uuid.uuid4().hex, "name": name, "filename": filename,
                 "created_at": datetime.now(timezone.utc).isoformat(), "size_bytes": len(content),
                 "row_count": len(rows), "fields": fields, "records": rows}
-        save(item)
-        return public(item, preview=True)
+        await run_in_threadpool(save, item)
+        return await run_in_threadpool(public, item, True)
     except SourceError as exc:
         raise HTTPException(422, str(exc)) from exc
     finally:

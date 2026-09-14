@@ -566,7 +566,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
 
   useEffect(() => {
     let active = true;
-    api.creditRiskSource(dataset).then(info => { if (active) setSourceInfo(info); }).catch(() => { if (active) setSourceInfo(null); });
+    api.creditRiskSource(dataset).then(info => { if (active) { setSourceInfo(info); if (info.dataset && info.dataset !== dataset) setDataset(info.dataset); } }).catch(() => { if (active) setSourceInfo(null); });
     api.listMetrics().then((r) => setMetrics(r.metrics || [])).catch(() => setMetrics([]));
     return () => { active = false; };
   }, [dataset]);
@@ -669,7 +669,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
         <label htmlFor="data-source">Data source</label>
         <select id="data-source" value={source} onChange={(e) => setSource(e.target.value)}>
           {hasCanvasSource && <option value="canvas">Canvas source node config</option>}
-          <option value="upload">Upload JSONL / CSV file</option>
+          <option value="upload">Upload JSON / JSONL / CSV file</option>
           <option value="credit_risk">credit_risk feed (samples.jsonl)</option>
         </select>
       </div>
@@ -719,7 +719,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
       ) : source === 'upload' ? (
         <div className="field">
           <label htmlFor="batch-file">File (.jsonl or .csv; record keys map to input names)</label>
-          <input id="batch-file" type="file" accept=".jsonl,.csv" required onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          <input id="batch-file" type="file" accept=".json,.jsonl,.csv" required onChange={(e) => setFile(e.target.files?.[0] || null)} />
         </div>
       ) : (
         <>

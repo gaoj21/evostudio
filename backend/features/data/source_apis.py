@@ -445,8 +445,10 @@ def all_source_types() -> dict:
     import copy
     from backend.api.datasets import catalog
     schemas = copy.deepcopy(SOURCE_TYPE_SCHEMAS)
+    from backend.api.sources import CREDIT_RISK_SAMPLES
+    available = (['contemporary'] if CREDIT_RISK_SAMPLES.is_file() else []) + [item['id'] for item in catalog()]
     schemas['credit_risk']['config'].insert(0, {'name': 'dataset', 'label': 'Dataset version', 'type': 'select',
-        'default': 'contemporary', 'options': ['contemporary', *(item['id'] for item in catalog())]})
+        'default': available[0] if available else '', 'options': available})
     schemas['credit_risk']['description'] = 'Choose a dataset version and split. Releases emit dated observations in trajectory order.'
     return {**schemas, **custom_tools.custom_source_types()}
 

@@ -228,3 +228,53 @@ def test_preprocess_entire_dataset_before_any_batch(client, monkeypatch, tmp_pat
         assert job['record_count'] == 4
         assert job['processed_count'] == (3 if outcome == 'success' else 0)
         assert [len(chunk) for chunk in captured] == ([2,1] if outcome == 'success' else [])
+
+
+@pytest.mark.parametrize('filename,content', [
+    ('records.json', b'{"a":1}\n{"a":2}'),
+    ('records.json', b'{\n"a":1\n}\n{\n"a":2\n}'),
+    ('records.jsonl', b'{"a":1}{"a":2}'),
+    ('records.jsonl', b'[\n{"a":1},\n{"a":2}\n]'),
+    ('records.json', b'{"records":[{"a":1},{"a":2}]}'),
+])
+def test_json_formats_are_detected_from_content_in_both_upload_paths(client, filename, content):
+    result = upload(client, filename, content)
+    expected = [{'a':1}, {'a':2}]
+    assert result['row_count'] == 2
+    assert datasets.load(result['id'])['records'] == expected
+    assert sources.parse_upload(filename, content) == expected
+
+
+def test_json_error_identifies_position_and_does_not_import_valid_prefix(client):
+    content = b'{"a":1}\n{"a":2,}'
+    response = client.post('/api/datasets', files={'file':('records.json',content)})
+    assert response.status_code == 422
+    assert 'line 2, column' in response.json()['detail']
+    assert 'Extra data' not in response.json()['detail']
+    assert client.get('/api/datasets').json() == {'datasets':[]}
+    with pytest.raises(sources.SourceError, match='line 2, column'):
+        sources.parse_upload('records.jsonl', content)
+
+
+def test_upload_larger_than_20mb_and_long_csv_field(client):
+    text = 'x' * (21 * 1024 * 1024)
+    item = upload(client, 'large.csv', ('body\n' + text + '\n').encode())
+    assert item['size_bytes'] > 20 * 1024 * 1024
+    assert len(datasets.load(item['id'])['records'][0]['body']) == len(text)
+
+
+def test_more_than_50000_rows_not_truncated(client):
+    item = upload(client, 'many.jsonl', b'{"value":1}\n' * 50001)
+    assert item['row_count'] == 50001
+    assert len(sources.parse_upload('many.jsonl', b'{"value":1}\n' * 50001)) == 50001
+
+
+def test_optional_configured_limits_still_reject_atomically(client, monkeypatch):
+    monkeypatch.setattr(datasets, 'MAX_BYTES', 16)
+    response = client.post('/api/datasets', files={'file':('a.csv',b'body\n'+b'x'*20)})
+    assert response.status_code == 422 and 'configured upload size limit' in response.text
+    monkeypatch.setattr(datasets, 'MAX_BYTES', 0)
+    monkeypatch.setattr(datasets, 'MAX_ROWS', 1)
+    for name, data in [('a.csv', b'a\n1\n2'), ('a.json', b'[{"a":1},{"a":2}]')]:
+        assert client.post('/api/datasets', files={'file':(name,data)}).status_code == 422
+    assert client.get('/api/datasets').json() == {'datasets':[]}

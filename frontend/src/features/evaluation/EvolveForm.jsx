@@ -36,7 +36,7 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
     api.evolvePresets().then((r) => setPresets(r.presets || [])).catch(() => setPresets([]));
     let active = true;
     setDatasetLoading(true);
-    api.creditRiskSource(dataset).then(info => { if (active) setSourceInfo(info); }).catch(() => { if (active) setSourceInfo(null); }).finally(() => { if (active) setDatasetLoading(false); });
+    api.creditRiskSource(dataset).then(info => { if (active) { setSourceInfo(info); if (info.dataset && info.dataset !== dataset) setDataset(info.dataset); } }).catch(() => { if (active) setSourceInfo(null); }).finally(() => { if (active) setDatasetLoading(false); });
     if (graphId) {
       api.getGraph(graphId)
         .then((g) => setNodes((g.tasks || []).filter((t) => !['source', 'tool'].includes(t.kind)).map((t) => t.name)))
@@ -124,7 +124,7 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
               <option value="saved_batch">Saved batch results — no workflow rerun</option>
               <option value="saved_run">Saved run result — no workflow rerun</option>
               <option value="credit_risk">Credit-risk dataset — rerun workflow</option>
-              <option value="upload">Upload JSONL — rerun workflow</option>
+              <option value="upload">Upload JSON / JSONL — rerun workflow</option>
             </select>
           </div>
           {savedSource ? <>
@@ -156,7 +156,7 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
           </> : source === 'upload' ? (
             <div className="field">
               <label htmlFor="evolve-file">File</label>
-              <input id="evolve-file" type="file" accept=".jsonl" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+              <input id="evolve-file" type="file" accept=".json,.jsonl" onChange={(e) => setFile(e.target.files?.[0] || null)} />
             </div>
           ) : (
             <>

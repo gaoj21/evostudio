@@ -47,6 +47,8 @@ def resolve(graph_id, body):
     if dataset:
         from backend.api import datasets
         if dataset == 'contemporary':
+            if not sources.CREDIT_RISK_SAMPLES.is_file():
+                raise sources.SourceError('This saved result references an archived legacy dataset. Restore that dataset to evaluate its original split; saved results have not been deleted.')
             partitions = {r['sample_id']: r.get('split') for r in datasets.rows(sources.CREDIT_RISK_SAMPLES)}
         else:
             partitions = {r['case_id']: r['partition'] for r in datasets.rows(datasets.release(dataset) / 'partitions.jsonl')}

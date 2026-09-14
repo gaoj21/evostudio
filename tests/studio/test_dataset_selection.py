@@ -96,3 +96,14 @@ def test_window_buckets_include_end_date_and_partial_tail():
     assert [r['as_of'] for r in monthly]==['2026-01-31','2026-02-08']
     assert monthly[0]['document_ids']==['2026-01-29','2026-01-31']
     assert monthly[-1]['document_ids']==['2026-02-01','2026-02-08']
+
+
+def test_discovery_omits_missing_legacy_data_and_defaults_to_available_release(tmp_path, monkeypatch):
+    from backend.api import sources, source_apis
+    monkeypatch.setattr(sources, 'CREDIT_RISK_SAMPLES', tmp_path/'missing.jsonl')
+    info = sources.credit_risk_info('contemporary')
+    assert info['dataset'] == DATASET
+    assert 'contemporary' not in [item['id'] for item in info['datasets']]
+    schema = source_apis.all_source_types()['credit_risk']['config'][0]
+    assert schema['default'] == DATASET
+    assert 'contemporary' not in schema['options']

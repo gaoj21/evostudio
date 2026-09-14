@@ -170,11 +170,15 @@ def step_sample(sample: dict, step: str) -> list[dict]:
 def credit_risk_info(dataset=None) -> dict:
     from backend.api import datasets
     versions = datasets.catalog()
+    legacy = [{"id": "contemporary", "label": "Contemporary (legacy)"}] if CREDIT_RISK_SAMPLES.is_file() else []
+    available = [*legacy, *versions]
+    if not legacy and versions and dataset in (None, 'contemporary'):
+        dataset = versions[0]['id']
     if dataset and dataset != "contemporary":
         selected = next((item for item in versions if item["id"] == dataset), None)
         if selected is None:
             raise SourceError("Unknown dataset version")
-        return {**selected, "dataset": dataset, "fields": CREDIT_RISK_FIELDS, "datasets": [{"id": "contemporary", "label": "Contemporary (legacy)"}, *versions]}
+        return {**selected, "dataset": dataset, "fields": CREDIT_RISK_FIELDS, "datasets": available}
     splits: dict[str, int] = {}
     if CREDIT_RISK_SAMPLES.is_file():
         with open(CREDIT_RISK_SAMPLES, encoding="utf-8") as f:
@@ -188,7 +192,7 @@ def credit_risk_info(dataset=None) -> dict:
         "id": "credit_risk",
         "label": "credit_risk feed (contemporary/samples.jsonl)",
         "dataset": "contemporary",
-        "datasets": [{"id": "contemporary", "label": "Contemporary (legacy)", "splits": splits}, *versions],
+        "datasets": [{**item, "splits": splits} for item in legacy] + versions,
         "splits": splits,
         "fields": CREDIT_RISK_FIELDS,
     }
@@ -270,25 +274,21 @@ def normalize_eval_records(records: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def parse_upload(filename: str, content: bytes) -> list[dict]:
-    text = content.decode("utf-8-sig")
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise SourceError('Export the file as UTF-8 and try again.') from None
     name = (filename or "").lower()
-    if name.endswith(".jsonl"):
-        records = []
-        for i, line in enumerate(text.splitlines(), start=1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError as e:
-                raise SourceError(f"JSONL line {i}: invalid JSON ({e})")
-            if not isinstance(obj, dict):
-                raise SourceError(f"JSONL line {i}: expected a JSON object")
-            records.append(obj)
+    if name.endswith(('.json', '.jsonl')):
+        from .json_records import parse_json_records
+        try:
+            records = parse_json_records(text)
+        except ValueError as exc:
+            raise SourceError(str(exc)) from None
     elif name.endswith(".csv"):
         records = [dict(row) for row in csv.DictReader(io.StringIO(text))]
     else:
-        raise SourceError(f"Unsupported file type for '{filename}'; use .jsonl or .csv")
+        raise SourceError(f"Unsupported file type for '{filename}'; use .json, .jsonl or .csv")
     if not records:
         raise SourceError("Uploaded file contains no records")
     return records

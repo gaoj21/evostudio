@@ -42,7 +42,6 @@ export default function DatasetInput({ config, onChange }) {
   async function upload(file) {
     if (!file) return;
     setError('');
-    if (file.size > 20 * 1024 * 1024) { setError('File exceeds 20 MB. Split it before uploading.'); return; }
     setBusy(true);
     try {
       const item = await api.uploadDataset(file);
@@ -85,7 +84,7 @@ export default function DatasetInput({ config, onChange }) {
       <input ref={fileRef} aria-label="Upload dataset file" type="file" hidden accept=".csv,.tsv,.json,.jsonl"
         onChange={e => { upload(e.target.files?.[0]); e.target.value = ''; }} />
       <button className="input-upload" type="button" disabled={busy} onClick={() => fileRef.current?.click()}>{busy ? 'Saving…' : '+ Upload dataset'}</button>
-      <span className="muted small">CSV, TSV, JSON or JSONL · max 20 MB</span>
+      <span className="muted small">CSV, TSV, JSON or JSONL · no fixed size limit</span>
     </div>
     {error && <p role="alert" className="error">{error}</p>}
     {selected && <>

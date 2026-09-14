@@ -94,3 +94,11 @@ it('keeps inferred JSON types and allows input-local CSV conversion', async () =
   expect(api.deleteDataset).not.toHaveBeenCalled();
   expect(change).toHaveBeenLastCalledWith(expect.objectContaining({dataset_id:''}),[]);
 });
+
+it('does not reject a file based on the old 20 MB limit', async () => {
+  render(<Harness />);
+  const file = new File(['body\ntext'], 'large.csv');
+  Object.defineProperty(file, 'size', {value: 30 * 1024 * 1024});
+  fireEvent.change(screen.getByLabelText('Upload dataset file'), {target:{files:[file]}});
+  await waitFor(() => expect(api.uploadDataset).toHaveBeenCalledWith(file));
+});
