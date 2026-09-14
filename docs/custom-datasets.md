@@ -100,3 +100,9 @@ def prepare_all(records: list) -> list:
 
 Input 默认只显示 Choose data 和 How to use it。Preview data、Advanced settings（记录上限、输出名、字段映射）和 Manage dataset（改名、删除）按需展开。
 Batch Run 默认使用画布输入；数据源切换、Run details、Evaluation 和 Parallel runs 默认折叠。底部只显示当前步骤需要的主按钮：采集、普通运行或全量预处理后运行。
+
+## 通用字段与共享资源（2026-09-14）
+
+JSON 列类型根据实际值显示；混合类型标为 any。CSV 默认保留文本，可在 Advanced settings → Field mapping 中为各列选择 int、float、bool、list、dict 或 str。转换只作用于当前 Input；非文本类型的空值变为 null，非法值以具体行号/列名报错，原始数据集不变。
+
+Manage dataset 中的 Detach from this Input 只解绑当前节点。删除共享数据集前必须从所有引用它的已保存 Task 中解绑并保存；否则返回使用列表并保留文件。

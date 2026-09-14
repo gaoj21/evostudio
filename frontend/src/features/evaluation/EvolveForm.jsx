@@ -60,15 +60,15 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
     setSelection(null); setSelectionError('');
     if (!savedSource || !savedId) { setSelectionLoading(false); return () => { active = false; }; }
     setSelectionLoading(true);
-    api.previewEvolveResults(graphId, {source, dataset: savedDataset || undefined, split: savedSplit,
+    api.previewEvolveResults(graphId, {source, dataset: savedDataset || undefined, split: savedSplit, label_key: labelKey, metric: metric || undefined,
       [source === 'saved_batch' ? 'batch_id' : 'run_id']: savedId}).then(value => {
         if (active) setSelection(value);
       }).catch(err => { if (active) setSelectionError(err?.body?.detail || err.message); })
       .finally(() => { if (active) setSelectionLoading(false); });
     return () => { active = false; };
-  }, [graphId, source, savedId, savedDataset, savedSplit]);
+  }, [graphId, source, savedId, savedDataset, savedSplit, labelKey, metric]);
 
-  const effectiveMetric = metric || (source === 'credit_risk' || savedSource ? 'credit_risk' : 'exact_match');
+  const effectiveMetric = metric || (source === 'credit_risk' ? 'credit_risk' : savedSource ? selection?.suggested_metric || 'exact_match' : 'exact_match');
   const picked = chosen === null ? nodes : chosen;
   const toggleNode = (name) => setChosen((current) => {
     const base = current === null ? nodes : current;
@@ -151,6 +151,7 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
               {selection.dataset && ` · ${selection.dataset} / ${selection.split || 'all'}`}
               {selection.missing_cases > 0 && ` · ${selection.missing_cases} dataset trajectories have no saved result; they will not be rerun.`}
             </p>}
+            {selection?.scoring && <p role="status">{selection.scoring.scored} records can be scored · {selection.scoring.unscored} unscored. {selection.scoring.scored === 0 && 'Choose the expected-answer field and metric before evaluating.'}</p>}
             <div className="field"><label htmlFor="evolve-label-key">Expected-answer field (optional)</label><input id="evolve-label-key" value={labelKey} onChange={e => setLabelKey(e.target.value)} placeholder="Uses saved labels when available" /></div>
           </> : source === 'upload' ? (
             <div className="field">

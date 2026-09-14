@@ -94,7 +94,7 @@ export function graphToFlow(graph) {
 
 // An edge carries what crosses it. Control-only edges only order the two
 // nodes and are drawn dashed so the difference is visible on the canvas.
-function edgeToFlow(e) {
+export function edgeToFlow(e) {
   const controlOnly = !!e.control_only;
   // Migration draws the edges the old engine implied; they carry data like
   // any other but are rendered faint and unlabelled, or the canvas of a
@@ -109,7 +109,7 @@ function edgeToFlow(e) {
     // A label only where it says something a glance would not: an order-only
     // edge, or a field renamed across the edge. Same-name mappings are the
     // norm and labelling every one of them is noise.
-    label: controlOnly ? 'order only'
+    label: controlOnly ? 'order only' : !(e.mappings || []).length ? 'map fields'
       : (!implied && renamed.length
         ? renamed.map((m) => `${m.from} → ${m.to}`).join(', ') : undefined),
     className: [controlOnly ? 'edge-control' : '', implied ? 'edge-implied' : '']
@@ -117,16 +117,27 @@ function edgeToFlow(e) {
   };
 }
 
-// What a newly drawn edge carries: every same-named output→input pair, or
-// nothing — in which case it is control-only, and says so. The old engine
-// would have guessed silently; this is the guess, written down, editable.
+// Match exact field names first, then unique spelling variants. Ambiguous
+// pairs need an explicit choice; absence of a match never means order-only.
+export function suggestMappings(outputs = [], inputs = []) {
+  const normalize = name => String(name).trim().toLowerCase().replace(/[\s_-]+/g, '');
+  const mappings = [];
+  for (const input of inputs) {
+    const exact = outputs.filter(output => output.name === input.name);
+    const similar = outputs.filter(output => normalize(output.name) === normalize(input.name));
+    const targetMatches = inputs.filter(other => normalize(other.name) === normalize(input.name));
+    const match = exact.length === 1 ? exact[0]
+      : similar.length === 1 && targetMatches.length === 1 ? similar[0] : null;
+    if (match) mappings.push({ from: match.name, to: input.name });
+  }
+  return mappings;
+}
+
 export function connectEdge(nodes, source, target) {
-  const from = nodes.find((n) => n.id === source);
-  const to = nodes.find((n) => n.id === target);
-  const outs = (from?.data?.outputs || []).map((o) => o.name);
-  const ins = new Set((to?.data?.inputs || []).map((i) => i.name));
-  const mappings = outs.filter((name) => ins.has(name)).map((name) => ({ from: name, to: name }));
-  return edgeToFlow({ source, target, mappings, control_only: mappings.length === 0 });
+  const from = nodes.find(n => n.id === source);
+  const to = nodes.find(n => n.id === target);
+  const mappings = suggestMappings(from?.data?.outputs, to?.data?.inputs);
+  return edgeToFlow({ source, target, mappings, control_only: false });
 }
 
 export function flowToGraph(graphMeta, nodes, edges) {

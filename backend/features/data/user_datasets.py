@@ -44,9 +44,37 @@ def save(item):
         temporary.replace(path)
 
 
+def field_types(item):
+    def kind(value):
+        if isinstance(value, bool): return 'bool'
+        if isinstance(value, int): return 'int'
+        if isinstance(value, float): return 'float'
+        if isinstance(value, list): return 'list'
+        if isinstance(value, dict): return 'dict'
+        return 'str'
+    result = {}
+    for field in item['fields']:
+        kinds = {kind(row[field]) for row in item['records'] if row.get(field) is not None}
+        result[field] = next(iter(kinds)) if len(kinds) == 1 else 'float' if kinds and kinds <= {'int', 'float'} else 'any'
+    return result
+
+
+def references(dataset_id):
+    from backend.api import graphs
+    uses = []
+    for path in graphs.GRAPHS_DIR.glob('*.json'):
+        graph = json.loads(path.read_text(encoding='utf-8'))
+        for node in graph.get('tasks', []):
+            if (node.get('source') or {}).get('dataset_id') == dataset_id:
+                uses.append({'graph_id': graph['id'], 'graph_name': graph.get('name', graph['id']), 'node': node['name']})
+    return uses
+
+
 def public(item, preview=False):
     result = {k: v for k, v in item.items() if k != "records"}
+    result['field_types'] = field_types(item)
     if preview:
+        result['used_by'] = references(item['id'])
         # Keep the preview small even if one row contains an entire document.
         result["preview"] = [{k: (str(v)[:500] + "…" if len(str(v)) > 500 else v)
                               for k, v in row.items()} for row in item["records"][:5]]
@@ -107,6 +135,33 @@ def parse(filename, content):
     return records, fields
 
 
+def convert_value(value, kind):
+    if value is None or (value == '' and kind != 'str'):
+        return None
+    if kind == 'str': return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    if kind == 'any': return value
+    if kind == 'bool':
+        if isinstance(value, bool): return value
+        if isinstance(value, str) and value.lower() in ('true', 'false'): return value.lower() == 'true'
+        raise ValueError('expected true or false')
+    if kind in ('int', 'float'):
+        import math
+        if isinstance(value, bool): raise ValueError('boolean is not a number')
+        number = float(value)
+        if not math.isfinite(number): raise ValueError('expected a finite number')
+        if kind == 'int':
+            if isinstance(value, int): return value
+            if isinstance(value, str) and re.fullmatch(r'[+-]?\d+', value.strip()): return int(value)
+            if not number.is_integer(): raise ValueError('expected a whole number')
+            return int(number)
+        return number
+    if kind in ('list', 'dict'):
+        result = json.loads(value) if isinstance(value, str) else value
+        if not isinstance(result, list if kind == 'list' else dict): raise ValueError('unexpected JSON type')
+        return result
+    raise ValueError('unknown column type')
+
+
 def records(config):
     item = load(config.get("dataset_id"))
     mapping = config.get("field_mapping") or {f: f for f in item["fields"]}
@@ -122,7 +177,18 @@ def records(config):
     if limit < 0:
         raise SourceError("Record limit cannot be negative. Use 0 for all records.")
     rows = item["records"][:limit] if limit else item["records"]
-    mapped = [{target: row.get(source) for source, target in mapping.items()} for row in rows]
+    overrides = config.get('column_types') or {}
+    if not isinstance(overrides, dict) or any(key not in item['fields'] or kind not in ('str', 'int', 'float', 'bool', 'list', 'dict', 'any') for key, kind in overrides.items()):
+        raise SourceError('Column types must refer to existing fields and supported types.')
+    mapped = []
+    for index, row in enumerate(rows, 1):
+        out = {}
+        for source, target in mapping.items():
+            try:
+                out[target] = convert_value(row.get(source), overrides[source]) if source in overrides else row.get(source)
+            except (ValueError, TypeError, OverflowError) as exc:
+                raise SourceError(f"Record {index}, column '{source}': cannot convert to {overrides[source]} ({exc}).") from None
+        mapped.append(out)
     mode = config.get("input_mode", "records")
     if mode == "reference":
         field = config.get("reference_field", "obligor_list")
@@ -192,6 +258,10 @@ def delete_dataset(dataset_id: str):
     try:
         with _lock:
             load(dataset_id)
+            used_by = references(dataset_id)
+            if used_by:
+                names = ', '.join(f"{r['graph_name']} / {r['node']}" for r in used_by)
+                raise HTTPException(409, f'Dataset is in use by: {names}. Detach it from these Inputs and save the workflows before deleting.')
             path_for(dataset_id).unlink()
         return {"deleted": dataset_id}
     except SourceError as exc:

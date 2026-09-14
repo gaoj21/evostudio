@@ -35,6 +35,7 @@ import ToolNode from './features/canvas/ToolNode.jsx';
 import Palette from './features/library/Palette.jsx';
 import ToolsPanel from './features/library/ToolsPanel.jsx';
 import Inspector from './features/canvas/Inspector.jsx';
+import ConnectionEditor from './features/canvas/ConnectionEditor.jsx';
 import { memorySiblings } from './features/memory/MemorySettings.jsx';
 import RunDialog from './features/execution/RunDialog.jsx';
 import MemoryNode from './features/memory/MemoryNode.jsx';
@@ -182,6 +183,8 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
     toggleLibrary,
   } = useStudioNavigation(layout);
   const [dirty, setDirty] = useState(false);
+  const [editingConnection, setEditingConnection] = useState(null);
+  useEffect(() => setEditingConnection(null), [graph?.id]);
   const [confirmState, setConfirmState] = useState(null);
   // Serialisation of the last saved/loaded state. Comparing against it beats a
   // "touched" flag: undoing back to the saved state correctly reports clean.
@@ -289,8 +292,18 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
   const HISTORY_LIMIT = 60;
   const SETTLE_MS = 350;
 
+  const historyTimer = useRef(null);
+  const snapshot = (meta, n, e) => ({ scope: meta?.id, nodes: n, edges: e, agents: canvasAgents.loaded ? canvasAgents.agents : undefined, meta: {
+    name: meta?.name, goal: meta?.goal, output_dir: meta?.output_dir,
+    preprocess: meta?.preprocess, memory_resources: meta?.memory_resources || [],
+    memory_positions: meta?.memory_positions || {},
+  } });
+  const fingerprint = value => JSON.stringify({graph: flowToGraph(value.meta, value.nodes, value.edges), agents: value.agents});
+  const currentSnapshot = useRef(null);
+  currentSnapshot.current = snapshot(graph, nodes, edges);
   const resetHistory = useCallback((n, e, meta) => {
-    history.current = { past: [], future: [], last: { nodes: n, edges: e, resources: meta?.memory_resources, positions: meta?.memory_positions }, suppress: false };
+    clearTimeout(historyTimer.current);
+    history.current = { past: [], future: [], last: snapshot(meta, n, e), suppress: false };
   }, []);
 
   const markClean = useCallback((meta, n, e) => {
@@ -300,25 +313,22 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
 
   useEffect(() => {
     const h = history.current;
-    if (h.suppress) {
+    const current = currentSnapshot.current;
+    if (h.suppress || !h.last) {
       h.suppress = false;
-      h.last = { nodes, edges, resources: graph?.memory_resources, positions: graph?.memory_positions };
+      h.last = current;
       return undefined;
     }
-    if (h.last === null) {
-      h.last = { nodes, edges, resources: graph?.memory_resources, positions: graph?.memory_positions };
-      return undefined;
-    }
-    if (h.last.nodes === nodes && h.last.edges === edges && h.last.resources === graph?.memory_resources && h.last.positions === graph?.memory_positions) return undefined;
-    const previous = h.last;
-    const timer = setTimeout(() => {
-      h.past.push(previous);
+    if (h.last.agents === undefined && current.agents !== undefined) h.last = {...h.last, agents: current.agents};
+    if (fingerprint(h.last) === fingerprint(current)) return undefined;
+    historyTimer.current = setTimeout(() => {
+      h.past.push(h.last);
       if (h.past.length > HISTORY_LIMIT) h.past.shift();
       h.future = [];
-      h.last = { nodes, edges, resources: graph?.memory_resources, positions: graph?.memory_positions };
+      h.last = current;
     }, SETTLE_MS);
-    return () => clearTimeout(timer);
-  }, [nodes, edges, graph?.memory_resources, graph?.memory_positions]);
+    return () => clearTimeout(historyTimer.current);
+  }, [nodes, edges, graph, canvasAgents.agents, canvasAgents.loaded]);
 
   useEffect(() => {
     if (!graph || cleanRef.current === null) return;
@@ -332,20 +342,39 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
     setDirty(current !== cleanRef.current);
   }, [graph, nodes, edges]);
 
+  const restoringCanvas = useRef(false);
   const restore = useCallback(
-    (from, to) => {
+    async (from, to) => {
+      if (restoringCanvas.current) return;
       const h = history.current;
+      clearTimeout(historyTimer.current);
+      // Flush an edit immediately: undo must work before the debounce expires.
+      const current = currentSnapshot.current;
+      if (h.last && fingerprint(current) !== fingerprint(h.last)) {
+        h.past.push(h.last);
+        h.future = [];
+        h.last = current;
+      }
       if (!h[from].length) return;
+      const saved = h[from][h[from].length - 1];
+      if (saved.agents !== undefined && JSON.stringify(saved.agents) !== JSON.stringify(current.agents)) {
+        restoringCanvas.current = true;
+        try { await canvasAgents.restore(saved.agents); }
+        catch (error) { setErrors(extractErrors(error)); return; }
+        finally { restoringCanvas.current = false; }
+      }
+      if (graphRef.current?.id !== current.scope) return;
       h[to].push(h.last);
-      const snapshot = h[from].pop();
+      h[from].pop();
       h.suppress = true;
-      h.last = snapshot;
-      setNodes(snapshot.nodes);
-      setEdges(snapshot.edges);
-      setGraph(g => ({ ...g, memory_resources: snapshot.resources || [], memory_positions: snapshot.positions || {} }));
+      h.last = saved;
+      setNodes(saved.nodes);
+      setEdges(saved.edges);
+      setGraph(g => ({ ...g, ...saved.meta }));
+      setEditingConnection(null);
       setSelectedId(null);
     },
-    [setNodes, setEdges]
+    [setNodes, setEdges, canvasAgents.restore]
   );
 
   const undo = useCallback(() => restore('past', 'future'), [restore]);
@@ -553,10 +582,19 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
         return;
       }
       const id = `e:${conn.source}->${conn.target}`;
-      setEdges((eds) => (eds.some((e) => e.id === id)
-        ? eds : [...eds, connectEdge(nodesRef.current, conn.source, conn.target)]));
+      const existing = edges.find(e => e.id === id);
+      const edge = existing || connectEdge(nodesRef.current, conn.source, conn.target);
+      const conflicts = (edge.data?.mappings || []).some(m => edges.some(other =>
+        other.id !== id && other.target === edge.target && !other.data?.control_only
+        && other.data?.mappings?.some(binding => binding.to === m.to)));
+      if (existing || !edge.data.mappings.length || conflicts) {
+        setEditingConnection({ edge, graphId: graph?.id });
+      } else {
+        setEdges(eds => [...eds, edge]);
+        setErrors(null);
+      }
     },
-    [setEdges, setNodes, graph?.memory_resources, keepMemoryResources]
+    [setEdges, setNodes, edges, graph?.id, graph?.memory_resources, keepMemoryResources]
   );
 
   // Inspector navigation is driven only by user navigation, never React Flow's
@@ -1288,6 +1326,19 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
           ◀
         </button>
       )}
+      {!runMode && editingConnection?.graphId === graph?.id && editingConnection && <ConnectionEditor
+        key={`${graph?.id}:${editingConnection.edge.id}`}
+        edge={editingConnection.edge} nodes={nodes} edges={edges}
+        onClose={() => setEditingConnection(null)}
+        onDelete={edges.some(e => e.id === editingConnection.edge.id) ? () => {
+          setEdges(current => current.filter(e => e.id !== editingConnection.edge.id));
+          setEditingConnection(null);
+        } : undefined}
+        onSave={edge => {
+          setEdges(current => [...current.filter(e => e.id !== edge.id), edge]);
+          setEditingConnection(null); setErrors(null);
+        }}
+      />}
       <ReactFlow
         nodes={canvasNodes}
         edges={[...displayEdges, ...chatEdges]}
@@ -1297,6 +1348,10 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
         onConnect={runMode ? undefined : connectCanvas}
         onNodeContextMenu={(e, node) => { e.preventDefault(); setCanvasMenu({ x: e.clientX, y: e.clientY, task: { name: node.data.title || node.id }, node }); }}
         onEdgeContextMenu={(e, edge) => { e.preventDefault(); setCanvasMenu({ x: e.clientX, y: e.clientY, task: { name: edge.label || 'Connection' }, edge }); }}
+        onEdgeClick={(_event, edge) => {
+          if (!runMode && edges.some(e => e.id === edge.id))
+            setEditingConnection({ edge, graphId: graph?.id });
+        }}
         onNodeClick={openNodeInspector}
         onNodeDragStop={(_event, node) => {
           if (isChatNode(node.id)) {

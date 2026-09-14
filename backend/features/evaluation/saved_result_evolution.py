@@ -64,6 +64,16 @@ def resolve(graph_id, body):
 
 
 
+def default_metric(source):
+    origin = source.get('origin') or {}
+    return 'credit_risk' if origin.get('type') == 'credit_risk' or source.get('dataset') else 'exact_match'
+
+
+def _bounded_evidence(value, budget=12000):
+    text = json.dumps(value, ensure_ascii=False, default=str)
+    return value if len(text) <= budget else {'truncated': True, 'text': text[:budget]}
+
+
 def evaluate(records, metric, source):
     from backend.api import evaluation, evaluation_report, datasets
     scored = {}
@@ -106,7 +116,7 @@ def propose(graph, records, chosen, llm):
     ordered = sorted(records, key=lambda r: r.get('status') == 'success')
     budget = 48000
     for r in ordered:
-        entry = {'run_id': r['run_id'], 'company': r['inputs'].get('company'), 'as_of': r['inputs'].get('as_of'),
+        entry = {'run_id': r['run_id'], 'inputs': _bounded_evidence(r.get('inputs', {})),
                  'status': r['status'], 'error': r.get('error'), 'label': r.get('label'),
                  'prediction': str(r.get('prediction'))[:2000],
                  'steps': [{'name': n['name'], 'status': n['status'], 'output': str(n.get('output'))[:1200]}

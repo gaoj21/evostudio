@@ -167,6 +167,10 @@ async def import_graph(file: UploadFile):
         "name": created["name"],
         "goal": graph.get("goal") or "",
         "output_dir": graph.get("output_dir") or "runs",
+        "flow_version": graph.get("flow_version", 0),
+        "preprocess": graph.get("preprocess"),
+        "memory_resources": graph.get("memory_resources", []),
+        "memory_positions": graph.get("memory_positions", {}),
         "tasks": graph.get("tasks") or [],
         "edges": graph.get("edges") or [],
     }
@@ -176,8 +180,29 @@ async def import_graph(file: UploadFile):
         graph_store.delete_graph(created["id"])
         raise HTTPException(status_code=422, detail=[str(x) for x in e.errors])
 
+    # Imported definitions keep their contracts. Missing private resources are
+    # reported rather than silently removed or borrowed from another project.
+    from backend.features.data import user_datasets
+    from backend.api import mem0_service
+    missing = []
+    for node in saved.get('tasks', []):
+        config = node.get('source') or {}
+        if config.get('type') == 'user_dataset':
+            try:
+                user_datasets.load(config.get('dataset_id'))
+            except user_datasets.SourceError as exc:
+                missing.append(f"Input '{node['name']}': {exc}")
+    for resource in saved.get('memory_resources', []):
+        try:
+            mem0_service.get_space(saved, resource.get('space_id'))
+        except ValueError:
+            missing.append(f"Memory '{resource.get('name', resource.get('space_id'))}': reconnect a space accessible to the imported task.")
+    if saved.get('preprocess') and saved['preprocess'] not in {t['name'] for t in custom_tools.list_custom_tools()}:
+        missing.append(f"Preprocessor '{saved['preprocess']}' is not installed.")
+    notes.extend(missing)
     return {
         **saved,
+        "missing_dependencies": missing,
         "imported_tools": installed_tools,
         "imported_skills": installed_skills,
         "notes": notes,

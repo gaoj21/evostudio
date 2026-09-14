@@ -9,11 +9,12 @@ export function useCanvasAgents(graphId, reportError) {
   currentGraph.current = graphId;
   const adding = useRef(false);
   const [agents, setAgents] = useState([]);
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let active = true;
-    setAgents([]);
-    if (graphId && api.canvasAgents) api.canvasAgents(graphId).then(r => { if (active) setAgents(r.agents); }).catch(e => { if (active) reportError(e); });
+    setAgents([]); setLoaded(false);
+    if (graphId && api.canvasAgents) api.canvasAgents(graphId).then(r => { if (active) { setAgents(r.agents); setLoaded(true); } }).catch(e => { if (active) reportError(e); });
     return () => { active = false; };
   }, [graphId, reportError]);
   const latest = useRef(agents);
@@ -40,6 +41,12 @@ export function useCanvasAgents(graphId, reportError) {
     pending.finally(() => { setPendingSaves(counts => ({ ...counts, [queueKey]: Math.max(0, (counts[queueKey] || 1) - 1) })); if (saves.current.get(queueKey) === pending) saves.current.delete(queueKey); }).catch(() => {});
     return pending;
   }, [graphId]);
+  const restore = useCallback(async agents => {
+    await Promise.all([...saves.current.values()]);
+    if (currentGraph.current !== graphId) throw new Error('Task changed before restoring canvas');
+    const result = await api.restoreCanvasAgents(graphId, agents);
+    if (currentGraph.current === graphId) { latest.current = result.agents; setAgents(result.agents); }
+  }, [graphId]);
   const remove = useCallback(async id => {
     await api.removeCanvasAgent(graphId, id);
     if (currentGraph.current === graphId) setAgents(list => list.filter(a => a.id !== id));
@@ -59,5 +66,5 @@ export function useCanvasAgents(graphId, reportError) {
     ...(m.read ? [{ id: `chat-read:${a.id}:${memoryId(m)}`, source: memoryId(m), target: chatNodeId(a.id), sourceHandle: m.read_source_handle || 's-out', targetHandle: m.read_target_handle || 'in', label: 'reads', data: { chatAgent: a.id, agent: chatNodeId(a.id), resource: memoryId(m), memory: 'read', space: memoryId(m), direction: 'read' } }] : []),
     ...(m.write ? [{ id: `chat-write:${a.id}:${memoryId(m)}`, source: chatNodeId(a.id), target: memoryId(m), sourceHandle: m.write_source_handle || 'out', targetHandle: m.write_target_handle || 's-in', label: 'writes', data: { chatAgent: a.id, agent: chatNodeId(a.id), resource: memoryId(m), memory: 'write', space: memoryId(m), direction: 'write' } }] : []),
   ])), [agents]);
-  return { agents, nodes, edges, add, save, remove, busy, setAgents, isSaving: id => !!pendingSaves[`${graphId}:${id}`] };
+  return { agents, loaded, nodes, edges, add, save, remove, restore, busy, setAgents, isSaving: id => !!pendingSaves[`${graphId}:${id}`] };
 }

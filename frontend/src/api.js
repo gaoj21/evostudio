@@ -29,6 +29,7 @@ export const api = {
   stopAssistant: (g, id) => req(`/api/graphs/${encodeURIComponent(g)}/assistant/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
   stopChatJob: (g, id) => req(`/api/graphs/${encodeURIComponent(g)}/chat/jobs/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
   chatMemoryResources: g => req(`${agentPath(g)}/memory-resources`),
+  restoreCanvasAgents: (id, agents) => req(`/api/graphs/${encodeURIComponent(id)}/agents/restore-canvas`, { method: 'POST', body: { agents } }),
   canvasAgents: g => req(agentPath(g)),
   createCanvasAgent: (g, body) => req(agentPath(g), { method: 'POST', body }),
   removeCanvasAgent: (g, a) => req(agentPath(g, a), { method: 'DELETE' }),

@@ -46,3 +46,5 @@ Run → Batch → Model execution → SafeChain / native batch API，设置 API 
 - `tests/studio/test_provider_batch.py`：合批上限、尾批、取消、错误、隔离、工具消息以及框架重建后实际执行路径。
 
 本地验证使用模拟的公开 batch 函数，不调用公司服务。公司环境仍需通过 SafeChain 日志确认真实原生请求，以及工具参数是否被入口支持。
+
+带工具的工作流现在会在批量运行前检查 batch 入口是否接受 tools 参数；不满足时立即提示使用 Standard 或完善公司适配，而不是等到节点执行时才失败。

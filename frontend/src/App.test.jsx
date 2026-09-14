@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   listSkills: vi.fn(async () => ({ skills: [] })),
   chatMemoryResources: vi.fn(),
   canvasAgents: vi.fn(),
+  restoreCanvasAgents: vi.fn(async (_id, agents) => ({agents})),
   createCanvasAgent: vi.fn(),
   updateCanvasAgent: vi.fn(),
   removeCanvasAgent: vi.fn(),
@@ -587,4 +588,49 @@ it('initializes Memory and late Chat ports without waiting for measurement event
   expect(memory.handles.find(h => h.id === 's-out-bottom')).toBeDefined();
   expect(state.canvas.edges.find(e => e.id.startsWith('chat-read:'))).toMatchObject({ sourceHandle: 's-out-bottom', targetHandle: 't-in' });
   expect(api.saveGraph).not.toHaveBeenCalled();
+});
+
+it('asks for a field mapping instead of adding an unmatched order-only edge', async () => {
+  api.getGraph.mockResolvedValue({ ...GRAPH, tasks: [
+    { name: 'extract', inputs: [], outputs: [{ name: 'result', type: 'str' }] },
+    { name: 'decide', inputs: [{ name: 'evidence', type: 'str' }], outputs: [] },
+  ], edges: [] });
+  render(<App initialGraphId="old-id" />);
+  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'decide')).toBe(true));
+  act(() => state.canvas.onConnect({ source: 'extract', target: 'decide' }));
+  expect(screen.getByRole('dialog', { name: 'Edit connection' })).toBeInTheDocument();
+  expect(state.canvas.edges.filter(e => e.source === 'extract')).toHaveLength(0);
+  fireEvent.change(screen.getByLabelText('Source output for evidence'), { target: { value: 'result' } });
+  fireEvent.click(screen.getByText('Save connection'));
+  await waitFor(() => expect(state.canvas.edges.find(e => e.source === 'extract').data).toMatchObject({
+    control_only: false, mappings: [{ from: 'result', to: 'evidence' }],
+  }));
+  act(() => state.canvas.onEdgeClick({}, state.canvas.edges.find(e => e.source === 'extract')));
+  expect(screen.getByRole('dialog', { name: 'Edit connection' })).toBeInTheDocument();
+  fireEvent.click(screen.getByText('Delete connection'));
+  await waitFor(() => expect(state.canvas.edges.filter(e => e.source === 'extract')).toHaveLength(0));
+});
+
+
+it('undoes a graph setting immediately and redoes it without waiting for debounce', async () => {
+  const { user } = await loadedApp();
+  await user.click(screen.getByText('Rename on canvas'));
+  expect(screen.getByTestId('dirty')).toHaveTextContent('dirty');
+  fireEvent.keyDown(window, {key:'z', ctrlKey:true});
+  await waitFor(() => expect(screen.getByTestId('dirty')).toHaveTextContent('clean'));
+  fireEvent.keyDown(window, {key:'z', ctrlKey:true, shiftKey:true});
+  await waitFor(() => expect(screen.getByTestId('dirty')).toHaveTextContent('dirty'));
+});
+
+it('undo restores an archived Chat node through the server without losing sessions', async () => {
+  const agent = {id:'a'.repeat(32),name:'Research',memories:[],x:0,y:0};
+  api.canvasAgents.mockResolvedValue({agents:[agent]});
+  api.removeCanvasAgent.mockResolvedValue({removed:true});
+  render(<App initialGraphId="old-id" />);
+  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === `chat:${agent.id}`)).toBe(true));
+  await act(async () => state.canvas.nodes.find(n => n.id === `chat:${agent.id}`).data.onDelete(`chat:${agent.id}`));
+  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === `chat:${agent.id}`)).toBe(false));
+  fireEvent.keyDown(window, {key:'z',ctrlKey:true});
+  await waitFor(() => expect(api.restoreCanvasAgents).toHaveBeenCalledWith('old-id',[agent]));
+  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === `chat:${agent.id}`)).toBe(true));
 });

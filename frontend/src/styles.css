@@ -3366,3 +3366,8 @@ button.run-badge:hover:not(:disabled) {
 .input-disclosure > summary { cursor: pointer; font-size: 12px; color: var(--text-2); padding: 3px 0 8px; }
 .input-disclosure[open] > summary { color: var(--text); }
 .input-actions { display: flex; gap: 8px; margin-top: 8px; }
+
+.connection-editor { width: min(640px, 92vw); max-height: 85vh; overflow-y: auto; }
+.connection-field { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(180px, 2fr); gap: 12px; align-items: center; margin: 12px 0; }
+.connection-field small { opacity: .65; }
+.connection-editor select { width: 100%; }

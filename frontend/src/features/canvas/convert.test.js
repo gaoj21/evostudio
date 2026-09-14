@@ -158,12 +158,12 @@ describe('edges carry what crosses them', () => {
     expect(e.data.control_only).toBe(false);
   });
 
-  it('an edge with nothing in common is control-only, and says so', () => {
+  it('an unmatched edge requires mapping instead of silently becoming order-only', () => {
     const { nodes } = graphToFlow({ name: 'g', goal: '',
       tasks: [task('a', [], ['x']), task('b', ['z'], [])], edges: [] });
     const e = connectEdge(nodes, 'a', 'b');
-    expect(e.data.control_only).toBe(true);
-    expect(e.label).toBe('order only');
+    expect(e.data.control_only).toBe(false);
+    expect(e.label).toBe('map fields');
   });
 
   it('mappings, control-only and enabled survive the round trip', () => {
@@ -284,4 +284,17 @@ it('preserves Deep Agents harness settings through the canvas round trip', () =>
   const graph = { id: 'harness', tasks: [{ name: 'research', inputs: [], outputs: [], harness: { engine: 'deepagents', max_steps: 8, timeout: 120 } }], edges: [] };
   const flow = graphToFlow(graph);
   expect(flowToGraph(graph, flow.nodes, flow.edges).tasks[0].harness).toEqual(graph.tasks[0].harness);
+});
+
+
+it('matches unique case and separator variants but preserves actual field names', () => {
+  const nodes = [{ id: 'a', data: { outputs: [{ name: 'Company Name' }] } },
+    { id: 'b', data: { inputs: [{ name: 'company_name' }] } }];
+  expect(connectEdge(nodes, 'a', 'b').data.mappings).toEqual([{ from: 'Company Name', to: 'company_name' }]);
+});
+
+it('does not guess when normalized names are ambiguous', () => {
+  const nodes = [{ id: 'a', data: { outputs: [{ name: 'company-name' }, { name: 'Company Name' }] } },
+    { id: 'b', data: { inputs: [{ name: 'company_name' }] } }];
+  expect(connectEdge(nodes, 'a', 'b').data.mappings).toEqual([]);
 });

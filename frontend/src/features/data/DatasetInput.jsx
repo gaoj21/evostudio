@@ -33,10 +33,10 @@ export default function DatasetInput({ config, onChange }) {
 
   const emit = (next, fields) => onChange(next, !next.dataset_id ? [] : next.input_mode === 'reference'
     ? [{name: next.reference_field || 'obligor_list', type: 'list', description: 'Shared reference records', required: false}]
-    : fields.map(field => ({ name: field, type: 'str', description: 'Dataset field', required: false })));
+    : fields.map(field => { const original = Object.entries(next.field_mapping || {}).find(([,target]) => target === field)?.[0] || field; return { name: field, type: next.column_types?.[original] || next.field_types?.[original] || selected?.field_types?.[original] || 'str', description: 'Dataset field', required: false }; }));
   const update = (item, mapping) => {
     const mapped = mapping || Object.fromEntries((item?.fields || []).map(f => [f, f]));
-    emit({ ...config, dataset_id: item?.id || '', field_mapping: mapped }, Object.values(mapped));
+    emit({ ...config, dataset_id: item?.id || '', field_mapping: mapped, field_types: item?.field_types || {}, column_types: item?.id === config.dataset_id ? config.column_types || {} : {} }, Object.values(mapped));
   };
 
   async function upload(file) {
@@ -122,20 +122,30 @@ export default function DatasetInput({ config, onChange }) {
             <label htmlFor={`dataset-field-${field}`}>{field} → output</label>
             <input id={`dataset-field-${field}`} value={mapping[field] ?? field} disabled={busy}
               onChange={e => update(selected, { ...mapping, [field]: e.target.value })} />
+            <label htmlFor={`dataset-type-${field}`}>Column type</label>
+            <select id={`dataset-type-${field}`} aria-label={`${field} type`} value={config.column_types?.[field] || ''}
+              onChange={e => { const column_types = {...config.column_types}; if (e.target.value) column_types[field] = e.target.value; else delete column_types[field]; emit({...config, column_types}, Object.values(mapping)); }}>
+              <option value="">Original ({selected.field_types?.[field] || 'str'})</option>
+              {['str', 'int', 'float', 'bool', 'list', 'dict'].map(type => <option key={type} value={type}>{type}</option>)}
+            </select>
           </div>)}
+          <p className="muted small">Conversions apply to this Input only. Empty values become null for non-text types; invalid values stop the run with a row and column error.</p>
         </details>
       </details>
       <details className="input-disclosure"><summary>Manage dataset</summary>
+        <p className="muted small">This dataset is shared across tasks. Detaching only changes this Input.</p>
+        {!!selected.used_by?.length && <p className="muted small">Used by: {selected.used_by.map(use => `${use.graph_name} / ${use.node}`).join(', ')}</p>}
         <div className="field">
           <label htmlFor="dataset-name">Dataset name</label>
           <input id="dataset-name" maxLength={120} value={name} disabled={busy} onChange={e => setName(e.target.value)} />
           <div className="input-actions">
             <button type="button" disabled={busy || !name.trim() || name === selected.name} onClick={rename}>Rename</button>
+            <button type="button" disabled={busy} onClick={() => update(null)}>Detach from this Input</button>
             <button type="button" disabled={busy} onClick={() => setConfirmDelete(true)}>Delete dataset</button>
           </div>
         </div>
         {confirmDelete && <div role="alert">
-          <p>Delete “{selected.name}”? Other tasks using this dataset will need a new input. Existing run results are kept.</p>
+          <p>Delete “{selected.name}”? Deletion is blocked while a saved task still uses it. Detach it and save those tasks first. Existing run results are kept.</p>
           <button type="button" disabled={busy} onClick={remove}>Confirm delete</button>
           <button type="button" disabled={busy} onClick={() => setConfirmDelete(false)}>Cancel</button>
         </div>}

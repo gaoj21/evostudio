@@ -157,3 +157,11 @@ def test_workflow_runner_uses_batch_after_agent_reconstruction(monkeypatch):
     result = runner.get_run(run_id)
     assert result['status'] == 'success', result.get('error')
     assert calls and all(provider == 'safechain' for provider, _ in calls)
+
+
+def test_native_tool_capability_is_checked_before_creating_runs(monkeypatch):
+    import llm
+    monkeypatch.setattr(llm, 'batch', lambda provider, inputs: inputs, raising=False)
+    assert provider_batch.validate({'tasks':[]}, 4) == 4
+    with pytest.raises(ValueError, match='workflow uses tools'):
+        provider_batch.validate({'tasks':[{'harness':{'engine':'deepagents'}}]}, 4)

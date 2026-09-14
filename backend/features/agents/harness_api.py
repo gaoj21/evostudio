@@ -116,6 +116,38 @@ def create_agent(graph_id: str, body: AgentSettings):
     return agent
 
 
+class AgentSnapshot(AgentSettings):
+    id: str = Field(pattern=r'^[a-f0-9]{32}$')
+
+
+class CanvasSnapshot(BaseModel):
+    agents: list[AgentSnapshot] = Field(max_length=200)
+
+
+@router.post('/restore-canvas')
+def restore_canvas(graph_id: str, body: CanvasSnapshot):
+    """Restore definitions only; sessions/checkpoints are never rewound."""
+    scope = owner(graph_for(graph_id))
+    ids = [a.id for a in body.agents]
+    if len(set(ids)) != len(ids): raise HTTPException(422, 'Duplicate Agent ID')
+    with _lock, database() as db:
+        db.execute('BEGIN IMMEDIATE')
+        rows = db.execute("SELECT id, kind, body FROM objects WHERE owner=? AND kind IN ('agent','archived-agent')", (scope,)).fetchall()
+        known = {row[0]: row for row in rows}
+        if any(id not in known for id in ids): raise HTTPException(409, 'Canvas history contains an Agent unavailable in this task. Reload the task.')
+        sessions = db.execute("SELECT id FROM objects WHERE owner=? AND kind='session'", (scope,)).fetchall()
+        if any(row[0] in _running for row in sessions):
+            raise HTTPException(409, 'Stop running Chat sessions before restoring their canvas settings.')
+        for id, kind, raw in rows:
+            if kind == 'agent' and id not in ids:
+                put(db, id, scope, 'archived-agent', '', json.loads(raw))
+        for agent in body.agents:
+            # References can belong to the canvas draft being restored alongside
+            # this snapshot. The existing send-message preflight validates them.
+            put(db, agent.id, scope, 'agent', '', agent.model_dump())
+    return {'agents': [a.model_dump() for a in body.agents]}
+
+
 @router.put('/{agent_id}')
 def update_agent(graph_id: str, agent_id: str, body: AgentSettings):
     graph = graph_for(graph_id)

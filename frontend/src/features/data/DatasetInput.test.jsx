@@ -78,3 +78,19 @@ it('keeps advanced controls and dataset management collapsed until requested', a
   fireEvent.click(screen.getByText('Manage dataset'));
   expect(screen.getByLabelText('Dataset name')).toBeVisible();
 });
+
+
+it('keeps inferred JSON types and allows input-local CSV conversion', async () => {
+  api.listDatasets.mockResolvedValue({datasets:[{...item,field_types:{name:'int'}}]});
+  api.getDataset.mockResolvedValue({...item,field_types:{name:'int'}});
+  const change = vi.fn(); render(<Harness onChange={change} />);
+  await screen.findByText('Customers · 2 records');
+  fireEvent.change(screen.getByLabelText('My datasets'),{target:{value:'abc'}});
+  await screen.findByLabelText('name type');
+  expect(change).toHaveBeenLastCalledWith(expect.anything(),[expect.objectContaining({name:'name',type:'int'})]);
+  fireEvent.change(screen.getByLabelText('name type'),{target:{value:'str'}});
+  expect(change).toHaveBeenLastCalledWith(expect.objectContaining({column_types:{name:'str'}}),[expect.objectContaining({type:'str'})]);
+  fireEvent.click(screen.getByText('Detach from this Input'));
+  expect(api.deleteDataset).not.toHaveBeenCalled();
+  expect(change).toHaveBeenLastCalledWith(expect.objectContaining({dataset_id:''}),[]);
+});

@@ -600,8 +600,14 @@ async def preview_saved_evaluation(graph_id: str, request: Request):
     if body.get("source") not in ("saved_batch", "saved_run"):
         raise HTTPException(status_code=422, detail="Select saved results to preview.")
     try:
-        _, selection = saved.resolve(graph_id, body)
-        return selection
+        records, selection = saved.resolve(graph_id, body)
+        metric = body.get('metric') or saved.default_metric(selection)
+        if metric not in METRICS:
+            raise sources.SourceError('Choose an available metric.')
+        eligible = sum(r.get('status') == 'success' and r.get('label') is not None
+                       and (metric != 'credit_risk' or isinstance(r['label'], dict) and r['label'].get('type') in ('positive', 'negative')) for r in records)
+        return {**selection, 'suggested_metric': saved.default_metric(selection),
+                'scoring': {'scored': eligible, 'unscored': len(records) - eligible, 'total': len(records)}}
     except sources.SourceError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
@@ -641,7 +647,7 @@ async def start_evolve_task(graph_id: str, request: Request):
             if body.get("source") in ("saved_batch", "saved_run"):
                 from backend.api import saved_result_evolution as saved
                 records, source = saved.resolve(graph_id, body)
-                metric = body.get("metric") or "credit_risk"
+                metric = body.get("metric") or saved.default_metric(source)
                 if metric not in METRICS:
                     raise sources.SourceError("Choose an available metric.")
                 mode = body.get("mode", "evaluate")

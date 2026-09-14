@@ -30,7 +30,12 @@ def batch_function():
 def validate(graph, value):
     size = batch_size(value)
     if size is not None:
-        batch_function()
+        function = batch_function()
+        if any((t.get('harness') or {}).get('engine') == 'deepagents' or t.get('tool_names') for t in graph.get('tasks', [])):
+            try:
+                inspect.signature(function).bind(PROVIDER, [], tools=[])
+            except TypeError as exc:
+                raise ValueError('This workflow uses tools. Native batching requires llm.batch to accept tools; use Standard execution with the current adapter.') from exc
     return size
 
 
