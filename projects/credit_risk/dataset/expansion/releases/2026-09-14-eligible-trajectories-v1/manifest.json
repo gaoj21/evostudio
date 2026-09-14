@@ -1,0 +1,91 @@
+{
+  "version": "eligible-trajectories-1.0",
+  "parent_release": "2026-09-10-random-dev-test-v1",
+  "parent_manifest_sha256": "120d28b16629861ee92f03d0c62ec3cd59e6d7b219ff9498b5ad01e7e2c49720",
+  "case_count": 53,
+  "company_count": 53,
+  "observations": 648,
+  "document_references": 1006,
+  "unique_documents": 1006,
+  "cohorts": {
+    "legacy": 14,
+    "recovered_cache": 39
+  },
+  "reviewed_event_types": {
+    "chapter_11": 44,
+    "chapter_7": 8,
+    "canadian_bankruptcy_assignment": 1
+  },
+  "representation_counts": {
+    "cached_article": 376,
+    "headline_only": 305,
+    "cached_filing_body": 324,
+    "assistant_paraphrase_of_primary_source": 1
+  },
+  "primary_summary_documents": 1,
+  "sector_company_counts": {
+    "manufacturing": 26,
+    "transport_communications_utilities": 4,
+    "mining_oil_gas": 2,
+    "services": 10,
+    "retail": 5,
+    "finance_insurance_real_estate": 6
+  },
+  "distinct_sic_codes": 36,
+  "unreviewed_sectors": 0,
+  "partition_counts": {
+    "test": 23,
+    "dev": 30
+  },
+  "splits": {
+    "dev": {
+      "companies": 30,
+      "cases": 30,
+      "observations": 397
+    },
+    "test": {
+      "companies": 23,
+      "cases": 23,
+      "observations": 251
+    }
+  },
+  "split_rule": "Keep original dev/test membership after eligibility filtering; no resampling. Not an exact 60/40 split.",
+  "eligibility": {
+    "rule": "event_verified; chapter_11/chapter_7/canadian_bankruptcy_assignment; registrant scope; event_date > window.end",
+    "source_cases": 107,
+    "retained_cases": 53,
+    "removed_cases": 54,
+    "positive_only": true,
+    "negative_cases": 0
+  },
+  "limitations": [
+    "Eligibility is not an exhaustive audit of evidence quality; sparse trajectories remain.",
+    "All included trajectories are positives under the current target definition. Overall accuracy and false-positive rate are not measurable.",
+    "No daily risk labels are supplied. Existing legacy gold/risk flags are not the selection rule."
+  ],
+  "builder_sha256": "a328fbb1f72df94de7dc5a04bb450581bb58c35ccb9fbe3a6c6733ab4d66dd0e",
+  "eligibility_code_sha256": "7a68da7a09349598dda8e2d10c19fba0d35857737d9bdffd61de82909b590b02",
+  "outputs": {
+    "backfill_queue.jsonl": "b6034af8292f032bd3f550c34305ea1c1a642e228c54eba3ad4d31c5d075346f",
+    "body_quality_rules.json": "d4982ded0b07715760f9f92ac181c659f9ac97a5439f3e88e7324b59db339045",
+    "cases.jsonl": "647c347cf4f3e611cd59b8610f34fce7a6ca57835215df67ebca9833bccf9874",
+    "curated_observations.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "dev/cases.jsonl": "953f0a974774d53f2acfbc7b257bd621f3e354c98ccc0cc49b7aea6584daffe7",
+    "dev/observations.jsonl": "61a97f44878920f45a7c6f0d9228727e8e8c5407464ea7ac6ebd01414d568c20",
+    "dev/outcomes.jsonl": "778125adeaeb362fc6d7e3c4607ee11860d20a8c68493a6f29aa60daf7d9f64e",
+    "dev/partitions.jsonl": "e6beddcebd449bccf91022cdda2565555f3afe4f86fb83e5116569def48f042d",
+    "excluded_news.jsonl": "0381b310ab960f9d58203257acd12c16c1203a23ac6ccb07e8c3e4d5cb3feee6",
+    "industry_annotations.json": "341c90f6d42c7844ae545047a7e6e5e1f39145c586aa12e4abe3634f8a711ebc",
+    "inventory.jsonl": "3bac090f1a580e7d6563797df62709c905409eadba1a011c73b773ad59c87df1",
+    "obligors.csv": "08dbdaf2fed15499550a93919ea287f99067f7d73a0707f0de34d66054e13fc1",
+    "observations.jsonl": "35f7021f0331f448b85a201f292005bc1046ee7885bc2bf9bfbd7504ccaf56fd",
+    "outcome_audit.json": "5df985f4df4b990666b43ef91a64baf37be9c3b1cc99f9ea7747f1bb559cd6c8",
+    "outcomes.jsonl": "8a98f3e30a6c3ac0a0a0bb93432903981839a285ca930b4d2f97c517c5c2dbc7",
+    "partitions.jsonl": "f972f0318cfc6e32079d0bc720a059bff66b72e893f29024b3332d23ca843002",
+    "test/cases.jsonl": "0e8a198ba0f15236715dbe517bfe6071d71706fd0f0f6fab57d8156b208df648",
+    "test/observations.jsonl": "03bb841f2a2e91124eacb38c2be3feca096db83f07feb209dde80c4e4e3c8fc2",
+    "test/outcomes.jsonl": "1cecae9df6bf991882f4e0ced2829d4ecdfea064071e3745b9f650d6a389766e",
+    "test/partitions.jsonl": "9222bda5decf16d04b1aa175dd18bd8a1391ae8a5b5bc6d4c5ba9c36061110e2",
+    "web_sources.json": "208deabda744b90aec9c86950e0aef6d656cee9b8b47c1a2542679b5cd5e1b7f"
+  }
+}

@@ -2,17 +2,17 @@ import json
 from pathlib import Path
 import pytest
 
-DATASET = '2026-09-10-random-dev-test-v1'
+DATASET = '2026-09-14-eligible-trajectories-v1'
 
 
 def test_catalog_and_feed_read_selected_split_without_outcomes():
     from backend.api import sources, datasets
     info = sources.credit_risk_info(DATASET)
-    assert info['splits'] == {'dev':64, 'test':43}
+    assert info['splits'] == {'dev':30, 'test':23}
     records = sources.credit_risk_records(dataset=DATASET, split='test', n=0)
-    assert len(records) == 707
-    assert len({r['sample_id'] for r in records}) == 43
-    assert len({r['cik'] for r in records}) == 40
+    assert len(records) == 251
+    assert len({r['sample_id'] for r in records}) == 23
+    assert len({r['cik'] for r in records}) == 23
     expected = {r['case_id'] for r in datasets.rows(datasets.ROOT / DATASET / 'test' / 'cases.jsonl')}
     assert {r['sample_id'] for r in records} == expected
     for r in records:
@@ -49,7 +49,7 @@ def test_endpoints_preserve_dataset_selection(tmp_path, monkeypatch):
     client=TestClient(app.app)
     response=client.post('/api/graphs/data-choice/run-batch/preview',json={'source':'canvas'})
     assert response.status_code==200, response.text
-    assert response.json()['total']==707
+    assert response.json()['total']==251
     assert response.json()['source']['dataset']==DATASET
     assert client.post('/api/graphs/data-choice/run-batch/preview',json={'source':'canvas','metric':'credit_risk'}).status_code==422
     captured=[]
@@ -78,7 +78,7 @@ def test_release_window_steps_preserve_all_evidence_without_future_data():
             assert all(d['date'] <= r['as_of'] for d in sample['news'])
             assert all(d['filing_date'] <= r['as_of'] for d in sample['filings'])
         assert all(dates == sorted(dates) for dates in by_case.values())
-    assert counts['none'] == 43
+    assert counts['none'] == 23
     assert counts['none'] <= counts['monthly'] <= len(daily)
     assert counts['none'] <= counts['weekly'] <= len(daily)
 
@@ -107,3 +107,27 @@ def test_discovery_omits_missing_legacy_data_and_defaults_to_available_release(t
     schema = source_apis.all_source_types()['credit_risk']['config'][0]
     assert schema['default'] == DATASET
     assert 'contemporary' not in schema['options']
+
+
+def test_active_release_contains_only_current_eligible_cases_and_consistent_files():
+    from backend.api import datasets
+    import csv, hashlib
+    path = datasets.ROOT / DATASET
+    cases = datasets.rows(path/'cases.jsonl')
+    by_id = {r['case_id']:r for r in cases}
+    assert len(by_id) == 53
+    outcomes = datasets.rows(path/'outcomes.jsonl')
+    assert {r['case_id'] for r in outcomes} == set(by_id)
+    assert all(datasets.label_for(r,by_id[r['case_id']]) is not None for r in outcomes)
+    assert len(datasets.rows(path/'observations.jsonl')) == 648
+    for name in ('cases','observations','outcomes','partitions'):
+        original = datasets.rows(path/(name+'.jsonl'))
+        combined = [r for split in ('dev','test') for r in datasets.rows(path/split/(name+'.jsonl'))]
+        assert sorted(map(lambda r:json.dumps(r,sort_keys=True),original)) == sorted(map(lambda r:json.dumps(r,sort_keys=True),combined))
+    with (path/'obligors.csv').open() as file:
+        assert {r['cik'] for r in csv.DictReader(file)} == {str(r['company']['cik']) for r in cases}
+    manifest=json.loads((path/'manifest.json').read_text())
+    assert manifest['eligibility']['removed_cases'] == 54
+    assert manifest['eligibility']['positive_only'] is True
+    for rel,digest in manifest['outputs'].items():
+        assert hashlib.sha256((path/rel).read_bytes()).hexdigest() == digest

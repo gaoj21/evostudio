@@ -1,0 +1,2091 @@
+{
+  "searched_at": "2026-09-09",
+  "method": "Codex Web Search; SEC source discovery; CIK path match is an entity candidate, not content or publication-date verification. Shareholder filings may live under the issuer CIK.",
+  "company_count": 53,
+  "source_count": 214,
+  "coverage": [
+    {
+      "cik": "1656634",
+      "name": "Gritstone bio, Inc.",
+      "symbol": "GRTSQ",
+      "query_name": "Gritstone bio",
+      "query": "\"Gritstone bio, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 6,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1828852",
+      "name": "Mondee Holdings, Inc.",
+      "symbol": "MOND",
+      "query_name": "Mondee",
+      "query": "\"Mondee Holdings, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 2,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1537028",
+      "name": "Independence Contract Drilling, Inc.",
+      "symbol": "ICDIQ",
+      "query_name": "Independence Contract",
+      "query": "\"Independence Contract Drilling, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 5,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1886799",
+      "name": "Bright Green Corp",
+      "symbol": "BGXX",
+      "query_name": "Bright Green",
+      "query": "\"Bright Green Corp\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 1,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1813914",
+      "name": "CareMax, Inc.",
+      "symbol": "CMAXQ",
+      "query_name": "CareMax",
+      "query": "\"CareMax, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 1,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1723580",
+      "name": "BurgerFi International, Inc.",
+      "symbol": null,
+      "query_name": "BurgerFi",
+      "query": "\"BurgerFi International, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 5,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1850838",
+      "name": "Omega Therapeutics, Inc.",
+      "symbol": "OMGA",
+      "query_name": "Omega Therapeutics",
+      "query": "\"Omega Therapeutics, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 8,
+      "retry_query": "\"Omega Therapeutics\" site:sec.gov/Archives/edgar/data/1850838/",
+      "final_retry_query": null
+    },
+    {
+      "cik": "1498710",
+      "name": "Spirit Airlines, Inc.",
+      "symbol": "SAVEQ",
+      "query_name": "Spirit Airlines",
+      "query": "\"Spirit Airlines, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 12,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1098880",
+      "name": "IntelGenx Technologies Corp.",
+      "symbol": null,
+      "query_name": "IntelGenx Technologies",
+      "query": "\"IntelGenx Technologies Corp.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 4,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1162461",
+      "name": "CUTERA INC",
+      "symbol": "CUTR",
+      "query_name": "CUTERA",
+      "query": "\"CUTERA INC\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 7,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "933738",
+      "name": "ENGLOBAL CORP",
+      "symbol": "ENGC",
+      "query_name": "ENGLOBAL",
+      "query": "\"ENGLOBAL CORP\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 1,
+      "retry_query": "\"ENGLOBAL\" site:sec.gov/Archives/edgar/data/933738/",
+      "final_retry_query": "ENGLOBAL 933738 2024 2025 SEC"
+    },
+    {
+      "cik": "1101680",
+      "name": "DZS INC.",
+      "symbol": "DZSI",
+      "query_name": "DZS",
+      "query": "\"DZS INC.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 1,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1559998",
+      "name": "Gaucho Group Holdings, Inc.",
+      "symbol": "VINOQ",
+      "query_name": "Gaucho",
+      "query": "\"Gaucho Group Holdings, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 2,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1779020",
+      "name": "Danimer Scientific, Inc.",
+      "symbol": "DNMR",
+      "query_name": "Danimer",
+      "query": "\"Danimer Scientific, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 1,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1792581",
+      "name": "Kiromic Biopharma, Inc.",
+      "symbol": "KRBP",
+      "query_name": "Kiromic Biopharma",
+      "query": "\"Kiromic Biopharma, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 2,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1830210",
+      "name": "Benson Hill, Inc.",
+      "symbol": "BHIL",
+      "query_name": "Benson Hill",
+      "query": "\"Benson Hill, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 4,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "748790",
+      "name": "Global Clean Energy Holdings, Inc.",
+      "symbol": "GCEH",
+      "query_name": "Global Clean",
+      "query": "\"Global Clean Energy Holdings, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 6,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1183765",
+      "name": "Molecular Templates, Inc.",
+      "symbol": null,
+      "query_name": "Molecular Templates",
+      "query": "\"Molecular Templates, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 2,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "105319",
+      "name": "WW INTERNATIONAL, INC.",
+      "symbol": "WW",
+      "query_name": "WeightWatchers",
+      "query": "\"WW INTERNATIONAL, INC.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 10,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "727207",
+      "name": "Accelerate Diagnostics, Inc",
+      "symbol": "AXDX",
+      "query_name": "Accelerate Diagnostics",
+      "query": "\"Accelerate Diagnostics, Inc\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 3,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1537561",
+      "name": "Arch Therapeutics, Inc.",
+      "symbol": null,
+      "query_name": "Arch Therapeutics",
+      "query": "\"Arch Therapeutics, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 1,
+      "retry_query": "\"Arch Therapeutics\" site:sec.gov/Archives/edgar/data/1537561/",
+      "final_retry_query": null
+    },
+    {
+      "cik": "1906133",
+      "name": "iCoreConnect Inc.",
+      "symbol": "ICCT",
+      "query_name": "iCoreConnect",
+      "query": "\"iCoreConnect Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 1,
+      "retry_query": "\"iCoreConnect\" site:sec.gov/Archives/edgar/data/1906133/",
+      "final_retry_query": null
+    },
+    {
+      "cik": "1783875",
+      "name": "4Front Ventures Corp.",
+      "symbol": "FFNTF",
+      "query_name": "4Front Ventures",
+      "query": "\"4Front Ventures Corp.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 1,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1389002",
+      "name": "MARIN SOFTWARE INC",
+      "symbol": "MRIN",
+      "query_name": "MARIN SOFTWARE",
+      "query": "\"MARIN SOFTWARE INC\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 3,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1842356",
+      "name": "Wag! Group Co.",
+      "symbol": "PET",
+      "query_name": "Wag!",
+      "query": "\"Wag! Group Co.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 5,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1455684",
+      "name": "TPI COMPOSITES, INC",
+      "symbol": "TPIC",
+      "query_name": "TPI COMPOSITES",
+      "query": "\"TPI COMPOSITES, INC\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 2,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1220754",
+      "name": "ModivCare Inc",
+      "symbol": "MODV",
+      "query_name": "ModivCare",
+      "query": "\"ModivCare Inc\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 8,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1893311",
+      "name": "LUXURBAN HOTELS INC.",
+      "symbol": null,
+      "query_name": "LUXURBAN HOTELS",
+      "query": "\"LUXURBAN HOTELS INC.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 2,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1643988",
+      "name": "Loop Media, Inc.",
+      "symbol": "LPTV",
+      "query_name": "Loop Media",
+      "query": "\"Loop Media, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 3,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "768835",
+      "name": "FORMER BL STORES INC",
+      "symbol": null,
+      "query_name": "FORMER BL",
+      "query": "\"FORMER BL STORES INC\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 1,
+      "retry_query": "\"FORMER BL\" site:sec.gov/Archives/edgar/data/768835/",
+      "final_retry_query": null
+    },
+    {
+      "cik": "1456772",
+      "name": "OFFICE PROPERTIES INCOME TRUST",
+      "symbol": "OPI",
+      "query_name": "OFFICE PROPERTIES",
+      "query": "\"OFFICE PROPERTIES INCOME TRUST\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 13,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1819395",
+      "name": "Sonder Holdings Inc.",
+      "symbol": "SOND",
+      "query_name": "Sonder",
+      "query": "\"Sonder Holdings Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 1,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1539029",
+      "name": "Clearside Biomedical, Inc.",
+      "symbol": "CLSD",
+      "query_name": "Clearside Biomedical",
+      "query": "\"Clearside Biomedical, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 9,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1159167",
+      "name": "IROBOT CORP",
+      "symbol": "IRBT",
+      "query_name": "iRobot",
+      "query": "\"IROBOT CORP\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 3,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1758057",
+      "name": "Luminar Technologies, Inc./DE",
+      "symbol": "LAZR",
+      "query_name": "Luminar",
+      "query": "\"Luminar Technologies, Inc./DE\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 6,
+      "retry_query": "\"Luminar\" site:sec.gov/Archives/edgar/data/1758057/",
+      "final_retry_query": null
+    },
+    {
+      "cik": "846475",
+      "name": "ZYNEX INC",
+      "symbol": "ZYXI",
+      "query_name": "ZYNEX",
+      "query": "\"ZYNEX INC\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 3,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "720875",
+      "name": "DYNATRONICS CORP",
+      "symbol": "DYNT",
+      "query_name": "DYNATRONICS",
+      "query": "\"DYNATRONICS CORP\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 5,
+      "retry_query": "\"DYNATRONICS\" site:sec.gov/Archives/edgar/data/720875/",
+      "final_retry_query": null
+    },
+    {
+      "cik": "2011954",
+      "name": "Twin Hospitality Group Inc.",
+      "symbol": "TWNP",
+      "query_name": "Twin Hospitality",
+      "query": "\"Twin Hospitality Group Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 4,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1705012",
+      "name": "FAT Brands Inc.",
+      "symbol": "FAT",
+      "query_name": "FAT Brands Inc.",
+      "query": "\"FAT Brands Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 7,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1532286",
+      "name": "Nine Energy Service, Inc.",
+      "symbol": "NINE",
+      "query_name": "Nine Energy",
+      "query": "\"Nine Energy Service, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 10,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1015155",
+      "name": "CHARLES & COLVARD LTD",
+      "symbol": null,
+      "query_name": "Charles & Colvard",
+      "query": "\"CHARLES & COLVARD LTD\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 2,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1058623",
+      "name": "CUMULUS MEDIA INC",
+      "symbol": "CMLS",
+      "query_name": "CUMULUS MEDIA",
+      "query": "\"CUMULUS MEDIA INC\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 3,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "764897",
+      "name": "Broad Street Realty, Inc.",
+      "symbol": "BRST",
+      "query_name": "Broad Street Realty",
+      "query": "\"Broad Street Realty, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 5,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1347242",
+      "name": "LIPELLA PHARMACEUTICALS INC.",
+      "symbol": "LIPO",
+      "query_name": "LIPELLA PHARMACEUTICALS",
+      "query": "\"LIPELLA PHARMACEUTICALS INC.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 2,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1865494",
+      "name": "IO Biotech, Inc.",
+      "symbol": "IOBT",
+      "query_name": "IO Biotech",
+      "query": "\"IO Biotech, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 6,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1355096",
+      "name": "QVC Group, Inc.",
+      "symbol": "QVCGA",
+      "query_name": "QVC",
+      "query": "\"QVC Group, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 3,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1817511",
+      "name": "SOCIETY PASS INCORPORATED.",
+      "symbol": "SOPA",
+      "query_name": "SOCIETY PASS",
+      "query": "\"SOCIETY PASS INCORPORATED.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 1,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1901799",
+      "name": "Bitcoin Depot Inc.",
+      "symbol": "BTM",
+      "query_name": "Bitcoin Depot",
+      "query": "\"Bitcoin Depot Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 2,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1519061",
+      "name": "Trinseo PLC",
+      "symbol": "TSEOF",
+      "query_name": "Trinseo",
+      "query": "\"Trinseo PLC\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 4,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "720154",
+      "name": "Inotiv, Inc.",
+      "symbol": "NOTV",
+      "query_name": "Inotiv",
+      "query": "\"Inotiv, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 6,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1808220",
+      "name": "GoHealth, Inc.",
+      "symbol": "GOCO",
+      "query_name": "GoHealth",
+      "query": "\"GoHealth, Inc.\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 3,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "827187",
+      "name": "Sleep Number Corp",
+      "symbol": "SNBR",
+      "query_name": "Sleep Number",
+      "query": "\"Sleep Number Corp\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 1,
+      "retry_query": null,
+      "final_retry_query": null
+    },
+    {
+      "cik": "1001233",
+      "name": "SANGAMO THERAPEUTICS, INC",
+      "symbol": "SGMO",
+      "query_name": "SANGAMO THERAPEUTICS",
+      "query": "\"SANGAMO THERAPEUTICS, INC\" liquidity debt restructuring 2024 2025 2026",
+      "searched_at": "2026-09-09",
+      "matched_source_count": 5,
+      "retry_query": null,
+      "final_retry_query": null
+    }
+  ],
+  "sources": [
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1656634/000119312525027252/d485459dex991.htm",
+      "cik": "1656634",
+      "discovery_batch": 0,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1656634/000119312524259815/d844835dex101.htm",
+      "cik": "1656634",
+      "discovery_batch": 0,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1656634/000119312524235637/d119736dex991.htm",
+      "cik": "1656634",
+      "discovery_batch": 0,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1828852/000182885225000010/pressreleasedatedjanuary14.htm",
+      "cik": "1828852",
+      "discovery_batch": 0,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1656634/000119312525073396/d916691dex991.htm",
+      "cik": "1656634",
+      "discovery_batch": 0,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1656634/000119312525035266/d736978dex991.htm",
+      "cik": "1656634",
+      "discovery_batch": 0,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "GRITSTONE BIO, INC_10K_2024_V1",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1656634/000114036124023062/ny20020522x3_ars.pdf",
+      "cik": "1656634",
+      "discovery_batch": 0,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "MONDEE HOLDINGS, INC. AND SUBSIDIARIES",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1828852/000182885224000061/mondee2023annualreport.pdf",
+      "cik": "1828852",
+      "discovery_batch": 0,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1537028/000153702824000057/icdi-20241127xex99d1.htm",
+      "cik": "1537028",
+      "discovery_batch": 1,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1537028/000153702824000057/icdi-20241127x8k.htm",
+      "cik": "1537028",
+      "discovery_batch": 1,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1537028/000153702824000057/icdi-20241127xex10d1.htm",
+      "cik": "1537028",
+      "discovery_batch": 1,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1537028/000095017025007978/xslSCHEDULE_13D_X01/primary_doc.xml",
+      "cik": "1537028",
+      "discovery_batch": 1,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1537028/000110465922035838/tm229263d1_ex10-7.htm",
+      "cik": "1537028",
+      "discovery_batch": 1,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Bright Green Corp DRS Letter.pdf",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1886799/000000000021013583/filename1.pdf",
+      "cik": "1886799",
+      "discovery_batch": 1,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "bfi-20240101",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1723580/000172358024000009/bfi-20240101.htm",
+      "cik": "1723580",
+      "discovery_batch": 2,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1723580/000110465925024589/tm259561d1_ex99-1.htm",
+      "cik": "1723580",
+      "discovery_batch": 2,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "bfi-20240401",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1723580/000172358024000025/bfi-20240401.htm",
+      "cik": "1723580",
+      "discovery_batch": 2,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "10-Q",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1813914/000095017024094897/cmax-20240630.htm",
+      "cik": "1813914",
+      "discovery_batch": 2,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1723580/000110465925010948/tm255917d1_8k.htm",
+      "cik": "1723580",
+      "discovery_batch": 2,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "UNITED STATES",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1723580/000119312523158959/d365698dars.pdf",
+      "cik": "1723580",
+      "discovery_batch": 2,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1498710/000095010324016405/dp220813_ex9901.htm",
+      "cik": "1498710",
+      "discovery_batch": 3,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "flyy-20251231",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1498710/000162828026018265/flyy-20251231.htm",
+      "cik": "1498710",
+      "discovery_batch": 3,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1498710/000095010325013149/dp235820_8k.htm",
+      "cik": "1498710",
+      "discovery_batch": 3,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "save-20241231",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1498710/000149871025000008/save-20241231.htm",
+      "cik": "1498710",
+      "discovery_batch": 3,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "save-20250630",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1498710/000149871025000037/save-20250630.htm",
+      "cik": "1498710",
+      "discovery_batch": 3,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1498710/000095010325003365/dp226079_ex1001.htm",
+      "cik": "1498710",
+      "discovery_batch": 3,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1498710/000095010324016405/dp220813_ex9902.htm",
+      "cik": "1498710",
+      "discovery_batch": 3,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1498710/000149871024000047/investorguidance11924.htm",
+      "cik": "1498710",
+      "discovery_batch": 3,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1498710/000095010325000578/dp223301_ex1002.htm",
+      "cik": "1498710",
+      "discovery_batch": 3,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1498710/000095010326003790/dp243147_ex1001.htm",
+      "cik": "1498710",
+      "discovery_batch": 3,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1162461/000119312525046217/d878024dex992.htm",
+      "cik": "1162461",
+      "discovery_batch": 4,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1098880/000106299324010823/exhibit99-1.htm",
+      "cik": "1098880",
+      "discovery_batch": 4,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "8-K",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1162461/000119312525046217/d878024d8k.htm",
+      "cik": "1162461",
+      "discovery_batch": 4,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1162461/000119312525046217/d878024dex101.htm",
+      "cik": "1162461",
+      "discovery_batch": 4,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1162461/000119312525046217/d878024dex991.htm",
+      "cik": "1162461",
+      "discovery_batch": 4,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "IntelGenx Technologies Corp.: Form 10-K - Filed by newsfilecorp.com",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1098880/000106299324006905/form10k.htm",
+      "cik": "1098880",
+      "discovery_batch": 4,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "IntelGenx Technologies Corp.: Form 10-Q - Filed by newsfilecorp.com",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1098880/000106299324010322/form10q.htm",
+      "cik": "1098880",
+      "discovery_batch": 4,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "EDGAR Filing Documents for 0001628280-24-032226",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1162461/000162828024032226/0001628280-24-032226-index.html",
+      "cik": "1162461",
+      "discovery_batch": 4,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "DZS INC. AND SUBSIDIARIES",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1101680/000110168023000036/annualreport-final3.pdf",
+      "cik": "1101680",
+      "discovery_batch": 4,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "cutr-20240630",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1162461/000162828024036513/cutr-20240630.htm",
+      "cik": "1162461",
+      "discovery_batch": 4,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "UNITED\u0007STATES",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1098880/000106299323008013/intelgenx_afs.pdf",
+      "cik": "1098880",
+      "discovery_batch": 4,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "CUTERA, INC.",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1162461/000119312523172407/d492883dars.pdf",
+      "cik": "1162461",
+      "discovery_batch": 4,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1792581/000143774924030260/ex_728140.htm",
+      "cik": "1792581",
+      "discovery_batch": 5,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1559998/000149315224044836/ex99-1.htm",
+      "cik": "1559998",
+      "discovery_batch": 5,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1559998/000149315224017110/form10-k.htm",
+      "cik": "1559998",
+      "discovery_batch": 5,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "krbp20241231_10k.htm",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1792581/000143774925004000/krbp20241231_10k.htm",
+      "cik": "1792581",
+      "discovery_batch": 5,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "2023 ARS with 10-K (Final).pdf",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1779020/000095017024066261/2023_annual_report_ars_-.pdf",
+      "cik": "1779020",
+      "discovery_batch": 5,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1183765/000164117225006026/form8-k.htm",
+      "cik": "1183765",
+      "discovery_batch": 6,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/748790/000121390025074670/ea025195001ex99-1_global.htm",
+      "cik": "748790",
+      "discovery_batch": 6,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Global Clean Energy Holdings, Inc.",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/748790/000157587223001738/gceh-20230930.htm",
+      "cik": "748790",
+      "discovery_batch": 6,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/748790/000121390025033420/ea023812701ex99-1_global.htm",
+      "cik": "748790",
+      "discovery_batch": 6,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/748790/000121390025074670/ea025195001ex99-3_global.htm",
+      "cik": "748790",
+      "discovery_batch": 6,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1183765/000119312524245652/d898375ddef14a.htm",
+      "cik": "1183765",
+      "discovery_batch": 6,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "bhil-20240930",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1830210/000183021024000153/bhil-20240930.htm",
+      "cik": "1830210",
+      "discovery_batch": 6,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1830210/000183021023000178/exhibit992investorupdatepr.htm",
+      "cik": "1830210",
+      "discovery_batch": 6,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1830210/000183021025000016/ex992pressreleaseissuedmar.htm",
+      "cik": "1830210",
+      "discovery_batch": 6,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/748790/000121390025074670/ea0251950-8k_global.htm",
+      "cik": "748790",
+      "discovery_batch": 6,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1830210/000183021024000119/ex9912q24earningsrelease.htm",
+      "cik": "1830210",
+      "discovery_batch": 6,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Global Clean Energy Holdings, Inc. 10-K Letter.pdf",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/748790/000000000024013459/filename1.pdf",
+      "cik": "748790",
+      "discovery_batch": 6,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "10-Q",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/105319/000095017025106230/ww-20250630.htm",
+      "cik": "105319",
+      "discovery_batch": 7,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "8-K",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/105319/000119312525132797/d11056d8k.htm",
+      "cik": "105319",
+      "discovery_batch": 7,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "10-K",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/105319/000095017025029511/ww-20241228.htm",
+      "cik": "105319",
+      "discovery_batch": 7,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "DEF 14A",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/105319/000119312526197135/d23154ddef14a.htm",
+      "cik": "105319",
+      "discovery_batch": 7,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/105319/000119312525114307/d934787dex101.htm",
+      "cik": "105319",
+      "discovery_batch": 7,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "10-K",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/105319/000119312526107176/ww-20251231.htm",
+      "cik": "105319",
+      "discovery_batch": 7,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "axdx-20241231",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/727207/000162828025014205/axdx-20241231.htm",
+      "cik": "727207",
+      "discovery_batch": 7,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/727207/000110465925046104/tm2514448d1_ex99-1.htm",
+      "cik": "727207",
+      "discovery_batch": 7,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "ACCELERATE DIAGNOSTICS, INC._December 31, 2024",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/727207/000141057825001011/axdx-20241231x10ka.htm",
+      "cik": "727207",
+      "discovery_batch": 7,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/105319/000119312525132797/d11056dex991.htm",
+      "cik": "105319",
+      "discovery_batch": 7,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/105319/000119312525114307/d934787dex992.htm",
+      "cik": "105319",
+      "discovery_batch": 7,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "WW INTERNATIONAL, INC. AND SUBSIDIARIES",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/105319/000119312523089518/d453735dars.pdf",
+      "cik": "105319",
+      "discovery_batch": 7,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "WW INTERNATIONAL, INC. AND SUBSIDIARIES",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/105319/000119312525087221/d915916dars.pdf",
+      "cik": "105319",
+      "discovery_batch": 7,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1783875/000127956924000091/ex991.htm",
+      "cik": "1783875",
+      "discovery_batch": 8,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "pet-20250630",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1842356/000184235625000095/pet-20250630.htm",
+      "cik": "1842356",
+      "discovery_batch": 9,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1389002/000095017025052859/mrin-ex2_1.htm",
+      "cik": "1389002",
+      "discovery_batch": 9,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "SEC EDGAR Submission 0000950170-25-056749",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1389002/000095017025056749/0000950170-25-056749-index-headers.html",
+      "cik": "1389002",
+      "discovery_batch": 9,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "EDGAR Filing Documents for 0000950170-25-093994",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1389002/0000950170-25-093994-index.html",
+      "cik": "1389002",
+      "discovery_batch": 9,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "pet-20241231",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1842356/000184235625000029/pet-20241231.htm",
+      "cik": "1842356",
+      "discovery_batch": 9,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Table of Contents",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1842356/000184235623000005/ars2022.pdf",
+      "cik": "1842356",
+      "discovery_batch": 9,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Table of Contents",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1842356/000184235625000053/petq4202410-k.pdf",
+      "cik": "1842356",
+      "discovery_batch": 9,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Wag! Group Co. S-1 Letter.pdf",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1842356/000000000022010622/filename1.pdf",
+      "cik": "1842356",
+      "discovery_batch": 9,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1220754/000143774925027478/ex_855729.htm",
+      "cik": "1220754",
+      "discovery_batch": 10,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1220754/000143774925027478/ex_855716.htm",
+      "cik": "1220754",
+      "discovery_batch": 10,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1643988/000149315225018533/form8-k.htm",
+      "cik": "1643988",
+      "discovery_batch": 10,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "modv20251226_8k.htm",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1220754/000143774925038831/modv20251226_8k.htm",
+      "cik": "1220754",
+      "discovery_batch": 10,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1893311/000182912624008545/luxurbanhotels_s1a.htm",
+      "cik": "1893311",
+      "discovery_batch": 10,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1220754/000143774925000784/ex_763941.htm",
+      "cik": "1220754",
+      "discovery_batch": 10,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1220754/000143774925000785/ex_764193.htm",
+      "cik": "1220754",
+      "discovery_batch": 10,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1893311/000182912624007692/luxurbanhotels_10q.htm",
+      "cik": "1893311",
+      "discovery_batch": 10,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "modv-20250630",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1220754/000122075425000085/modv-20250630.htm",
+      "cik": "1220754",
+      "discovery_batch": 10,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "ModivCare Inc.",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1220754/000122075425000026/a-modvannualreport12312024.pdf",
+      "cik": "1220754",
+      "discovery_batch": 10,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1643988/000149315225004826/ex10-14.htm",
+      "cik": "1643988",
+      "discovery_batch": 10,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "10-Q",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1455684/000119312525274259/tpicq-20250930.htm",
+      "cik": "1455684",
+      "discovery_batch": 10,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1643988/000110465924042754/tm2410256d1_ex10-1.htm",
+      "cik": "1643988",
+      "discovery_batch": 10,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "TPI_ARS.pdf",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1455684/000119312524104845/d723344dars.pdf",
+      "cik": "1455684",
+      "discovery_batch": 10,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "UNITED STATES",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/0001220754/000122075425000026/a-modvannualreport12312024.pdf",
+      "cik": "1220754",
+      "discovery_batch": 10,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "opi-20251231",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1456772/000145677226000022/opi-20251231.htm",
+      "cik": "1456772",
+      "discovery_batch": 11,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1456772/000110465926056294/tm2613792d1_8k.htm",
+      "cik": "1456772",
+      "discovery_batch": 11,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1456772/000110465926075159/tm2618043d1_8a12b.htm",
+      "cik": "1456772",
+      "discovery_batch": 11,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "OFFICE PROPERTIES INCOME TRUST",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1456772/000110465925031673/tm257964d2_ars.pdf",
+      "cik": "1456772",
+      "discovery_batch": 11,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1456772/000110465926038561/tm2610825d1_ex99-1.htm",
+      "cik": "1456772",
+      "discovery_batch": 11,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1456772/000110465926011514/tm265338d1_ex10-1.htm",
+      "cik": "1456772",
+      "discovery_batch": 11,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1456772/000110465926050398/tm2612569d1_ex2-1.htm",
+      "cik": "1456772",
+      "discovery_batch": 11,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1456772/000110465926023459/tm267890d1_ex99-3.htm",
+      "cik": "1456772",
+      "discovery_batch": 11,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "opi-20260331",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1456772/000145677226000023/opi-20260331.htm",
+      "cik": "1456772",
+      "discovery_batch": 11,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1456772/000110465926076652/tm2618043d2_ex10-2.htm",
+      "cik": "1456772",
+      "discovery_batch": 11,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1456772/000110465926023459/tm267890d1_ex99-1.htm",
+      "cik": "1456772",
+      "discovery_batch": 11,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "SEC EDGAR Submission 0001104659-26-011514",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1456772/000110465926011514/0001104659-26-011514-index-headers.html",
+      "cik": "1456772",
+      "discovery_batch": 11,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "OFFICE PROPERTIES INCOME TRUST",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1456772/000110465924043620/tm247158d2_ars.pdf",
+      "cik": "1456772",
+      "discovery_batch": 11,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "SONDER HOLDINGS INC. AND SUBSIDIARIES",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1819395/000175392624001844/g084515_ars.pdf",
+      "cik": "1819395",
+      "discovery_batch": 11,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "8-K",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1539029/000119312525297177/d41251d8k.htm",
+      "cik": "1539029",
+      "discovery_batch": 12,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1539029/000119312525297177/d41251dex991.htm",
+      "cik": "1539029",
+      "discovery_batch": 12,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1539029/000119312525332152/d63805dex991.htm",
+      "cik": "1539029",
+      "discovery_batch": 12,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "SEC EDGAR Submission 0001193125-25-318337",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1159167/000119312525318337/0001193125-25-318337-index-headers.html",
+      "cik": "1159167",
+      "discovery_batch": 12,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "8-K",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1539029/000119312525332152/d63805d8k.htm",
+      "cik": "1539029",
+      "discovery_batch": 12,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "10-Q",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1539029/000095017025105812/clsd-20250630.htm",
+      "cik": "1539029",
+      "discovery_batch": 12,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "irbt-20250927",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1159167/000115916725000091/irbt-20250927.htm",
+      "cik": "1159167",
+      "discovery_batch": 12,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "10-K",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1539029/000095017025046134/clsd-20241231.htm",
+      "cik": "1539029",
+      "discovery_batch": 12,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Notice of Effectiveness",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1539029/999999999525003771/xslEFFECTX01/primary_doc.xml",
+      "cik": "1539029",
+      "discovery_batch": 12,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "irbt-20250628",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1159167/000115916725000069/irbt-20250628.htm",
+      "cik": "1159167",
+      "discovery_batch": 12,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "UNITED STATES",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/0001539029/000095017025055757/clsd_ars_2024.pdf",
+      "cik": "1539029",
+      "discovery_batch": 12,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "CLEARSIDE BIOMEDICAL, INC.",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1539029/000095017025055757/clsd_ars_2024.pdf",
+      "cik": "1539029",
+      "discovery_batch": 12,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1705012/000149315226003696/ex99-1.htm",
+      "cik": "1705012",
+      "discovery_batch": 13,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1705012/000149315226027218/ex99-2.htm",
+      "cik": "1705012",
+      "discovery_batch": 13,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/2011954/000149315226019634/ex10-1.htm",
+      "cik": "2011954",
+      "discovery_batch": 13,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1705012/000149315226029245/ex10-1.htm",
+      "cik": "1705012",
+      "discovery_batch": 13,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/2011954/000149315226029245/ex99-1.htm",
+      "cik": "2011954",
+      "discovery_batch": 13,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "ZYNEX, INC._January 29, 2026",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/846475/000110465926009241/zyxi-20260129x8k.htm",
+      "cik": "846475",
+      "discovery_batch": 13,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1705012/000149315226013636/ex10-2.htm",
+      "cik": "1705012",
+      "discovery_batch": 13,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/2011954/000149315226029245/ex10-2.htm",
+      "cik": "2011954",
+      "discovery_batch": 13,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1705012/000149315226013636/form8-k.htm",
+      "cik": "1705012",
+      "discovery_batch": 13,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/846475/000110465925121390/zyxi-20251215xex99d1.htm",
+      "cik": "846475",
+      "discovery_batch": 13,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1705012/000149315226013636/ex10-1.htm",
+      "cik": "1705012",
+      "discovery_batch": 13,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/846475/000110465926032723/zyxi-20260319xex2d2.htm",
+      "cik": "846475",
+      "discovery_batch": 13,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Submission Proof - Z:\\2025 OPERATIONS\\EDGAR\\11 NOVEMBER\\FAT Brands Inc\\11-13-2025\\Form ARS\\Source\\New folder\\New folder\\a10-k.g",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1705012/000149315225022377/formars.pdf",
+      "cik": "1705012",
+      "discovery_batch": 13,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Twin Hospitality Group Inc. DRS Letter.pdf",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/2011954/000000000024006581/filename1.pdf",
+      "cik": "2011954",
+      "discovery_batch": 13,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1532286/000121390026010501/ea027480301ex99-2_nine.htm",
+      "cik": "1532286",
+      "discovery_batch": 14,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1532286/000121390026025721/ea028025901ex99-1.htm",
+      "cik": "1532286",
+      "discovery_batch": 14,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "nine-20251231",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1532286/000153228626000005/nine-20251231.htm",
+      "cik": "1532286",
+      "discovery_batch": 14,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1058623/000110465926023855/tm267873d1_ex99-2.htm",
+      "cik": "1058623",
+      "discovery_batch": 14,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1058623/000110465926023855/tm267873d1_ex10-1.htm",
+      "cik": "1058623",
+      "discovery_batch": 14,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1532286/000121390026010501/ea027480301ex99-1_nine.htm",
+      "cik": "1532286",
+      "discovery_batch": 14,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1532286/000121390026012975/ea027548201ex10-1_nine.htm",
+      "cik": "1532286",
+      "discovery_batch": 14,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1532286/000121390026046167/ea028704101ex99-1.htm",
+      "cik": "1532286",
+      "discovery_batch": 14,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1058623/000110465926023855/tm267873d1_ex99-1.htm",
+      "cik": "1058623",
+      "discovery_batch": 14,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1532286/000121390026032923/ea0282737-8k_nine.htm",
+      "cik": "1532286",
+      "discovery_batch": 14,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1532286/000121390026010501/ea027480301ex10-1_nine.htm",
+      "cik": "1532286",
+      "discovery_batch": 14,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1532286/000121390026055933/ea029028601ex99-1.htm",
+      "cik": "1532286",
+      "discovery_batch": 14,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "887796_007_BMK_WEB.PDF",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1532286/000119312525048526/d887796dars.pdf",
+      "cik": "1532286",
+      "discovery_batch": 14,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Docusign Envelope ID: 94B8A480-F096-4759-9246-8DCA432D9D59",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1015155/000201556125000001/petition.pdf",
+      "cik": "1015155",
+      "discovery_batch": 14,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Riverstyx Capital Management, LLC",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1015155/000201556125000003/ex1_nominationletter.pdf",
+      "cik": "1015155",
+      "discovery_batch": 14,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1347242/000175392626000577/g085465_ex99-1.htm",
+      "cik": "1347242",
+      "discovery_batch": 15,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "8-K",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1865494/000119312526133331/d87973d8k.htm",
+      "cik": "1865494",
+      "discovery_batch": 15,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "10-K",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/764897/000095017025046840/brst-20241231.htm",
+      "cik": "764897",
+      "discovery_batch": 15,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "10-Q",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1865494/000119312525281820/iobt-20250930.htm",
+      "cik": "1865494",
+      "discovery_batch": 15,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/764897/000119312525284677/brst_nt_10q_2025-0930.htm",
+      "cik": "764897",
+      "discovery_batch": 15,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/764897/000095017025060209/R1.htm",
+      "cik": "764897",
+      "discovery_batch": 15,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "EDGAR Filing Documents for 0001193125-26-133331",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1865494/000119312526133331/0001193125-26-133331-index.htm",
+      "cik": "1865494",
+      "discovery_batch": 15,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "10-K",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/764897/000095017024039408/brst-20231231.htm",
+      "cik": "764897",
+      "discovery_batch": 15,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "10-Q",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1865494/000095017025070956/iobt-20250331.htm",
+      "cik": "1865494",
+      "discovery_batch": 15,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/764897/000143774919024968/ex_168164.htm",
+      "cik": "764897",
+      "discovery_batch": 15,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1865494/000119312525045673/d924521dex991.htm",
+      "cik": "1865494",
+      "discovery_batch": 15,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1347242/000175392625001003/g084855_ex99-1.htm",
+      "cik": "1347242",
+      "discovery_batch": 15,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "IO BIOTECH, INC.",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1865494/000095017025058713/iobt_fy24_10k_ars.pdf",
+      "cik": "1865494",
+      "discovery_batch": 15,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1355096/000135509626000024/pressreleasedatedjuly152026.htm",
+      "cik": "1355096",
+      "discovery_batch": 16,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1355096/000110465926044521/tm2611635d1_ex99-2.htm",
+      "cik": "1355096",
+      "discovery_batch": 16,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "8-K",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1901799/000119312526227832/d130621d8k.htm",
+      "cik": "1901799",
+      "discovery_batch": 16,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1901799/000119312526227832/d130621dex991.htm",
+      "cik": "1901799",
+      "discovery_batch": 16,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "UNITED STATES",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/0001817511/000164117225026305/formars.pdf",
+      "cik": "1817511",
+      "discovery_batch": 16,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "25-2333-4_ARS mockup V2_tm252333-3_D6.1.pdf",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1355096/000110465925029097/tm252333d4_ars.pdf",
+      "cik": "1355096",
+      "discovery_batch": 16,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/720154/000110465926087684/tm2620840d1_ex99-1.htm",
+      "cik": "720154",
+      "discovery_batch": 17,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Trinseo PLC_December 31, 2025",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1519061/000110465926027518/tse-20251231x10k.htm",
+      "cik": "1519061",
+      "discovery_batch": 17,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Trinseo PLC_ June 30, 2026",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1519061/000110465926091910/tse-20260630x10q.htm",
+      "cik": "1519061",
+      "discovery_batch": 17,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1519061/000110465926060590/tm2614481d1_ex99-1.htm",
+      "cik": "1519061",
+      "discovery_batch": 17,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1808220/000162828026041369/goco-20260608xexhibit991.htm",
+      "cik": "1808220",
+      "discovery_batch": 17,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "SEC EDGAR Submission 0000950103-26-008891",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/827187/000095010326008891/0000950103-26-008891-index-headers.html",
+      "cik": "827187",
+      "discovery_batch": 17,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/720154/000162828026048369/notv-20260714xxexx21confir.htm",
+      "cik": "720154",
+      "discovery_batch": 17,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/720154/000110465926069950/tm2616729d1_ex10-1.htm",
+      "cik": "720154",
+      "discovery_batch": 17,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1808220/000162828026049063/exhibit992-pressrelease.htm",
+      "cik": "1808220",
+      "discovery_batch": 17,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "goco-20260605",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1808220/000162828026041369/goco-20260605.htm",
+      "cik": "1808220",
+      "discovery_batch": 17,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/720154/000162828026041667/exhibit101-dipcreditagreem.htm",
+      "cik": "720154",
+      "discovery_batch": 17,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "notv-20260714",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/720154/000162828026048369/notv-20260714.htm",
+      "cik": "720154",
+      "discovery_batch": 17,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "INOTIV, INC.",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/720154/000162828025002241/inotivinc10-kwrap2024_final.pdf",
+      "cik": "720154",
+      "discovery_batch": 17,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Microsoft Word - tse_Current folio_10K_Taxonomy2023_TMBSF_v1.docx",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1519061/000110465925040952/tm2511022d2_ars.pdf",
+      "cik": "1519061",
+      "discovery_batch": 17,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "8-K",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1001233/000119312526278582/d161847d8k.htm",
+      "cik": "1001233",
+      "discovery_batch": 18,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "sgmo-20250930",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1001233/000100123325000024/sgmo-20250930.htm",
+      "cik": "1001233",
+      "discovery_batch": 18,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1001233/000119312526346796/d21956dex991.htm",
+      "cik": "1001233",
+      "discovery_batch": 18,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "EDGAR Filing Documents for 0001193125-26-278582",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1001233/000119312526278582/0001193125-26-278582-index.htm",
+      "cik": "1001233",
+      "discovery_batch": 18,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "8-K",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1001233/000119312526292501/d113173d8k.htm",
+      "cik": "1001233",
+      "discovery_batch": 18,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1498710/000095010325001007/dp223953_8k.htm",
+      "cik": "1498710",
+      "discovery_batch": 19,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1498710/000095010325001007/dp223953_ex9908.htm",
+      "cik": "1498710",
+      "discovery_batch": 19,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "EDGAR Filing Documents for 9999999995-25-000753",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1850838/999999999525000753/9999999995-25-000753-index.html",
+      "cik": "1850838",
+      "discovery_batch": 25,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1850838/000119312525004507/R1.htm",
+      "cik": "1850838",
+      "discovery_batch": 25,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1850838/000119312521233242/d45893d424b4.htm",
+      "cik": "1850838",
+      "discovery_batch": 25,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "SEC EDGAR Submission 0001193125-21-211825",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1850838/000119312521211825/0001193125-21-211825-index-headers.html",
+      "cik": "1850838",
+      "discovery_batch": 25,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1850838/000119312521238030/d209189dsc13d.htm",
+      "cik": "1850838",
+      "discovery_batch": 25,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Your Vote Counts!",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1850838/000095017023014249/omga-2022_proxy_notice_-_def.pdf",
+      "cik": "1850838",
+      "discovery_batch": 25,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "July 29, 2021",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1850838/999999999721004409/filename1.pdf",
+      "cik": "1850838",
+      "discovery_batch": 25,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Omega Therapeutics, Inc. DRS Letter.pdf",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1850838/000000000021007153/filename1.pdf",
+      "cik": "1850838",
+      "discovery_batch": 25,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "SEC EDGAR Submission 0001104659-20-070065",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1537561/000110465920070065/0001104659-20-070065-index-headers.html",
+      "cik": "1537561",
+      "discovery_batch": 26,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "iCoreConnect Inc. S-1 Letter.pdf",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1906133/000000000024007221/filename1.pdf",
+      "cik": "1906133",
+      "discovery_batch": 26,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "big-20251024",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/768835/000076883525000034/big-20251024.htm",
+      "cik": "768835",
+      "discovery_batch": 27,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1758057/000114036126006615/R1.htm",
+      "cik": "1758057",
+      "discovery_batch": 27,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "EDGAR Filing Documents for 0001193125-20-326101",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1758057/0001193125-20-326101-index.htm",
+      "cik": "1758057",
+      "discovery_batch": 27,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Directory List of /Archives/edgar/data/1758057/000162828025036289",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1758057/000162828025036289",
+      "cik": "1758057",
+      "discovery_batch": 27,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Dynatronics Corp.: Form 10-K - Filed by newsfilecorp.com",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/720875/000106299325016039/form10k.htm",
+      "cik": "720875",
+      "discovery_batch": 27,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/720875/000109690615001035/dynatronics.htm",
+      "cik": "720875",
+      "discovery_batch": 27,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1758057/000114036126013403/ef20069881_8k.htm",
+      "cik": "1758057",
+      "discovery_batch": 27,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Dynatronics Corp.: Form 8-K - Filed by newsfilecorp.com",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/720875/000106299326000178/form8k.htm",
+      "cik": "720875",
+      "discovery_batch": 27,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "SEC EDGAR Submission 0001628280-24-038970",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1758057/000162828024038970/0001628280-24-038970-index-headers.html",
+      "cik": "1758057",
+      "discovery_batch": 27,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "DYNATRONICS CORPORATION",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/720875/000106299325016327/formars.pdf",
+      "cik": "720875",
+      "discovery_batch": 27,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Luminar Technologies, Inc. 2022 Form 10-K",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1758057/000162828023014168/luminar2022annualreport.pdf",
+      "cik": "1758057",
+      "discovery_batch": 27,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "title": "Microsoft Word - Dynatronics 10-K 2024 Draft v7 - Final",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/720875/000106299324017942/formars.pdf",
+      "cik": "720875",
+      "discovery_batch": 27,
+      "verification_status": "search_discovered_not_fact_checked"
+    },
+    {
+      "cik": "933738",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/933738/000164117225005059/xslSCHEDULE_13D_X01/primary_doc.xml",
+      "title": "ENGlobal Schedule 13D amendment",
+      "discovery_batch": 30,
+      "verification_status": "search_discovered_not_fact_checked"
+    }
+  ]
+}

@@ -1,19 +1,10 @@
 {"cik": "1656634", "company": "Gritstone bio, Inc.", "existing": true, "documents": 47, "raw_news": 65, "raw_filings": 7, "window": {"start": "2024-04-13", "end": "2024-10-09"}, "decision": "included"}
-{"cik": "1835972", "company": "iLearningEngines, Inc.", "existing": true, "documents": 104, "raw_news": 154, "raw_filings": 9, "window": {"start": "2024-06-23", "end": "2024-12-19"}, "decision": "included"}
 {"cik": "1828852", "company": "Mondee Holdings, Inc.", "existing": false, "documents": 6, "raw_news": 0, "raw_filings": 6, "window": {"start": "2024-07-18", "end": "2025-01-13"}, "decision": "included"}
-{"cik": "1580864", "company": "Vroom, Inc.", "existing": false, "documents": 4, "raw_news": 0, "raw_filings": 7, "window": {"start": "2024-05-17", "end": "2024-11-12"}, "decision": "included"}
 {"cik": "1537028", "company": "Independence Contract Drilling, Inc.", "existing": false, "documents": 5, "raw_news": 0, "raw_filings": 7, "window": {"start": "2024-06-05", "end": "2024-12-01"}, "decision": "included"}
-{"cik": "1750153", "company": "Canoo Inc.", "existing": true, "documents": 73, "raw_news": 78, "raw_filings": 14, "window": {"start": "2024-07-21", "end": "2025-01-16"}, "decision": "included"}
-{"cik": "890447", "company": "Vertex Energy Inc.", "existing": false, "documents": 5, "raw_news": 0, "raw_filings": 11, "window": {"start": "2024-03-28", "end": "2024-09-23"}, "decision": "included"}
 {"cik": "1886799", "company": "Bright Green Corp", "existing": false, "documents": 3, "raw_news": 0, "raw_filings": 4, "window": {"start": "2024-08-26", "end": "2025-02-21"}, "decision": "included"}
-{"cik": "1411688", "company": "Container Store Group, Inc.", "existing": true, "documents": 37, "raw_news": 69, "raw_filings": 12, "window": {"start": "2024-06-25", "end": "2024-12-21"}, "decision": "included"}
 {"cik": "1813914", "company": "CareMax, Inc.", "existing": false, "documents": 15, "raw_news": 0, "raw_filings": 19, "window": {"start": "2024-05-21", "end": "2024-11-16"}, "decision": "included"}
-{"cik": "1438901", "company": "Auto Parts 4Less Group, Inc.", "existing": true, "documents": 0, "raw_news": 167, "raw_filings": 0, "window": {"start": "2024-08-03", "end": "2025-01-29"}, "decision": "excluded_no_usable_dated_evidence"}
 {"cik": "1723580", "company": "BurgerFi International, Inc.", "existing": true, "documents": 11, "raw_news": 38, "raw_filings": 5, "window": {"start": "2024-03-15", "end": "2024-09-10"}, "decision": "included"}
-{"cik": "1506928", "company": "Avinger Inc", "existing": true, "documents": 28, "raw_news": 24, "raw_filings": 10, "window": {"start": "2024-08-14", "end": "2025-02-09"}, "decision": "included"}
 {"cik": "1850838", "company": "Omega Therapeutics, Inc.", "existing": false, "documents": 9, "raw_news": 0, "raw_filings": 9, "window": {"start": "2024-08-14", "end": "2025-02-09"}, "decision": "included"}
-{"cik": "1465470", "company": "NaturalShrimp Inc", "existing": false, "documents": 1, "raw_news": 0, "raw_filings": 1, "window": {"start": "2024-03-13", "end": "2024-09-08"}, "decision": "included"}
-{"cik": "1731289", "company": "Nikola Corp", "existing": true, "documents": 15, "raw_news": 196, "raw_filings": 5, "window": {"start": "2024-08-23", "end": "2025-02-18"}, "decision": "included"}
 {"cik": "1498710", "company": "Spirit Airlines, Inc.", "existing": true, "documents": 154, "raw_news": 354, "raw_filings": 17, "window": {"start": "2024-05-22", "end": "2024-11-17"}, "decision": "included"}
 {"cik": "1098880", "company": "IntelGenx Technologies Corp.", "existing": false, "documents": 1, "raw_news": 0, "raw_filings": 1, "window": {"start": "2024-09-01", "end": "2025-02-27"}, "decision": "included"}
 {"cik": "1162461", "company": "CUTERA INC", "existing": false, "documents": 5, "raw_news": 0, "raw_filings": 5, "window": {"start": "2024-09-06", "end": "2025-03-04"}, "decision": "included"}
@@ -22,36 +13,24 @@
 {"cik": "1559998", "company": "Gaucho Group Holdings, Inc.", "existing": true, "documents": 11, "raw_news": 45, "raw_filings": 11, "window": {"start": "2024-05-16", "end": "2024-11-11"}, "decision": "included"}
 {"cik": "1779020", "company": "Danimer Scientific, Inc.", "existing": false, "documents": 11, "raw_news": 0, "raw_filings": 11, "window": {"start": "2024-09-19", "end": "2025-03-17"}, "decision": "included"}
 {"cik": "1792581", "company": "Kiromic Biopharma, Inc.", "existing": false, "documents": 6, "raw_news": 0, "raw_filings": 6, "window": {"start": "2024-09-22", "end": "2025-03-20"}, "decision": "included"}
-{"cik": "1804591", "company": "23andMe Holding Co.", "existing": true, "documents": 163, "raw_news": 176, "raw_filings": 5, "window": {"start": "2024-09-24", "end": "2025-03-22"}, "decision": "included"}
 {"cik": "1830210", "company": "Benson Hill, Inc.", "existing": false, "documents": 4, "raw_news": 0, "raw_filings": 4, "window": {"start": "2024-09-21", "end": "2025-03-19"}, "decision": "included"}
-{"cik": "1876945", "company": "Gold Flora Corp.", "existing": false, "documents": 6, "raw_news": 0, "raw_filings": 6, "window": {"start": "2024-09-28", "end": "2025-03-26"}, "decision": "included"}
-{"cik": "1099132", "company": "MANHATTAN SCIENTIFICS INC", "existing": false, "documents": 0, "raw_news": 0, "raw_filings": 0, "window": {"start": "2024-10-10", "end": "2025-04-07"}, "decision": "excluded_no_usable_dated_evidence"}
 {"cik": "748790", "company": "Global Clean Energy Holdings, Inc.", "existing": true, "documents": 37, "raw_news": 40, "raw_filings": 9, "window": {"start": "2024-10-18", "end": "2025-04-15"}, "decision": "included"}
 {"cik": "1183765", "company": "Molecular Templates, Inc.", "existing": false, "documents": 6, "raw_news": 0, "raw_filings": 6, "window": {"start": "2024-10-22", "end": "2025-04-19"}, "decision": "included"}
 {"cik": "105319", "company": "WW INTERNATIONAL, INC.", "existing": true, "documents": 22, "raw_news": 23, "raw_filings": 5, "window": {"start": "2024-11-07", "end": "2025-05-05"}, "decision": "included"}
 {"cik": "727207", "company": "Accelerate Diagnostics, Inc", "existing": false, "documents": 4, "raw_news": 0, "raw_filings": 4, "window": {"start": "2024-11-09", "end": "2025-05-07"}, "decision": "included"}
-{"cik": "1828811", "company": "Li-Cycle Holdings Corp.", "existing": true, "documents": 34, "raw_news": 24, "raw_filings": 13, "window": {"start": "2024-11-15", "end": "2025-05-13"}, "decision": "included"}
 {"cik": "1537561", "company": "Arch Therapeutics, Inc.", "existing": false, "documents": 2, "raw_news": 0, "raw_filings": 2, "window": {"start": "2024-10-20", "end": "2025-04-17"}, "decision": "included"}
 {"cik": "1906133", "company": "iCoreConnect Inc.", "existing": false, "documents": 12, "raw_news": 0, "raw_filings": 12, "window": {"start": "2024-12-04", "end": "2025-06-01"}, "decision": "included"}
-{"cik": "1772695", "company": "Sunnova Energy International Inc.", "existing": true, "documents": 57, "raw_news": 43, "raw_filings": 14, "window": {"start": "2024-12-10", "end": "2025-06-07"}, "decision": "included"}
 {"cik": "1783875", "company": "4Front Ventures Corp.", "existing": false, "documents": 8, "raw_news": 0, "raw_filings": 8, "window": {"start": "2024-12-11", "end": "2025-06-08"}, "decision": "included"}
-{"cik": "895419", "company": "WOLFSPEED, INC.", "existing": true, "documents": 116, "raw_news": 110, "raw_filings": 13, "window": {"start": "2025-01-01", "end": "2025-06-29"}, "decision": "included"}
 {"cik": "1389002", "company": "MARIN SOFTWARE INC", "existing": false, "documents": 1, "raw_news": 0, "raw_filings": 1, "window": {"start": "2025-01-02", "end": "2025-06-30"}, "decision": "included"}
 {"cik": "1842356", "company": "Wag! Group Co.", "existing": false, "documents": 8, "raw_news": 0, "raw_filings": 8, "window": {"start": "2025-01-22", "end": "2025-07-20"}, "decision": "included"}
-{"cik": "799698", "company": "LadRx Corp", "existing": false, "documents": 2, "raw_news": 0, "raw_filings": 2, "window": {"start": "2025-01-29", "end": "2025-07-27"}, "decision": "included"}
-{"cik": "844887", "company": "DIAMONDHEAD CASINO CORP", "existing": false, "documents": 1, "raw_news": 0, "raw_filings": 1, "window": {"start": "2025-02-01", "end": "2025-07-30"}, "decision": "included"}
 {"cik": "1455684", "company": "TPI COMPOSITES, INC", "existing": true, "documents": 28, "raw_news": 26, "raw_filings": 10, "window": {"start": "2025-02-12", "end": "2025-08-10"}, "decision": "included"}
 {"cik": "1220754", "company": "ModivCare Inc", "existing": true, "documents": 67, "raw_news": 82, "raw_filings": 13, "window": {"start": "2025-02-21", "end": "2025-08-19"}, "decision": "included"}
-{"cik": "1805024", "company": "Amergent Hospitality Group Inc.", "existing": false, "documents": 0, "raw_news": 0, "raw_filings": 0, "window": {"start": "2025-03-16", "end": "2025-09-11"}, "decision": "excluded_no_usable_dated_evidence"}
-{"cik": "1210618", "company": "SPI Energy Co., Ltd.", "existing": false, "documents": 0, "raw_news": 0, "raw_filings": 0, "window": {"start": "2025-03-21", "end": "2025-09-16"}, "decision": "excluded_no_usable_dated_evidence"}
 {"cik": "1893311", "company": "LUXURBAN HOTELS INC.", "existing": false, "documents": 8, "raw_news": 0, "raw_filings": 8, "window": {"start": "2025-03-18", "end": "2025-09-13"}, "decision": "included"}
 {"cik": "1643988", "company": "Loop Media, Inc.", "existing": false, "documents": 4, "raw_news": 0, "raw_filings": 4, "window": {"start": "2025-04-12", "end": "2025-10-08"}, "decision": "included"}
 {"cik": "768835", "company": "FORMER BL STORES INC", "existing": false, "documents": 1, "raw_news": 0, "raw_filings": 7, "window": {"start": "2024-03-13", "end": "2024-09-08"}, "decision": "included"}
 {"cik": "1456772", "company": "OFFICE PROPERTIES INCOME TRUST", "existing": false, "documents": 6, "raw_news": 0, "raw_filings": 6, "window": {"start": "2025-05-03", "end": "2025-10-29"}, "decision": "included"}
-{"cik": "1761510", "company": "TILT Holdings Inc.", "existing": false, "documents": 5, "raw_news": 0, "raw_filings": 5, "window": {"start": "2025-05-11", "end": "2025-11-06"}, "decision": "included"}
 {"cik": "1819395", "company": "Sonder Holdings Inc.", "existing": true, "documents": 94, "raw_news": 83, "raw_filings": 12, "window": {"start": "2025-05-18", "end": "2025-11-13"}, "decision": "included"}
 {"cik": "1539029", "company": "Clearside Biomedical, Inc.", "existing": false, "documents": 8, "raw_news": 0, "raw_filings": 8, "window": {"start": "2025-05-27", "end": "2025-11-22"}, "decision": "included"}
-{"cik": "1721741", "company": "Lazydays Holdings, Inc.", "existing": false, "documents": 16, "raw_news": 0, "raw_filings": 16, "window": {"start": "2025-06-01", "end": "2025-11-27"}, "decision": "included"}
 {"cik": "1159167", "company": "IROBOT CORP", "existing": true, "documents": 122, "raw_news": 175, "raw_filings": 5, "window": {"start": "2025-06-17", "end": "2025-12-13"}, "decision": "included"}
 {"cik": "1758057", "company": "Luminar Technologies, Inc./DE", "existing": true, "documents": 62, "raw_news": 67, "raw_filings": 4, "window": {"start": "2025-06-18", "end": "2025-12-14"}, "decision": "included"}
 {"cik": "846475", "company": "ZYNEX INC", "existing": false, "documents": 11, "raw_news": 0, "raw_filings": 11, "window": {"start": "2025-06-18", "end": "2025-12-14"}, "decision": "included"}
@@ -61,45 +40,14 @@
 {"cik": "1532286", "company": "Nine Energy Service, Inc.", "existing": false, "documents": 2, "raw_news": 0, "raw_filings": 2, "window": {"start": "2025-08-05", "end": "2026-01-31"}, "decision": "included"}
 {"cik": "1015155", "company": "CHARLES & COLVARD LTD", "existing": false, "documents": 5, "raw_news": 0, "raw_filings": 5, "window": {"start": "2025-09-03", "end": "2026-03-01"}, "decision": "included"}
 {"cik": "1058623", "company": "CUMULUS MEDIA INC", "existing": false, "documents": 2, "raw_news": 0, "raw_filings": 2, "window": {"start": "2025-09-05", "end": "2026-03-03"}, "decision": "included"}
-{"cik": "1776738", "company": "Cannabist Co Holdings Inc.", "existing": false, "documents": 17, "raw_news": 0, "raw_filings": 17, "window": {"start": "2025-09-25", "end": "2026-03-23"}, "decision": "included"}
 {"cik": "764897", "company": "Broad Street Realty, Inc.", "existing": false, "documents": 2, "raw_news": 0, "raw_filings": 2, "window": {"start": "2025-09-21", "end": "2026-03-19"}, "decision": "included"}
-{"cik": "1659323", "company": "Iterum Therapeutics plc", "existing": false, "documents": 2, "raw_news": 0, "raw_filings": 2, "window": {"start": "2025-09-28", "end": "2026-03-26"}, "decision": "included"}
 {"cik": "1347242", "company": "LIPELLA PHARMACEUTICALS INC.", "existing": false, "documents": 3, "raw_news": 0, "raw_filings": 3, "window": {"start": "2025-10-01", "end": "2026-03-29"}, "decision": "included"}
 {"cik": "1865494", "company": "IO Biotech, Inc.", "existing": false, "documents": 7, "raw_news": 0, "raw_filings": 7, "window": {"start": "2025-10-02", "end": "2026-03-30"}, "decision": "included"}
-{"cik": "1413754", "company": "MARIZYME, INC.", "existing": false, "documents": 0, "raw_news": 0, "raw_filings": 0, "window": {"start": "2025-10-19", "end": "2026-04-16"}, "decision": "excluded_no_usable_dated_evidence"}
 {"cik": "1355096", "company": "QVC Group, Inc.", "existing": false, "documents": 3, "raw_news": 0, "raw_filings": 3, "window": {"start": "2025-10-18", "end": "2026-04-15"}, "decision": "included"}
-{"cik": "1023994", "company": "OLENOX INDUSTRIES INC.", "existing": false, "documents": 13, "raw_news": 0, "raw_filings": 13, "window": {"start": "2025-10-30", "end": "2026-04-27"}, "decision": "included"}
 {"cik": "1817511", "company": "SOCIETY PASS INCORPORATED.", "existing": false, "documents": 9, "raw_news": 0, "raw_filings": 9, "window": {"start": "2025-11-13", "end": "2026-05-11"}, "decision": "included"}
 {"cik": "1901799", "company": "Bitcoin Depot Inc.", "existing": true, "documents": 48, "raw_news": 38, "raw_filings": 12, "window": {"start": "2025-11-18", "end": "2026-05-16"}, "decision": "included"}
 {"cik": "1519061", "company": "Trinseo PLC", "existing": false, "documents": 15, "raw_news": 0, "raw_filings": 15, "window": {"start": "2025-11-27", "end": "2026-05-25"}, "decision": "included"}
 {"cik": "720154", "company": "Inotiv, Inc.", "existing": false, "documents": 2, "raw_news": 0, "raw_filings": 2, "window": {"start": "2025-12-05", "end": "2026-06-02"}, "decision": "included"}
-{"cik": "1446687", "company": "SILVER STAR PROPERTIES REIT, INC", "existing": true, "documents": 0, "raw_news": 28, "raw_filings": 0, "window": {"start": "2025-11-29", "end": "2026-05-27"}, "decision": "excluded_no_usable_dated_evidence"}
 {"cik": "1808220", "company": "GoHealth, Inc.", "existing": false, "documents": 2, "raw_news": 0, "raw_filings": 2, "window": {"start": "2025-12-09", "end": "2026-06-06"}, "decision": "included"}
 {"cik": "827187", "company": "Sleep Number Corp", "existing": true, "documents": 43, "raw_news": 34, "raw_filings": 10, "window": {"start": "2025-12-14", "end": "2026-06-11"}, "decision": "included"}
 {"cik": "1001233", "company": "SANGAMO THERAPEUTICS, INC", "existing": false, "documents": 4, "raw_news": 0, "raw_filings": 4, "window": {"start": "2025-12-25", "end": "2026-06-22"}, "decision": "included"}
-{"cik": "842722", "company": "Fuse Science, Inc.", "existing": false, "documents": 0, "raw_news": 0, "raw_filings": 0, "window": {"start": "2026-01-18", "end": "2026-07-16"}, "decision": "excluded_no_usable_dated_evidence"}
-{"cik": "1415404", "company": "EchoStar CORP", "existing": true, "documents": 77, "raw_news": 70, "raw_filings": 7, "window": {"start": "2026-02-03", "end": "2026-08-01"}, "decision": "included"}
-{"cik": "100517", "company": "United Airlines Holdings, Inc.", "existing": true, "documents": 220, "raw_news": 223, "raw_filings": 5, "window": {"start": "2025-02-05", "end": "2025-08-03"}, "decision": "included"}
-{"cik": "1158463", "company": "JETBLUE AIRWAYS CORP", "existing": false, "documents": 4, "raw_news": 0, "raw_filings": 4, "window": {"start": "2024-09-07", "end": "2025-03-05"}, "decision": "included"}
-{"cik": "1670076", "company": "Frontier Group Holdings, Inc.", "existing": true, "documents": 75, "raw_news": 82, "raw_filings": 1, "window": {"start": "2025-05-11", "end": "2025-11-06"}, "decision": "included"}
-{"cik": "1318605", "company": "Tesla, Inc.", "existing": false, "documents": 3, "raw_news": 0, "raw_filings": 3, "window": {"start": "2024-07-26", "end": "2025-01-21"}, "decision": "included"}
-{"cik": "1874178", "company": "Rivian Automotive, Inc. / DE", "existing": true, "documents": 746, "raw_news": 773, "raw_filings": 5, "window": {"start": "2024-08-07", "end": "2025-02-02"}, "decision": "included"}
-{"cik": "1811210", "company": "Lucid Group, Inc.", "existing": true, "documents": 104, "raw_news": 103, "raw_filings": 5, "window": {"start": "2025-10-19", "end": "2026-04-16"}, "decision": "included"}
-{"cik": "794367", "company": "Macy's, Inc.", "existing": true, "documents": 23, "raw_news": 48, "raw_filings": 8, "window": {"start": "2024-08-14", "end": "2025-02-09"}, "decision": "included"}
-{"cik": "885639", "company": "KOHLS Corp", "existing": false, "documents": 5, "raw_news": 0, "raw_filings": 5, "window": {"start": "2025-03-22", "end": "2025-09-17"}, "decision": "included"}
-{"cik": "1616707", "company": "Wayfair Inc.", "existing": true, "documents": 174, "raw_news": 168, "raw_filings": 8, "window": {"start": "2025-12-05", "end": "2026-06-02"}, "decision": "included"}
-{"cik": "78003", "company": "PFIZER INC", "existing": true, "documents": 435, "raw_news": 438, "raw_filings": 3, "window": {"start": "2024-08-01", "end": "2025-01-27"}, "decision": "included"}
-{"cik": "1682852", "company": "Moderna, Inc.", "existing": true, "documents": 305, "raw_news": 308, "raw_filings": 9, "window": {"start": "2025-09-27", "end": "2026-03-25"}, "decision": "included"}
-{"cik": "1776985", "company": "BioNTech SE", "existing": true, "documents": 91, "raw_news": 92, "raw_filings": 0, "window": {"start": "2024-10-10", "end": "2025-04-07"}, "decision": "included"}
-{"cik": "1469367", "company": "Sunrun Inc.", "existing": true, "documents": 95, "raw_news": 94, "raw_filings": 2, "window": {"start": "2024-07-19", "end": "2025-01-14"}, "decision": "included"}
-{"cik": "1093691", "company": "PLUG POWER INC", "existing": true, "documents": 142, "raw_news": 137, "raw_filings": 14, "window": {"start": "2024-08-14", "end": "2025-02-09"}, "decision": "included"}
-{"cik": "1971213", "company": "Sinclair, Inc.", "existing": false, "documents": 5, "raw_news": 0, "raw_filings": 5, "window": {"start": "2025-06-18", "end": "2025-12-14"}, "decision": "included"}
-{"cik": "1400891", "company": "iHeartMedia, Inc.", "existing": false, "documents": 2, "raw_news": 0, "raw_filings": 2, "window": {"start": "2025-06-04", "end": "2025-11-30"}, "decision": "included"}
-{"cik": "30697", "company": "Wendy's Co", "existing": true, "documents": 15, "raw_news": 67, "raw_filings": 4, "window": {"start": "2024-08-02", "end": "2025-01-28"}, "decision": "included"}
-{"cik": "49754", "company": "Dine Brands Global, Inc.", "existing": true, "documents": 29, "raw_news": 26, "raw_filings": 4, "window": {"start": "2024-11-08", "end": "2025-05-06"}, "decision": "included"}
-{"cik": "1507605", "company": "MARA Holdings, Inc.", "existing": true, "documents": 96, "raw_news": 85, "raw_filings": 13, "window": {"start": "2024-08-14", "end": "2025-02-09"}, "decision": "included"}
-{"cik": "1585689", "company": "Hilton Worldwide Holdings Inc.", "existing": false, "documents": 5, "raw_news": 0, "raw_filings": 5, "window": {"start": "2025-11-05", "end": "2026-05-03"}, "decision": "included"}
-{"cik": "1559720", "company": "Airbnb, Inc.", "existing": false, "documents": 3, "raw_news": 0, "raw_filings": 3, "window": {"start": "2025-06-18", "end": "2025-12-14"}, "decision": "included"}
-{"cik": "1411579", "company": "AMC ENTERTAINMENT HOLDINGS, INC.", "existing": false, "documents": 7, "raw_news": 0, "raw_filings": 7, "window": {"start": "2024-08-01", "end": "2025-01-27"}, "decision": "included"}
-{"cik": "1326380", "company": "GameStop Corp.", "existing": false, "documents": 1, "raw_news": 0, "raw_filings": 1, "window": {"start": "2025-11-19", "end": "2026-05-17"}, "decision": "included"}
-{"cik": "1655210", "company": "BEYOND MEAT, INC.", "existing": true, "documents": 44, "raw_news": 44, "raw_filings": 3, "window": {"start": "2024-08-23", "end": "2025-02-18"}, "decision": "included"}

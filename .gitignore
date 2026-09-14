@@ -205,7 +205,7 @@ backend/data/memory-backups/
 *.key
 .ruff_cache/
 # Frozen release distributed with this repository
-!projects/credit_risk/dataset/expansion/releases/2026-09-10-random-dev-test-v1/**
+!projects/credit_risk/dataset/expansion/releases/2026-09-14-eligible-trajectories-v1/**
 
 # Saved workflow definitions only; all other runtime state stays private.
 !backend/data/
