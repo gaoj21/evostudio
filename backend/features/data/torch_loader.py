@@ -7,6 +7,7 @@ import contextlib
 import io
 import json
 import inspect
+from itertools import islice
 from torch.utils.data import Dataset, DataLoader
 
 
@@ -51,7 +52,11 @@ def execute_python(payload):
         if 'config' in signature.parameters: provided['config'] = values
         signature.bind(**provided)
         dataset = factory(**provided)
-        records = [row for chunk in batches(dataset, payload['batch_size']) for row in chunk]
+        if payload.get('sample_limit') is not None:
+            # Batch size one prevents fetching a full configured batch for preview.
+            records = [chunk[0] for chunk in islice(batches(dataset, 1), payload['sample_limit'])]
+        else:
+            records = [row for chunk in batches(dataset, payload['batch_size']) for row in chunk]
     # Reject tensors / objects rather than silently stringify their values.
     json.dumps(records, allow_nan=False)
     return records

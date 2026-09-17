@@ -63,7 +63,7 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
     <button className="primary" disabled={busy || codeDirty || (!legacy && !inputSchema) || (config.loader !== 'source' && !config.resource_id)} onClick={inspect}>{busy ? 'Preparing…' : '3. Preview and update output fields'}</button>
     <DatasetOutputs fields={preview?.fields || config.output_schema}/>
     {error && <p role="alert">{String(error)}</p>}
-    {preview && <><p role="status">{preview.raw_records} raw → {preview.output_records} output records</p><JsonView value={preview.preview} /></>}
+    {preview && <><p role="status">{preview.preview_mode==='declared' ? 'Output schema read from code. Dataset was not loaded; runtime values have not been verified.' : preview.preview_mode==='sample' ? `Interface inferred from up to ${preview.sample_limit} sampled records. This is not a full dataset scan or record count.` : `${preview.raw_records} raw → ${preview.output_records} output records`}</p><JsonView value={preview.preview} /></>}
     {config.resource_id && <details className="input-disclosure"><summary>Manage resource</summary><button onClick={() => {update({resource_id:''}); onChange({...config,resource_id:''},[]);}}>Detach from this Input</button><button disabled={busy} onClick={async () => {if (!window.confirm('Delete these uploaded files? Saved workflow references must be detached first.')) return; try {await api.deleteDataResource(config.resource_id);setResources(r => r.filter(x => x.id !== config.resource_id));onChange({...config,resource_id:''},[]);} catch(e){setError(e.body?.detail || e.message);}}}>Delete resource</button></details>}
   </section>;
 }

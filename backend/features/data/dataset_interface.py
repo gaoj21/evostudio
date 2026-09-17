@@ -96,3 +96,35 @@ def arguments(code, values, entrypoint="build_dataset", provided=None):
             raise ValueError(f'Input {key} must be {field["type"]}.')
         if 'options' in field and value not in field['options']: raise ValueError(f'Input {key} must be one of {field["options"]}.')
     return result
+
+
+def declared_outputs(code):
+    """Read an optional literal schema without importing or running user code."""
+    tree = ast.parse(code)
+    declarations = [n.value for n in tree.body if
+                    (isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'OUTPUT_SCHEMA' for t in n.targets)) or
+                    (isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.target.id == 'OUTPUT_SCHEMA')]
+    if not declarations:
+        return None
+    if len(declarations) != 1:
+        raise ValueError('Define OUTPUT_SCHEMA exactly once.')
+    try:
+        fields = ast.literal_eval(declarations[0])
+    except (ValueError, TypeError) as exc:
+        raise ValueError('OUTPUT_SCHEMA must be a literal list of field definitions.') from exc
+    if not isinstance(fields, list) or not fields:
+        raise ValueError('OUTPUT_SCHEMA must be a non-empty list.')
+    names, result = set(), []
+    for field in fields:
+        if not isinstance(field, dict) or not isinstance(field.get('name'), str) or not field['name'].strip():
+            raise ValueError('Each OUTPUT_SCHEMA field needs a name and type.')
+        if field['name'] in names or field['name'] == '_dataloader':
+            raise ValueError('OUTPUT_SCHEMA field names must be unique and not reserved.')
+        if field.get('type') not in ('str','int','float','bool','list','dict','any'):
+            raise ValueError('OUTPUT_SCHEMA types: str, int, float, bool, list, dict, any.')
+        for key in ('required', 'nullable'):
+            if key in field and type(field[key]) is not bool:
+                raise ValueError(f'OUTPUT_SCHEMA {key} must be boolean.')
+        names.add(field['name'])
+        result.append({'name':field['name'], 'type':field['type'], 'required':field.get('required',True), 'nullable':field.get('nullable',False)})
+    return result

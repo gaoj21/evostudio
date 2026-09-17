@@ -33,3 +33,13 @@
 - `dataset_interface.py` — Static factory-argument discovery and runtime form-value validation; no model-provider dependencies.
 
 Native runtime isolation: only worker processes import torch_loader/PyTorch. API preview returns prepared records directly; batch collation runs through dataset_batches workers. Never import torch_loader in the API preparation path: another dependency may already have loaded an incompatible OpenMP runtime. Worker OMP Error #15 is surfaced as an error without terminating the server. Do not enable KMP_DUPLICATE_LIB_OK.
+
+Interface preview for Python Inputs bypasses full preparation and caches. A literal
+`OUTPUT_SCHEMA = [{"name": "text", "type": "str"}]` is read via AST without
+executing imports or constructing the Dataset. Otherwise preview samples at most
+5 items using a PyTorch batch size of 1. Sample types are observations, not a full
+schema guarantee; preview counts are not dataset totals. Eager Dataset constructors
+can still allocate large amounts of memory: declare OUTPUT_SCHEMA to avoid running
+them for interface inspection. Inputs requiring shared references must declare the
+schema to avoid loading all references during preview. Formal Run still uses full
+preparation; this change does not make execution streaming.

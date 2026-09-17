@@ -356,7 +356,9 @@ def test_pytorch_code_preview_and_batch_use_same_records_and_keep_tail(client):
     assert [len(chunk) for chunk in chunks] == [2,1]
     assert chunks[0][1]['value'] is None
     assert chunks[1][0]['multiplier'] == 2
-    assert dataloaders.records(config) == response.json()['preview']
+    assert [{k:v for k,v in row.items() if k != '_dataloader'} for row in dataloaders.records(config)] == response.json()['preview']
+    assert response.json()['snapshot'] is None
+    assert response.json()['preview_mode'] == 'sample'
     changed = {**config,'code':PYTORCH_CODE.replace("config['multiplier']", "config['multiplier'] + 1")}
     assert dataloaders.records(changed)[0]['multiplier'] == 3
 

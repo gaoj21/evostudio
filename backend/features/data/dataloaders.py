@@ -109,7 +109,7 @@ def _object_rows(rows):
     return rows
 
 
-def raw_records(config):
+def raw_records(config, sample_limit=None):
     loader = config.get('loader', 'auto')
     if loader == 'source':
         from .sources import records_from_source_node
@@ -124,7 +124,7 @@ def raw_records(config):
             rows = chat_control.worker('dataset', {'code':config['code'],
                 'resource':{**resource, 'root':str(root), 'files':entries},
                 'config':{**(config.get('reader_config') or {}), 'reference_inputs':config.get('reference_inputs') or {}},
-                'batch_size':config.get('read_batch_size', 100)}, timeout=120)
+                'batch_size':config.get('read_batch_size', 100), 'sample_limit':sample_limit}, timeout=120)
         except Exception as exc:
             raise SourceError(f'Python DataLoader failed: {exc}') from exc
         return rows, resource
@@ -310,15 +310,38 @@ def preview(config: dict = Body(...)):
     try:
         config = copy.deepcopy(config)
         graph, name = config.pop('_graph', None), config.pop('_node', None)
+        if config.get('loader') == 'python':
+            from .dataset_interface import declared_outputs
+            validate(config)
+            fields = declared_outputs(config['code'])
+            if fields is not None:
+                if config.get('input_mode') == 'reference':
+                    fields = [{'name':config.get('reference_field') or 'reference_data','type':'list','required':True,'nullable':False}]
+                return {'fields':fields,'preview':[],'preview_mode':'declared','sample_count':0,'snapshot':None}
+            if graph:
+                from .input_composition import references
+                if references(graph, {'name': name}):
+                    raise SourceError('Declare OUTPUT_SCHEMA to inspect this Input without loading its shared reference datasets. Full references are supplied during Run.')
+            # Interface inspection must never prepare/cache/hash the full dataset.
+            rows, _ = raw_records(config, sample_limit=5)
+            rows = _object_rows(rows)
+            sample_count = len(rows)
+            if config.get('input_mode') == 'reference':
+                rows = [{config.get('reference_field') or 'reference_data':rows}]
+            meta = {'engine':'torch.utils.data.DataLoader','preview_mode':'sample','sample_count':sample_count,'sample_limit':5,'snapshot':None}
+            return _preview_response(rows, meta)
         if graph and config.get('input_mode') != 'reference':
             from .input_composition import snapshot
             config['reference_inputs'] = snapshot(graph, {'name': name})
         rows, meta = prepare(config)
-        fields = list(dict.fromkeys(k for row in rows for k in row if k != '_dataloader'))
-        # Typed schema from all prepared records, not just the first preview row.
-        from .user_datasets import field_types
-        types = field_types({'fields': fields, 'records': rows})
-        return {**meta, 'fields': [{'name': f, 'type': types[f], 'required': all(f in row and row[f] is not None for row in rows), 'nullable': any(row.get(f) is None for row in rows), 'sample': _sample(rows, f)} for f in fields],
-                'preview': [{k: (str(v)[:1000] + '…' if len(str(v)) > 1000 else v) for k, v in row.items()} for row in rows[:5]]}
+        return _preview_response(rows, meta)
     except (SourceError, ValueError, TypeError) as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+def _preview_response(rows, meta):
+    fields = list(dict.fromkeys(k for row in rows for k in row if k != '_dataloader'))
+    from .user_datasets import field_types
+    types = field_types({'fields': fields, 'records': rows})
+    return {**meta, 'fields': [{'name': f, 'type': types[f], 'required': all(f in row and row[f] is not None for row in rows), 'nullable': any(row.get(f) is None for row in rows), 'sample': _sample(rows, f)} for f in fields],
+            'preview': [{k: (str(v)[:1000] + '…' if len(str(v)) > 1000 else v) for k, v in row.items()} for row in rows[:5]]}
