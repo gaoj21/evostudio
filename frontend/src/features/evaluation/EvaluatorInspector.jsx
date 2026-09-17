@@ -29,6 +29,7 @@ export default function EvaluatorInspector({node,onUpdate,onRename,getGraph}) {
  const [resources,setResources]=useState([]),[saved,setSaved]=useState([]),[selection,setSelection]=useState('');
  const [schema,setSchema]=useState(null),[report,setReport]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const [reload,setReload]=useState(0);
+ const [codeDirty,setCodeDirty]=useState(false);
  const version=useRef(0);
  const python=cfg.type==='python';
  useEffect(()=>{api.listDataResources().then(r=>setResources(r.resources)).catch(()=>{});},[]);
@@ -57,14 +58,14 @@ export default function EvaluatorInspector({node,onUpdate,onRename,getGraph}) {
  };
  return <aside className="inspector"><h3>Evaluator: {node.id}</h3>
  <div className="field"><label>Name</label><input value={node.data.editName ?? node.id} onChange={e=>onUpdate(node.id,{editName:e.target.value})} onBlur={()=>onRename(node.id,node.data.editName ?? node.id)}/></div>
- {python ? <><details open={!cfg.output_schema?.length}><summary>Evaluation code</summary><PythonDatasetEditor kind="Evaluator" code={cfg.code} onChange={code=>update({code})} disabled={busy} example={EVALUATOR_EXAMPLE}/></details>
+ {python ? <><details open={!cfg.output_schema?.length}><summary>Evaluation code</summary><PythonDatasetEditor key={node.id} onDirtyChange={setCodeDirty} kind="Evaluator" code={cfg.code} onChange={code=>update({code})} disabled={busy} example={EVALUATOR_EXAMPLE}/></details>
  <DatasetInterface title="Evaluator" code={cfg.code} values={cfg.config || {}} onChange={config=>update({config})} onSchema={setSchema} disabled={busy} inspectCode={api.inspectEvaluatorCode} providedText="The selected saved results supply records automatically. All node outputs are included. Fill the additional parameters detected from your code."/></>
  : <div><p className="muted small">Existing evaluator: {cfg.tool || cfg.type || 'exact_match'}. Its saved configuration still works.</p><button onClick={()=>onUpdate(node.id,{evaluator:{type:'python',timing:cfg.timing || 'batch',direction:cfg.direction || 'maximize',code:EVALUATOR_EXAMPLE,config:{},labels:cfg.labels}})}>Replace with Python evaluator</button></div>}
  <div className="field"><label htmlFor="eval-timing">Run evaluation</label><select id="eval-timing" value={cfg.timing || 'batch'} onChange={e=>update({timing:e.target.value})}><option value="node">When connected outputs are ready</option><option value="run">After each workflow run</option><option value="batch">After the entire batch</option></select></div>
  <details><summary>Separate labels (optional)</summary><p className="muted small">Labels are passed as config.label_records (or a label_records parameter). Code decides how to match them.</p><div className="field"><label htmlFor="eval-label-resource">Label resource</label><select id="eval-label-resource" value={cfg.labels?.resource_id || ''} onChange={e=>update({labels:e.target.value?{resource_id:e.target.value,loader:'auto'}:null})}><option value="">None</option>{resources.map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</select></div></details>
  {python && <><div className="field"><label htmlFor="eval-saved">Test with saved results</label><select id="eval-saved" value={selection} onChange={e=>{version.current+=1;setSelection(e.target.value);setReport(null);}}><option value="">Select a completed run or batch</option>{saved.map(r=><option key={r.id} value={r.id}>{r.label}</option>)}</select></div>
  <button disabled={busy || !graphId} onClick={()=>setReload(n=>n+1)}>Refresh saved results</button>
- <button disabled={busy || !selection || !schema || !graphId} onClick={preview}>{busy?'Evaluating…':'Preview evaluation interface'}</button>
+ <button disabled={busy || codeDirty || !selection || !schema || !graphId} onClick={preview}>{busy?'Evaluating…':'Preview evaluation interface'}</button>
  <p className="muted small">This only runs your evaluator on saved results; workflow agents are not rerun.</p>
  <h4>Output metrics</h4>
  {(report?.metrics || cfg.output_schema)?.length ? <><table><thead><tr><th>Metric</th><th>Type</th><th>Example</th></tr></thead><tbody>{(report?.metrics || cfg.output_schema).map(f=><tr key={f.name}><td>{f.name}</td><td>{f.type}{f.nullable?' / null':''}</td><td>{String(f.sample)}</td></tr>)}</tbody></table>

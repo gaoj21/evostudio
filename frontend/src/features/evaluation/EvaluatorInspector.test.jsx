@@ -32,6 +32,9 @@ it('uploads Python, generates parameters and previews saved results without muta
  render(<Wrapper/>);
  const code='def evaluate(records, threshold: float = 0.5):\n    return {"metrics": {"accuracy": 1}}';
  await userEvent.upload(screen.getByLabelText('Upload Python Evaluator'),new File([code],'evaluate.py',{type:'text/x-python'}));
+ await waitFor(()=>expect(screen.getByLabelText('Python Evaluator code')).toHaveValue(code));
+ expect(api.inspectEvaluatorCode).not.toHaveBeenCalled();
+ await userEvent.click(screen.getByText('Confirm code'));
  expect(await screen.findByLabelText(/threshold/)).toHaveValue(.5);
  await userEvent.click(screen.getByText('Preview evaluation interface'));
  expect(await screen.findByLabelText('Evolve objective')).toHaveValue('accuracy');

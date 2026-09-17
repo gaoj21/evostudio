@@ -9,6 +9,7 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
   const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [codeDirty,setCodeDirty] = useState(false);
   const [inputSchema,setInputSchema] = useState(null);
   const legacy = config.loader !== 'python';
   const files = useRef(null), folder = useRef(null), version = useRef(0);
@@ -47,7 +48,7 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
       const {reader_tool,transform_tool,transform_scope,field_mapping,record_path,source_config,...kept}=config;
       version.current += 1; setPreview(null);
       onChange({...kept,loader:'python',code:DATASET_EXAMPLE},[]);
-    }}>Replace with PyTorch Dataset</button></div> : <details open={!config.output_schema?.length}><summary>Dataset code</summary><PythonDatasetEditor code={config.code} onChange={code=>update({code})} disabled={busy}/></details>}
+    }}>Replace with PyTorch Dataset</button></div> : <details open={!config.output_schema?.length}><summary>Dataset code</summary><PythonDatasetEditor key={nodeId} onDirtyChange={setCodeDirty} code={config.code} onChange={code=>update({code})} disabled={busy}/></details>}
     <p className="muted small">Read and preprocess in build_dataset or Dataset.__getitem__. Studio handles batching and keeps the final partial batch.</p>
     <div className="field"><label htmlFor="loader-read_batch_size">Batch size</label><input id="loader-read_batch_size" type="number" min={1} max={1024} value={config.read_batch_size ?? 100} onChange={e=>update({read_batch_size:Number(e.target.value)})}/><small className="muted">Shared by data loading, workflow batches and native API batching.</small></div>
     <div className="field"><label htmlFor="loader-role">How to use the data</label><select id="loader-role" value={config.input_mode || 'records'} onChange={e => update({input_mode:e.target.value})}><option value="records">Per-record input</option><option value="reference">Shared reference</option></select></div>
@@ -59,7 +60,7 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
       {['offset','n'].map(key=><div className="field" key={key}><label htmlFor={`loader-${key}`}>{key==='offset'?'Skip records':'Record limit (0 = all)'}</label><input id={`loader-${key}`} type="number" min={0} value={config[key] ?? 0} onChange={e=>update({[key]:Number(e.target.value)})}/></div>)}
       {field('group_by','Sequential group field','Optional')}{field('order_by','Order within group','Optional')}
     </details>
-    <button className="primary" disabled={busy || (!legacy && !inputSchema) || (config.loader !== 'source' && !config.resource_id)} onClick={inspect}>{busy ? 'Preparing…' : '3. Preview and update output fields'}</button>
+    <button className="primary" disabled={busy || codeDirty || (!legacy && !inputSchema) || (config.loader !== 'source' && !config.resource_id)} onClick={inspect}>{busy ? 'Preparing…' : '3. Preview and update output fields'}</button>
     <DatasetOutputs fields={preview?.fields || config.output_schema}/>
     {error && <p role="alert">{String(error)}</p>}
     {preview && <><p role="status">{preview.raw_records} raw → {preview.output_records} output records</p><JsonView value={preview.preview} /></>}
