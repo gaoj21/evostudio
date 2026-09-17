@@ -441,3 +441,21 @@ def test_dataset_example_uses_copied_paths_and_split_and_does_not_cache_external
     assert dataloaders.records(config)[0]['text']=='before'
     file.write_text('[{"text":"after","split":"dev"}]')
     assert dataloaders.records(config)[0]['text']=='after'
+
+
+def test_historical_resource_mounts_without_saving_graph_and_preserves_owner(client):
+    owner=client.post('/api/graphs',json={'name':'Original upload','goal':'Read'}).json()
+    target=client.post('/api/graphs',json={'name':'Reuse upload','goal':'Read'}).json()
+    resource=client.post('/api/data-resources',data={'graph_id':owner['id']},files=[('files',('old/data.json',b'[{"x":1}]'))]).json()
+    path=f"/api/data-resources/{resource['id']}/workspace"
+    for _ in range(2):
+        response=client.post(path,json={'graph_id':target['id']})
+        assert response.status_code==200,response.text
+    assert response.json()['workspace_graph_ids']==[target['id']]
+    assert response.json()['graph_id']==owner['id']
+    for graph in (owner,target):
+        listing=client.get(f"/api/graphs/{graph['id']}/workspace").json()['files']
+        entry=next(e for e in listing if e['path'].endswith('old/data.json'))
+        assert entry['absolute_path']==resource['root']+'/old/data.json'
+        assert entry['readonly'] is True
+    assert client.post(path,json={'graph_id':'does-not-exist'}).status_code==404

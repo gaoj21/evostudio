@@ -4,10 +4,13 @@ import json
 import re
 import shutil
 import uuid
+import threading
 from pathlib import PurePosixPath
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Body
 from backend.api.studio_config import data_path
 from backend.api.sources import SourceError
+
+_association_lock = threading.Lock()
 
 router = APIRouter(prefix='/api/data-resources', tags=['DataLoader'])
 
@@ -114,5 +117,26 @@ def remove(resource_id: str):
             raise HTTPException(409, 'Resource is used by saved workflows: ' + ', '.join(used))
         shutil.rmtree(path_for(resource_id))
         return {'deleted': resource_id}
+    except SourceError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.post('/{resource_id}/workspace')
+def attach_workspace(resource_id: str, body: dict = Body(...)):
+    """Mount a previously uploaded dataset without requiring a canvas save."""
+    from backend.api import graphs
+    graph_id = body.get('graph_id')
+    if not isinstance(graph_id, str) or not graphs.load_graph(graph_id):
+        raise HTTPException(404, 'Workflow not found.')
+    try:
+        with _association_lock:
+            item = load(resource_id)
+            graph_ids = set(item.get('workspace_graph_ids') or [])
+            graph_ids.add(graph_id)
+            item['workspace_graph_ids'] = sorted(graph_ids)
+            temporary = path_for(resource_id) / ('.manifest-' + uuid.uuid4().hex)
+            temporary.write_text(json.dumps(item))
+            temporary.replace(path_for(resource_id) / 'manifest.json')
+        return public(item)
     except SourceError as exc:
         raise HTTPException(404, str(exc)) from exc

@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import {describe,it,expect,vi,beforeEach} from 'vitest';
 import DataLoaderInput from './DataLoaderInput.jsx';
 import {api} from '../../api.js';
-vi.mock('../../api.js',()=>({api:{listDataResources:vi.fn(),listCustomTools:vi.fn(),uploadDataResource:vi.fn(),previewDataLoader:vi.fn(),deleteDataResource:vi.fn()}}));
+vi.mock('../../api.js',()=>({api:{listDataResources:vi.fn(),listCustomTools:vi.fn(),uploadDataResource:vi.fn(),previewDataLoader:vi.fn(),deleteDataResource:vi.fn(),attachDataResource:vi.fn()}}));
 beforeEach(()=>{vi.clearAllMocks();api.listDataResources.mockResolvedValue({resources:[{id:'data',name:'Folder',files:[{path:'a.json'}]}]});api.listCustomTools.mockResolvedValue({tools:[]});});
 describe('DataLoader input',()=>{
  it('previews prepared records and updates typed output fields',async()=>{
@@ -24,4 +24,14 @@ describe('DataLoader input',()=>{
   expect(screen.getByLabelText('Python Dataset code')).toBeTruthy();
   await waitFor(()=>expect(api.listDataResources).toHaveBeenCalled());
  });
+});
+
+it('mounts a historical dataset before selecting it for an unsaved canvas',async()=>{
+ api.attachDataResource.mockResolvedValue({});
+ const onChange=vi.fn();
+ render(<DataLoaderInput config={{loader:'python'}} getGraph={()=>({id:'task'})} onChange={onChange}/>);
+ await screen.findByText('Folder · 1 files');
+ await userEvent.selectOptions(screen.getByLabelText('1. Data resource'),'data');
+ await waitFor(()=>expect(api.attachDataResource).toHaveBeenCalledWith('data','task'));
+ await waitFor(()=>expect(onChange).toHaveBeenCalledWith(expect.objectContaining({resource_id:'data'}),[]));
 });

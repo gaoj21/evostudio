@@ -17,6 +17,17 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
   useEffect(() => {
     api.listDataResources().then(r => setResources(r.resources)).catch(e => setError(e.body?.detail || e.message));
   }, []);
+  async function selectResource(resourceId) {
+    const graphId=getGraph?.()?.id;
+    setError('');
+    if (!resourceId || !graphId) {update({resource_id:resourceId});return;}
+    setBusy(true);
+    try {
+      await api.attachDataResource(resourceId, graphId);
+      update({resource_id:resourceId});
+    } catch(e) {setError(e.body?.detail || e.message);}
+    finally {setBusy(false);}
+  }
   async function upload(selected) {
     if (!selected?.length) return;
     setBusy(true); setError('');
@@ -38,7 +49,7 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
   }
   const field = (key, title, placeholder = '') => <div className="field"><label htmlFor={`loader-${key}`}>{title}</label><input id={`loader-${key}`} value={config[key] || ''} placeholder={placeholder} onChange={e => update({[key]: e.target.value})} /></div>;
   return <section aria-label="DataLoader">
-    {config.loader !== 'source' && <><div className="field"><label htmlFor="loader-resource">1. Data resource</label><select id="loader-resource" value={config.resource_id || ''} onChange={e => update({resource_id:e.target.value})}><option value="">Select uploaded files</option>{resources.map(r => <option key={r.id} value={r.id}>{r.name} · {r.files.length} files</option>)}</select></div>
+    {config.loader !== 'source' && <><div className="field"><label htmlFor="loader-resource">1. Data resource</label><select id="loader-resource" value={config.resource_id || ''} disabled={busy} onChange={e => selectResource(e.target.value)}><option value="">Select uploaded files</option>{resources.map(r => <option key={r.id} value={r.id}>{r.name} · {r.files.length} files</option>)}</select></div>
     <input hidden ref={files} type="file" multiple onChange={e => {upload(e.target.files); e.target.value='';}} />
     <input hidden ref={folder} type="file" webkitdirectory="" multiple onChange={e => {upload(e.target.files); e.target.value='';}} />
     <div className="input-actions"><button disabled={busy} onClick={() => files.current.click()}>Upload files</button><button disabled={busy} onClick={() => folder.current.click()}>Upload folder</button></div></>}

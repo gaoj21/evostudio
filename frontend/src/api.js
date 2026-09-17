@@ -26,6 +26,7 @@ const agentPath = (g, a = '') => `/api/graphs/${encodeURIComponent(g)}/agents${a
 export const api = {
   listDataResources: () => req('/api/data-resources'),
   uploadDataResource: (files, graphId) => { const formData = new FormData(); if (graphId) formData.append('graph_id', graphId); Array.from(files).forEach(file => formData.append('files', file, file.webkitRelativePath || file.name)); return req('/api/data-resources', {method:'POST', formData}); },
+  attachDataResource: (id, graphId) => req(`/api/data-resources/${encodeURIComponent(id)}/workspace`, {method:'POST', body:{graph_id:graphId}}),
   deleteDataResource: id => req(`/api/data-resources/${encodeURIComponent(id)}`, {method:'DELETE'}),
   inspectEvaluatorCode: code => req('/api/evaluators/interface', {method:'POST',body:{code}}),
   previewEvaluatorCode: (id,body) => req(`/api/evaluators/graphs/${encodeURIComponent(id)}/preview`, {method:'POST',body}),
