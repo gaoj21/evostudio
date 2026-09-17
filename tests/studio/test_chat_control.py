@@ -94,3 +94,12 @@ def test_dataset_worker_deadline_terminates_process(monkeypatch):
     with pytest.raises(TimeoutError, match='dataset worker exceeded'):
         chat_control.worker('dataset', {}, timeout=.2)
     assert processes[0].poll() is not None
+
+
+def test_native_openmp_abort_is_reported_without_killing_parent(monkeypatch):
+    original = subprocess.Popen
+    def spawn(*args, **kwargs):
+        return original([sys.executable, '-c', 'import os,sys; sys.stderr.write("OMP: Error #15: Initializing libomp.dylib\\n"); sys.stderr.flush(); os._exit(134)'], **kwargs)
+    monkeypatch.setattr(chat_control.subprocess, 'Popen', spawn)
+    with pytest.raises(RuntimeError, match='OpenMP runtime conflict.*backend is still running'):
+        chat_control.worker('dataset', {}, timeout=5)

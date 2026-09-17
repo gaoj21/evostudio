@@ -264,10 +264,8 @@ def _prepare_cached(config):
 
 
 def prepare(config):
-    """Materialized preparation, with the same PyTorch collation as execution."""
+    """Return materialized records without loading native runtimes in the API."""
     rows, meta = _prepare_cached(config)
-    from .torch_loader import RecordDataset, batches
-    rows = [row for chunk in batches(RecordDataset(rows), config.get('read_batch_size', 100)) for row in chunk]
     return rows, {**meta, 'engine': 'torch.utils.data.DataLoader'}
 
 
@@ -277,8 +275,12 @@ def records(config):
 
 def iter_batches(config):
     rows, _ = _prepare_cached(config)
-    from .torch_loader import RecordDataset, batches
-    for chunk in batches(RecordDataset(rows), config.get('read_batch_size', 100)):
+    from backend.features.chat.chat_control import worker
+    try:
+        chunks = worker('dataset_batches', {'records': rows, 'batch_size': config.get('read_batch_size', 100)}, timeout=120)
+    except Exception as exc:
+        raise SourceError(f'DataLoader batching failed: {exc}') from exc
+    for chunk in chunks:
         check_cancel()
         yield chunk
 

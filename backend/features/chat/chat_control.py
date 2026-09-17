@@ -63,8 +63,9 @@ def worker(kind, payload, on_stage=None, on_record=None, timeout=None):
     with tempfile.TemporaryDirectory(prefix='assistant-worker-') as directory:
         root = Path(directory)
         (root / 'input.json').write_text(json.dumps(payload, ensure_ascii=False))
-        process = subprocess.Popen([sys.executable, str(Path(__file__).with_name('chat_worker.py')), kind, directory],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        with (root / 'stderr.log').open('wb') as stderr:
+            process = subprocess.Popen([sys.executable, str(Path(__file__).with_name('chat_worker.py')), kind, directory],
+                                       stdout=subprocess.DEVNULL, stderr=stderr, start_new_session=True)
         started = time.monotonic()
         last_stage = None
         offset = 0
@@ -100,7 +101,12 @@ def worker(kind, payload, on_stage=None, on_record=None, timeout=None):
             check()
             drain()
             if not (root / 'result.json').exists():
-                raise RuntimeError(f'Assistant worker exited without a result ({process.returncode})')
+                with (root / 'stderr.log').open('rb') as stderr:
+                    stderr.seek(max(0, stderr.seek(0, 2) - 8192))
+                    diagnostic = stderr.read().decode('utf-8', errors='replace')
+                if 'OMP: Error #15' in diagnostic:
+                    raise RuntimeError(f'{kind} worker stopped: OpenMP runtime conflict (OMP Error #15). Multiple libomp/libiomp copies were loaded. Use a clean Python environment with compatible native packages; do not enable KMP_DUPLICATE_LIB_OK. The backend is still running.')
+                raise RuntimeError(f'{kind} worker exited without a result (exit code {process.returncode}); the backend is still running.')
             result = json.loads((root / 'result.json').read_text())
             if 'error' in result:
                 raise RuntimeError(result['error'])

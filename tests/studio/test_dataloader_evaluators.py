@@ -386,20 +386,20 @@ def test_python_loader_reports_actionable_errors(client, code, message):
     assert message in response.json()['detail']
 
 
-def test_all_builtin_records_use_real_pytorch_dataloader(client, monkeypatch):
-    from backend.features.data import torch_loader
-    from torch.utils.data import DataLoader
+def test_all_builtin_records_use_isolated_pytorch_dataloader(client, monkeypatch):
+    from backend.features.chat import chat_control
     resource=upload(client,[('records.json',b'[{"a":1},{"a":2},{"a":3}]')])
     calls=[]
-    def capture(*args, **kwargs):
-        calls.append(kwargs)
-        return DataLoader(*args, **kwargs)
-    monkeypatch.setattr(torch_loader,'DataLoader',capture)
+    original=chat_control.worker
+    def capture(kind, payload, **kwargs):
+        calls.append((kind, payload['batch_size']))
+        return original(kind, payload, **kwargs)
+    monkeypatch.setattr(chat_control,'worker',capture)
     config={'resource_id':resource['id'],'read_batch_size':2}
     assert len(dataloaders.prepare(config)[0]) == 3
+    assert not calls  # Preview must not initialize a second native runtime.
     assert [len(c) for c in dataloaders.iter_batches(config)] == [2,1]
-    assert all(c['drop_last'] is False and c['batch_size']==2 for c in calls)
-    assert len(calls)==2
+    assert calls == [('dataset_batches', 2)]
 
 
 def test_uploaded_dataset_is_visible_in_workspace_before_graph_save(client):

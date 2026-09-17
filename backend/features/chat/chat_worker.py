@@ -38,6 +38,9 @@ def main():
         elif kind == 'evaluate_python':
             from backend.features.evaluation.python_evaluator import execute
             value = execute(payload)
+        elif kind == 'dataset_batches':
+            from backend.features.data.torch_loader import RecordDataset, batches
+            value = list(batches(RecordDataset(payload['records']), payload['batch_size']))
         elif kind == 'dataset':
             from backend.features.data.torch_loader import execute_python
             value = execute_python(payload)

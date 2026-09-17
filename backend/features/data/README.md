@@ -31,3 +31,5 @@
 - `torch_loader.py` — Shared PyTorch Dataset/DataLoader adapter and isolated Python dataset factory; dictionary collation, no shuffle, no dropped tail. Input code is stored with the graph.
 
 - `dataset_interface.py` — Static factory-argument discovery and runtime form-value validation; no model-provider dependencies.
+
+Native runtime isolation: only worker processes import torch_loader/PyTorch. API preview returns prepared records directly; batch collation runs through dataset_batches workers. Never import torch_loader in the API preparation path: another dependency may already have loaded an incompatible OpenMP runtime. Worker OMP Error #15 is surfaced as an error without terminating the server. Do not enable KMP_DUPLICATE_LIB_OK.
