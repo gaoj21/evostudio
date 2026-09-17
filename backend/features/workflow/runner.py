@@ -367,6 +367,10 @@ def _gather(task: dict, bindings: dict, values: dict, external: dict) -> dict:
 def _tool_outputs(task: dict, result) -> dict:
     """Spread a tool's return over its declared outputs, by key when several."""
     names = [o.get("name") for o in (task.get("outputs") or []) if o.get("name")]
+    from backend.api import custom_tools
+    custom = custom_tools.find(task.get('tool'))
+    if custom and custom[0].get('factory'):
+        return result
     if len(names) <= 1:
         return {(names[0] if names else "result"): result}
     if not isinstance(result, dict):

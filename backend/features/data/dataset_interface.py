@@ -98,7 +98,7 @@ def arguments(code, values, entrypoint="build_dataset", provided=None):
     return result
 
 
-def declared_outputs(code):
+def declared_outputs(code, allow_empty=False):
     """Read an optional literal schema without importing or running user code."""
     tree = ast.parse(code)
     declarations = [n.value for n in tree.body if
@@ -112,7 +112,7 @@ def declared_outputs(code):
         fields = ast.literal_eval(declarations[0])
     except (ValueError, TypeError) as exc:
         raise ValueError('OUTPUT_SCHEMA must be a literal list of field definitions.') from exc
-    if not isinstance(fields, list) or not fields:
+    if not isinstance(fields, list) or (not fields and not allow_empty):
         raise ValueError('OUTPUT_SCHEMA must be a non-empty list.')
     names, result = set(), []
     for field in fields:

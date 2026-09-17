@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import ResourceActions from '../../components/ResourceActions.jsx';
+import CustomToolEditor from './PythonToolEditor.jsx';
+export {default as CustomToolEditor} from './PythonToolEditor.jsx';
 import { api } from '../../api.js';
 
 // A tool is a documented calling interface, so a custom toolkit is a Python
@@ -28,6 +30,7 @@ export function toolDefaults(sub) {
     kind: 'tool',
     description: sub.description || '',
     tool: sub.name,
+    ...(sub.outputs?.length ? {outputs:sub.outputs} : {}),
     inputs: Object.entries(sub.inputs || {}).map(([name, meta]) => ({
       name,
       type: meta.type === 'string' ? 'str' : meta.type,
@@ -115,67 +118,6 @@ export function SkillEditor({ initial, onClose, onSaved }) {
   );
 }
 
-export function CustomToolEditor({ initial, onClose, onSaved }) {
-  const [name, setName] = useState(initial?.name || '');
-  const [code, setCode] = useState(initial?.code || '');
-  const [error, setError] = useState(null);
-  const [saving, setSaving] = useState(false);
-
-  const save = async (e) => {
-    e.preventDefault();
-    setSaving(true);
-    setError(null);
-    try {
-      // The code is the definition. A name is sent only because a module of
-      // several functions needs something to group them under.
-      await api.saveCustomTool({ name: name.trim() || undefined, code });
-      onSaved();
-    } catch (err) {
-      setError(err?.body?.detail || err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <form className="modal" onClick={(e) => e.stopPropagation()} onSubmit={save}>
-        <h3>Custom toolkit</h3>
-        <p className="muted small">
-          A tool is a calling interface with a description. Write a Python module and
-          every public function in it becomes a tool: the module docstring says what
-          the toolkit is, each function&apos;s docstring says when to call it, and its
-          annotated arguments are the parameters. Import a library or an existing
-          project and expose its API the same way.
-        </p>
-        <div className="field">
-          <label>
-            Toolkit name{' '}
-            <span className="muted">(optional for a module with one function)</span>
-          </label>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="text_stats" />
-        </div>
-        <div className="field">
-          <label>Code</label>
-          <textarea
-            rows={14}
-            className="code-input"
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            placeholder={CODE_PLACEHOLDER}
-            required
-          />
-        </div>
-        {error && <div className="muted small batch-error">{String(error)}</div>}
-        <div className="modal-actions">
-          <button type="button" onClick={onClose} disabled={saving}>Cancel</button>
-          <button type="submit" className="primary" disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
 // A toolkit uploaded as a folder. Zip a library or a project; name the entry
 // file when it is not obvious; the entry's public functions are the tools.
 export function ToolkitUpload({ onClose, onSaved }) {
@@ -256,7 +198,7 @@ export default function ToolsPanel({ onAdd, disabled }) {
       ? [...new Set([...(toolkit.sources || []), fn])]
       : (toolkit.sources || []).filter((n) => n !== fn);
     try {
-      await api.saveCustomTool({ name: toolkit.name, code: toolkit.code, sources });
+      await api.saveCustomTool({ name: toolkit.name, code: toolkit.code, sources, ...(toolkit.factory ? {config:toolkit.config} : {}) });
       const r = await api.listCustomTools();
       setCustomTools(r.tools || []);
     } catch (err) {
@@ -324,11 +266,11 @@ export default function ToolsPanel({ onAdd, disabled }) {
       </div>
       <h3>Custom tools</h3>
       <p className="palette-hint">
-        Each public function in a Python module becomes a reusable tool. Once saved,
+        Upload a factory tool with explicit input/output schemas, or keep existing function toolkits. Once saved,
         it appears with the built-in tools in Library.
       </p>
       {customTools.map((t) => (
-        <ResourceActions key={t.name} name={t.name} items={[{ label: 'Delete custom tool…', danger: true, action: () => deleteTool(t.name) }]}><div className="palette-item">
+        <ResourceActions key={t.name} name={t.name} items={[{ label: 'Edit code and configuration', action: () => setEditorOpen(t) }, { label: 'Delete custom tool…', danger: true, action: () => deleteTool(t.name) }]}><div className="palette-item">
           <div className="palette-label">
             {t.name}
             <button type="button" className="param-del" style={{ float: 'right' }} title="Delete" onClick={() => deleteTool(t.name)}>
@@ -418,6 +360,7 @@ export default function ToolsPanel({ onAdd, disabled }) {
       )}
       {editorOpen && (
         <CustomToolEditor
+          initial={editorOpen?.name ? editorOpen : undefined}
           onClose={() => setEditorOpen(false)}
           onSaved={() => { setEditorOpen(false); refreshTools(); }}
         />

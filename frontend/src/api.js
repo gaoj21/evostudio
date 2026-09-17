@@ -24,6 +24,8 @@ const mem0Path = (graph, space) => `/api/graphs/${encodeURIComponent(graph)}/mem
 
 const agentPath = (g, a = '') => `/api/graphs/${encodeURIComponent(g)}/agents${a ? '/' + encodeURIComponent(a) : ''}`;
 export const api = {
+  inspectToolCode: code => req('/api/tools/custom/interface', {method:'POST',body:{code}}),
+  previewToolCode: body => req('/api/tools/custom/preview', {method:'POST',body}),
   listDataResources: () => req('/api/data-resources'),
   uploadDataResource: (files, graphId) => { const formData = new FormData(); if (graphId) formData.append('graph_id', graphId); Array.from(files).forEach(file => formData.append('files', file, file.webkitRelativePath || file.name)); return req('/api/data-resources', {method:'POST', formData}); },
   attachDataResource: (id, graphId) => req(`/api/data-resources/${encodeURIComponent(id)}/workspace`, {method:'POST', body:{graph_id:graphId}}),

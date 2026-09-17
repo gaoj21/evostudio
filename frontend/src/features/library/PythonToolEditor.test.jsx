@@ -1,0 +1,26 @@
+import React from 'react';
+import {render,screen,waitFor,fireEvent} from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import {it,expect,vi} from 'vitest';
+import PythonToolEditor,{TOOL_EXAMPLE} from './PythonToolEditor.jsx';
+import {api} from '../../api.js';
+vi.mock('../../api.js',()=>({api:{inspectToolCode:vi.fn(),saveCustomTool:vi.fn(),previewToolCode:vi.fn()}}));
+it('confirms code without running, separates settings and runtime inputs, and saves',async()=>{
+ api.inspectToolCode.mockResolvedValue({factory:true,configuration:{inputs:[{name:'minimum_length',type:'int',default:1}]},inputs:[{name:'text',type:'str'}],outputs:[{name:'words',type:'int'}]});
+ api.previewToolCode.mockResolvedValue({status:'success',result:{words:1}});
+ api.saveCustomTool.mockResolvedValue({});
+ const saved=vi.fn();render(<PythonToolEditor onClose={vi.fn()} onSaved={saved}/>);
+ await userEvent.type(screen.getByLabelText('Tool / toolkit name'),'counter');
+ await userEvent.click(screen.getByText('Load example'));
+ expect(api.inspectToolCode).not.toHaveBeenCalled();
+ await userEvent.click(screen.getByText('Confirm code'));
+ const setting=await screen.findByLabelText(/minimum_length/);
+ fireEvent.change(setting,{target:{value:'4'}});
+ expect(api.previewToolCode).not.toHaveBeenCalled();
+ fireEvent.change(screen.getByLabelText('Test inputs (JSON)'),{target:{value:'{"text":"hello world"}'}});
+ await userEvent.click(screen.getByText('Run example'));
+ await waitFor(()=>expect(api.previewToolCode).toHaveBeenCalledWith(expect.objectContaining({config:{minimum_length:4},args:{text:'hello world'}})));
+ await userEvent.click(screen.getByText('Save'));
+ await waitFor(()=>expect(api.saveCustomTool).toHaveBeenCalledWith(expect.objectContaining({name:'counter',code:TOOL_EXAMPLE,config:{minimum_length:4}})));
+ expect(saved).toHaveBeenCalled();
+});

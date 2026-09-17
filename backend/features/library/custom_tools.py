@@ -89,6 +89,12 @@ try:
         os.chdir(package_dir)
         ns["__file__"] = os.path.join(package_dir, payload.get("entry_file") or "tools.py")
     exec(compile(payload["code"], ns.get("__file__", "<custom_tool>"), "exec"), ns)
+    if payload.get('factory'):
+        sys.path.insert(0, payload['repo_root'])
+        from backend.features.library.python_tool import execute
+        result = execute(ns, payload['code'], payload.get('config') or {}, payload['args'])
+        print(json.dumps({'ok': True, 'result': result}, ensure_ascii=False, allow_nan=False))
+        sys.exit(0)
     entry = ns.get(payload["entry"])
     if not callable(entry):
         raise ValueError(f"code does not define a callable {payload['entry']!r}")
@@ -298,7 +304,26 @@ def validate_spec(spec: dict, builtin_names: list[str],
     nothing but the code.
     """
     code = spec.get("code") or ""
-    derived = analyse(code)
+    from . import python_tool
+    try:
+        factory = python_tool.is_factory(code)
+        schema = python_tool.interface(code) if factory else None
+    except SyntaxError as exc:
+        raise CustomToolError(f"Code does not compile: {exc}") from exc
+    except (ValueError, TypeError) as exc:
+        raise CustomToolError(str(exc)) from exc
+    if factory:
+        name = _validate_name((spec.get('name') or '').strip(), builtin_names)
+        description = _module_description(code) or (spec.get('description') or '').strip()
+        if not description: raise CustomToolError('Add a module docstring describing when to use this tool.')
+        derived = {'description':description, 'tools':[{'name':name,'description':description,
+            'params':[{'name':f['name'],'type':python_tool.JSON_TYPES[f['type']],'required':f['required'],'description':''} for f in schema['inputs']],
+            'outputs':schema['outputs'], 'factory':True}]}
+        from backend.features.data.dataset_interface import arguments
+        try: config = arguments(code, spec.get('config') or {}, 'build_tool', set())
+        except (ValueError,TypeError) as exc: raise CustomToolError(str(exc)) from exc
+    else:
+        derived = analyse(code)
     tools = derived["tools"]
 
     name = (spec.get("name") or "").strip()
@@ -353,6 +378,7 @@ def validate_spec(spec: dict, builtin_names: list[str],
     result = {"name": name, "description": description, "tools": tools, "code": code,
               "sources": wanted, "requirements": spec.get("requirements") or [], "tests": spec.get("tests") or []}
     from backend.features.library.tool_verification import configuration
+    if factory: result.update(factory=True, config=config, interface=schema)
     configuration(result)
     return result
 
@@ -638,11 +664,15 @@ def run_custom_tool(name: str, args: dict) -> dict:
     if found is None:
         return {"error": f"Custom tool '{name}' not found"}
     spec, _tool = found
+    return run_spec(spec, name, args)
+
+
+def run_spec(spec, name, args):
     from backend.features.library.tool_verification import dependency_path
     try:
         proc = subprocess.run(
             [sys.executable, "-c", _WRAPPER],
-            input=json.dumps({"code": spec["code"], "args": args, "entry": name,
+            input=json.dumps({"code": spec["code"], "args": args, "entry": name, "factory":spec.get("factory",False), "config":spec.get("config") or {}, "repo_root":str(_REPO_ROOT),
                               "dependency_dir": str(dependency_path(spec)) if spec.get("requirements") else None,
                               "package_dir": str(package_dir(spec["name"]))
                               if spec.get("package") else None,
@@ -696,13 +726,14 @@ def _make_tool(tool: dict):
         return cached
 
     params = tool.get("params") or []
-    sig = ", ".join(f"{p['name']}: {_PY_TYPES[p['type']].__name__}" for p in params)
+    ordered = sorted(params, key=lambda p: not p.get('required', True))
+    sig = ", ".join(f"{p['name']}: {_PY_TYPES[p['type']].__name__}" + (" = _MISSING" if not p.get('required', True) else "") for p in ordered)
     kwargs = ", ".join(f"'{p['name']}': {p['name']}" for p in params)
     src = (
         f"def __call__(self{', ' if sig else ''}{sig}):\n"
-        f"    return run_custom_tool(self.name, {{{kwargs}}})\n"
+        f"    return run_custom_tool(self.name, {{k:v for k,v in {{{kwargs}}}.items() if v is not _MISSING}})\n"
     )
-    ns = {"run_custom_tool": run_custom_tool}
+    ns = {"run_custom_tool": run_custom_tool, "_MISSING":object()}
     exec(compile(src, "<custom_tool_class>", "exec"), ns)
     # The class name only has to be unique in the registry; the tool's own
     # `name` is what the framework and the model use.
@@ -782,5 +813,33 @@ def verify_custom(name: str):
     from backend.features.library.tool_verification import verify_saved
     try:
         return verify_saved(name)
+    except CustomToolError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post('/tools/custom/interface')
+def inspect_tool(body: dict = Body(...)):
+    from . import python_tool
+    try:
+        code = body.get('code') or ''
+        if python_tool.is_factory(code):
+            return {'factory':True, **python_tool.interface(code)}
+        return {'factory':False, **analyse(code)}
+    except (SyntaxError, ValueError, TypeError, CustomToolError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post('/tools/custom/preview')
+def preview_tool(body: dict = Body(...)):
+    from backend.api import tools_registry
+    try:
+        spec = validate_spec(body, tools_registry.builtin_names())
+        name = body.get('tool') or spec['tools'][0]['name']
+        if name not in {t['name'] for t in spec['tools']}:
+            raise CustomToolError('Choose an exported tool.')
+        if not isinstance(body.get('args', {}), dict): raise CustomToolError('Test inputs must be an object.')
+        result = run_spec(spec, name, body.get('args') or {})
+        if 'error' in result: raise CustomToolError(result['error'])
+        return {'status':'success', **result, 'scope':'This example only; not a guarantee for all inputs.'}
     except CustomToolError as exc:
         raise HTTPException(422, str(exc)) from exc

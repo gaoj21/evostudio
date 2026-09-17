@@ -237,7 +237,8 @@ def list_tools() -> list[dict]:
                 "inputs": {p["name"]: {"type": p["type"],
                                        "description": p.get("description", "")}
                            for p in tool.get("params") or []},
-                "required": [p["name"] for p in tool.get("params") or []],
+                "required": [p["name"] for p in tool.get("params") or [] if p.get("required", True)],
+                "outputs": tool.get("outputs") or [],
             } for tool in tools],
             "requires": [],
             "available": True,
