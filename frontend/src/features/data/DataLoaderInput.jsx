@@ -37,11 +37,11 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
     } catch(e) { setError(e.body?.detail || e.message); }
     finally { setBusy(false); }
   }
-  async function inspect() {
+  async function inspect(mode='interface') {
     const token = ++version.current;
     setBusy(true); setError('');
     try {
-      const result = await api.previewDataLoader({...config,...(getGraph ? {_graph:getGraph(),_node:nodeId} : {})});
+      const result = await api.previewDataLoader({...config,preview_mode:mode,...(getGraph ? {_graph:getGraph(),_node:nodeId} : {})});
       if (token !== version.current) return;
       setPreview(result); onChange({...config, preview_snapshot: result.snapshot, input_schema:inputSchema, output_schema:result.fields}, result.fields);
     } catch(e) { if (token === version.current) setError(e.body?.detail || e.message); }
@@ -71,7 +71,9 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
       {['offset','n'].map(key=><div className="field" key={key}><label htmlFor={`loader-${key}`}>{key==='offset'?'Skip records':'Record limit (0 = all)'}</label><input id={`loader-${key}`} type="number" min={0} value={config[key] ?? 0} onChange={e=>update({[key]:Number(e.target.value)})}/></div>)}
       {field('group_by','Sequential group field','Optional')}{field('order_by','Order within group','Optional')}
     </details>
-    <button className="primary" disabled={busy || codeDirty || (!legacy && !inputSchema) || (config.loader !== 'source' && !config.resource_id)} onClick={inspect}>{busy ? 'Preparing…' : '3. Preview and update output fields'}</button>
+    <button className="primary" disabled={busy || codeDirty || (!legacy && !inputSchema) || (config.loader !== 'source' && !config.resource_id)} onClick={()=>inspect()}>{busy ? 'Inspecting…' : '3. Read output interface'}</button>
+    {!legacy && <button disabled={busy || codeDirty || !inputSchema || !config.resource_id} onClick={()=>inspect('sample')}>Sample 5 records (runs code)</button>}
+    <p className="muted small">Read output interface uses OUTPUT_SCHEMA only, without loading data. Sampling explicitly runs your Dataset with a 30-second limit.</p>
     <DatasetOutputs fields={preview?.fields || config.output_schema}/>
     {error && <p role="alert">{String(error)}</p>}
     {preview && <><p role="status">{preview.preview_mode==='declared' ? 'Output schema read from code. Dataset was not loaded; runtime values have not been verified.' : preview.preview_mode==='sample' ? `Interface inferred from up to ${preview.sample_limit} sampled records. This is not a full dataset scan or record count.` : `${preview.raw_records} raw → ${preview.output_records} output records`}</p><JsonView value={preview.preview} /></>}

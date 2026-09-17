@@ -11,5 +11,7 @@ def test_preview_and_batch_do_not_import_torch_in_api(monkeypatch):
     rows = [{'value': i} for i in range(5)]
     monkeypatch.setattr(dataloaders, '_prepare_cached', lambda config: (rows, {'output_records': 5}))
     assert dataloaders.prepare({})[0] == rows
-    assert dataloaders.preview({})['fields'][0]['name'] == 'value'
+    from fastapi import HTTPException
+    import pytest
+    with pytest.raises(HTTPException): dataloaders.preview({})
     assert list(dataloaders.iter_batches({'read_batch_size': 2})) == [rows[:2], rows[2:4], rows[4:]]

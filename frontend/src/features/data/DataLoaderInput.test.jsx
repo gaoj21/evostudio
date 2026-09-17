@@ -11,7 +11,7 @@ describe('DataLoader input',()=>{
   const onChange=vi.fn();const fields=[{name:'amount',type:'int',required:false}];
   api.previewDataLoader.mockResolvedValue({fields,raw_records:3,output_records:2,preview:[{amount:1}],snapshot:'fixed'});
   render(<DataLoaderInput config={{type:'dataloader',resource_id:'data',n:0}} onChange={onChange}/>);
-  await userEvent.click(screen.getByText('3. Preview and update output fields'));
+  await userEvent.click(screen.getByText('3. Read output interface'));
   expect(await screen.findByText('3 raw → 2 output records')).toBeTruthy();
   expect(onChange).toHaveBeenCalledWith(expect.objectContaining({preview_snapshot:'fixed'}),fields);
  });

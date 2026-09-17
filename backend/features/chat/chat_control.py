@@ -106,6 +106,8 @@ def worker(kind, payload, on_stage=None, on_record=None, timeout=None):
                     diagnostic = stderr.read().decode('utf-8', errors='replace')
                 if 'OMP: Error #15' in diagnostic:
                     raise RuntimeError(f'{kind} worker stopped: OpenMP runtime conflict (OMP Error #15). Multiple libomp/libiomp copies were loaded. Use a clean Python environment with compatible native packages; do not enable KMP_DUPLICATE_LIB_OK. The backend is still running.')
+                if process.returncode == -9:
+                    raise RuntimeError(f'{kind} worker was forcibly killed (SIGKILL / -9). Memory pressure is one possible cause, not confirmed by the exit code. For DataLoader interfaces, declare OUTPUT_SCHEMA to avoid executing the Dataset. The backend is still running.')
                 raise RuntimeError(f'{kind} worker exited without a result (exit code {process.returncode}); the backend is still running.')
             result = json.loads((root / 'result.json').read_text())
             if 'error' in result:

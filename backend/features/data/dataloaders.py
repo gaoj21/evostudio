@@ -124,7 +124,7 @@ def raw_records(config, sample_limit=None):
             rows = chat_control.worker('dataset', {'code':config['code'],
                 'resource':{**resource, 'root':str(root), 'files':entries},
                 'config':{**(config.get('reader_config') or {}), 'reference_inputs':config.get('reference_inputs') or {}},
-                'batch_size':config.get('read_batch_size', 100), 'sample_limit':sample_limit}, timeout=120)
+                'batch_size':config.get('read_batch_size', 100), 'sample_limit':sample_limit}, timeout=30 if sample_limit is not None else 120)
         except Exception as exc:
             raise SourceError(f'Python DataLoader failed: {exc}') from exc
         return rows, resource
@@ -310,14 +310,17 @@ def preview(config: dict = Body(...)):
     try:
         config = copy.deepcopy(config)
         graph, name = config.pop('_graph', None), config.pop('_node', None)
+        sample_requested = config.pop('preview_mode', 'interface') == 'sample'
         if config.get('loader') == 'python':
             from .dataset_interface import declared_outputs
             validate(config)
             fields = declared_outputs(config['code'])
-            if fields is not None:
+            if fields is not None and not sample_requested:
                 if config.get('input_mode') == 'reference':
                     fields = [{'name':config.get('reference_field') or 'reference_data','type':'list','required':True,'nullable':False}]
                 return {'fields':fields,'preview':[],'preview_mode':'declared','sample_count':0,'snapshot':None}
+            if not sample_requested:
+                raise SourceError('Add a top-level OUTPUT_SCHEMA list to identify output fields without loading data. Alternatively, explicitly choose Sample 5 records to execute your Dataset (30-second limit).')
             if graph:
                 from .input_composition import references
                 if references(graph, {'name': name}):
@@ -330,11 +333,7 @@ def preview(config: dict = Body(...)):
                 rows = [{config.get('reference_field') or 'reference_data':rows}]
             meta = {'engine':'torch.utils.data.DataLoader','preview_mode':'sample','sample_count':sample_count,'sample_limit':5,'snapshot':None}
             return _preview_response(rows, meta)
-        if graph and config.get('input_mode') != 'reference':
-            from .input_composition import snapshot
-            config['reference_inputs'] = snapshot(graph, {'name': name})
-        rows, meta = prepare(config)
-        return _preview_response(rows, meta)
+        raise SourceError('This legacy reader cannot declare a static interface. Replace it with a Python Dataset and OUTPUT_SCHEMA before inspecting outputs.')
     except (SourceError, ValueError, TypeError) as exc:
         raise HTTPException(422, str(exc)) from exc
 

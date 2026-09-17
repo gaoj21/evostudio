@@ -36,8 +36,8 @@ Native runtime isolation: only worker processes import torch_loader/PyTorch. API
 
 Interface preview for Python Inputs bypasses full preparation and caches. A literal
 `OUTPUT_SCHEMA = [{"name": "text", "type": "str"}]` is read via AST without
-executing imports or constructing the Dataset. Otherwise preview samples at most
-5 items using a PyTorch batch size of 1. Sample types are observations, not a full
+executing imports or constructing the Dataset. Without this declaration, interface inspection returns an actionable error and never falls back to execution. Only the separate Sample action reads at most
+5 items using a PyTorch batch size of 1, with a 30-second worker timeout. Sample types are observations, not a full
 schema guarantee; preview counts are not dataset totals. Eager Dataset constructors
 can still allocate large amounts of memory: declare OUTPUT_SCHEMA to avoid running
 them for interface inspection. Inputs requiring shared references must declare the

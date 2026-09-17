@@ -39,8 +39,8 @@ def test_folder_upload_nested_json_and_full_preprocessing(client, monkeypatch):
     mapped = sources.map_to_workflow_inputs(rows, [{'name':'x','required':True}])
     assert mapped[0]['_dataloader'] == rows[0]['_dataloader']
     preview = client.post('/api/dataloaders/preview', json=cfg)
-    assert preview.status_code == 200
-    assert preview.json()['output_records'] == 3
+    assert preview.status_code == 422
+    assert 'OUTPUT_SCHEMA' in preview.json()['detail']
 
 
 @pytest.mark.parametrize('name', ['../escape.json', '/tmp/escape', 'folder/../../escape', 'a/./b'])
@@ -349,7 +349,7 @@ def test_pytorch_code_preview_and_batch_use_same_records_and_keep_tail(client):
     resource = upload(client,[('data.json',b'[{"value":1},{"value":null},{"value":3}]')])
     config = {'type':'dataloader','loader':'python','resource_id':resource['id'],'code':PYTORCH_CODE,
               'reader_config':{'multiplier':2},'read_batch_size':2}
-    response = client.post('/api/dataloaders/preview',json=config)
+    response = client.post('/api/dataloaders/preview',json={**config,'preview_mode':'sample'})
     assert response.status_code == 200, response.text
     assert response.json()['engine'] == 'torch.utils.data.DataLoader'
     chunks = list(dataloaders.iter_batches(config))
@@ -383,7 +383,7 @@ def build_dataset(resource, config): return Stream()
 ])
 def test_python_loader_reports_actionable_errors(client, code, message):
     resource=upload(client,[('context.json',b'{}')])
-    response=client.post('/api/dataloaders/preview',json={'loader':'python','code':code,'resource_id':resource['id']})
+    response=client.post('/api/dataloaders/preview',json={'loader':'python','code':code,'resource_id':resource['id'],'preview_mode':'sample'})
     assert response.status_code == 422
     assert message in response.json()['detail']
 

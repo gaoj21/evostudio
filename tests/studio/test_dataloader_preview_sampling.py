@@ -40,7 +40,7 @@ class Rows({base}):
         for i in range(1000000000): yield self[i]
 def build_dataset(resource): return Rows()
 '''
-    result=client.post('/api/dataloaders/preview',json={'loader':'python','resource_id':rid,'code':code,'read_batch_size':1024})
+    result=client.post('/api/dataloaders/preview',json={'loader':'python','resource_id':rid,'code':code,'read_batch_size':1024,'preview_mode':'sample'})
     assert result.status_code==200,result.text
     value=result.json()
     assert value['sample_count']==5 and value['snapshot'] is None
@@ -51,3 +51,11 @@ def build_dataset(resource): return Rows()
 def test_invalid_declared_types_rejected():
     with pytest.raises(ValueError,match='types'):
         declared_outputs('OUTPUT_SCHEMA = [{"name":"text","type":"wrong"}]')
+
+
+def test_missing_schema_never_falls_back_to_running_code(preview_client, monkeypatch):
+    client,rid=preview_client
+    monkeypatch.setattr(dataloaders, 'raw_records', lambda *a,**kw: pytest.fail('Interface inspection executed Dataset'))
+    result=client.post('/api/dataloaders/preview',json={'loader':'python','resource_id':rid,'code':'def build_dataset(resource): raise RuntimeError("Never run")'})
+    assert result.status_code==422
+    assert 'OUTPUT_SCHEMA' in result.json()['detail']
