@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { api } from '../../api.js';
+import EvaluatorReports from './EvaluatorReports.jsx';
 import JsonView from '../../components/JsonView.jsx';
 import { STAGES, elapsed, fmt } from './format.js';
 
@@ -48,7 +49,7 @@ export function TaskDetail({ task, onApplied }) {
   return (
     <div className="evolve-detail">
       <div className="muted small">
-        {evaluationOnly || ['saved_batch', 'saved_run'].includes((task.source || p.source)?.type) ? `${task.task_id} · ${evaluationOnly ? 'Evaluation only' : 'Prompt proposals'} · ${p.n_dev} records · metric ${task.metric}` : <>{task.task_id} · {p.preset || 'custom'} · {p.num_candidates} candidates × {p.max_steps} rounds ·
+        {evaluationOnly || ['saved_batch', 'saved_run', 'canvas'].includes((task.source || p.source)?.type) ? `${task.task_id} · ${evaluationOnly ? 'Evaluation only' : (task.source || p.source)?.type === 'canvas' ? 'Canvas candidate replay' : 'Prompt proposals'} · ${p.n_dev} records · metric ${task.metric}` : <>{task.task_id} · {p.preset || 'custom'} · {p.num_candidates} candidates × {p.max_steps} rounds ·
         {' '}{p.n_train} teach / {p.n_dev} judge · metric {task.metric}</>}
         {(task.source || p.source)?.dataset && ` · Dataset ${(task.source || p.source).dataset} / ${(task.source || p.source).split || 'all'}`}
         {task.elapsed_seconds != null && ` · ${elapsed(task)}`}
@@ -66,6 +67,8 @@ export function TaskDetail({ task, onApplied }) {
         <p className="muted small">{trajectory.failed_steps || 0} unsuccessful steps. Daily accuracy requires reviewed daily labels; it is not inferred from eventual events.</p>
       </section>}
       {task.baseline?.report && <details><summary>Trajectory evaluation report</summary><JsonView value={task.baseline.report} startOpen={false} /></details>}
+      <EvaluatorReports reports={task.baseline?.evaluations} />
+      {task.optimized?.evaluations && <><h4>Selected candidate evaluation</h4><EvaluatorReports reports={task.optimized.evaluations}/></>}
       <Progress task={task} />
       {task.error && <pre className="json-view batch-output batch-error">{task.error}</pre>}
       {task.status === 'done' && (

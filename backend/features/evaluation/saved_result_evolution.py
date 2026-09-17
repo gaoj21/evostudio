@@ -32,10 +32,10 @@ def resolve(graph_id, body):
         label = item.get('label')
         if body.get('label_key'):
             label = inputs.get(body['label_key'])
-        records.append({'id': str(index), 'run_id': item.get('run_id'), 'inputs': inputs,
+        records.append({**copy.deepcopy(run or {}), 'id': str(index), 'run_id': item.get('run_id'), 'inputs': inputs,
                         'label': label, 'prediction': (run or {}).get('result'),
                         'status': item.get('status'), 'error': item.get('error') or (run or {}).get('error'),
-                        'nodes': (run or {}).get('nodes', [])})
+                        'nodes': (run or {}).get('nodes', []), 'node_outputs': (run or {}).get('node_outputs', {})})
     if not records:
         raise sources.SourceError('This result contains no records.')
     total = len(records)
@@ -110,7 +110,7 @@ def evaluate(records, metric, source):
                         'unscored': len(records) - len(scores)}, 'records': scored, 'report': report}
 
 
-def propose(graph, records, chosen, llm):
+def propose(graph, records, chosen, llm, feedback=None):
     """One bounded model call on saved traces; proposed prompts are unvalidated."""
     tasks = [t for t in graph.get('tasks', []) if t.get('name') in chosen]
     evidence = []
@@ -134,7 +134,7 @@ def propose(graph, records, chosen, llm):
               'Do not embed company names, future outcomes, or example labels as answers into prompts. '
               'Missing labels are unknown, not negatives. Preserve input/output contracts. '
               'Return ONLY JSON {"prompts": {"node_name": "complete replacement prompt"}}. '
-              'These proposals will be marked unvalidated.\n' + json.dumps({'tasks': tasks, 'records': evidence}, ensure_ascii=False))
+              'These proposals will be marked unvalidated.\n' + json.dumps({'tasks': tasks, 'records': evidence, 'evaluation_feedback': _bounded_evidence(feedback) if feedback else None}, ensure_ascii=False))
     response = llm.generate(prompt=prompt)
     text = response.content.strip()
     if text.startswith('```'):

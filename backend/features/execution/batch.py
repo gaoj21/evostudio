@@ -53,7 +53,12 @@ def start_batch(graph: dict, records: list[dict], source: dict, gray_zone=None,
     exactly as they do in a plain run.
     """
     from backend.features.execution import provider_batch
-    size = provider_batch.validate(graph, graph.get('_llm_batch_size'))
+    from .batch_settings import loader_batch_size
+    record_batch_size = loader_batch_size(source)
+    requested = graph.get('_llm_batch_size')
+    size = provider_batch.validate(graph, record_batch_size if record_batch_size is not None and requested is not None else requested)
+    if size is not None:
+        graph = {**graph, '_llm_batch_size': size}
     batch_id = uuid.uuid4().hex[:12]
     if size is not None:
         workers = min(size, MAX_WORKERS)
@@ -61,6 +66,7 @@ def start_batch(graph: dict, records: list[dict], source: dict, gray_zone=None,
     state = {
         "batch_id": batch_id,
         "graph_id": graph.get("id"),
+        "execution_snapshot": {"graph": graph, "source": source, "workers": workers},
         "status": "running",
         "source": source,
         "metric": metric,
@@ -68,6 +74,7 @@ def start_batch(graph: dict, records: list[dict], source: dict, gray_zone=None,
         "gray_zone": list(gray_zone) if gray_zone else None,
         "workers": workers,
         "llm_batch_size": size,
+        "batch_size": record_batch_size,
         "total": len(records),
         "items": [
             {"index": i, "status": "pending", "run_id": None,
@@ -162,24 +169,34 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int) -> Non
                 item["status"] = "failed"
                 item["error"] = str(e)
 
+    blocked_groups = {}
+
     def run_group(group):
         """The steps of one sample, in order. A step that does not succeed
         stops the rest: the next step would read this one's memory, and
         a judgement made without it is not the judgement the week asks for."""
-        blocked_by = None
+        group_key = _group_key(group[0][1]) if group else None
+        blocked_by = blocked_groups.get(group_key)
         for item, record in group:
-            if blocked_by is not None and (record or {}).get("as_of"):
+            if blocked_by is not None and _group_key(record):
                 with _lock:
                     item["status"] = "blocked"
                     item["error"] = (f"Not run: the step before it ({blocked_by}) did not finish. "
                                      f"Resume runs them in order.")
                 continue
             work(item, record)
-            if (record or {}).get("as_of") and item.get("status") != "success":
-                blocked_by = record.get("as_of")
+            if _group_key(record) and item.get("status") != "success":
+                blocked_by = record.get("as_of") or (record.get("_dataloader") or {}).get("record_id") or "previous record"
+                blocked_groups[group_key] = blocked_by
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        list(pool.map(run_group, _grouped(pairs)))
+    def execute_chunks(selected):
+        blocked_groups.clear()
+        size = state.get('batch_size') or len(selected) or 1
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for offset in range(0, len(selected), size):
+                list(pool.map(run_group, _grouped(selected[offset:offset + size])))
+
+    execute_chunks(pairs)
 
     for _ in range(RETRY_PASSES):
         if state.get("cancel_requested"):
@@ -197,8 +214,7 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int) -> Non
                 item["retryable"] = False
         _persist_batch(state)
         _pause(RETRY_PAUSE_SECONDS)
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            list(pool.map(run_group, _grouped(again)))
+        execute_chunks(again)
     with _lock:
         state.pop("retry_note", None)
     if state.get("metric"):
@@ -207,8 +223,17 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int) -> Non
             # Scored over what actually ran. A cancelled batch still reports a
             # mean, and `scored`/`total` show how much of the set it covers.
             state["summary"] = evaluation.summarise(state["items"])
-    state["status"] = _outcome(state)
-    _persist_batch(state)
+    from backend.features.evaluation.evaluator_tools import evaluate_runs
+    runs = [(runner.get_run(item.get('run_id')) if item.get('run_id') else None)
+            or {**item, 'nodes': []}
+            for item in state['items']]
+    reports = {} if graph.get('_defer_evaluators') else evaluate_runs(graph, runs, timing={'batch'})
+    # Publish completion only once its report exists, so polling clients cannot
+    # stop on a terminal status before evaluation has finished.
+    with _lock:
+        state['evaluations'] = reports
+        state['status'] = _outcome(state)
+        _persist_batch(state)
 
 
 def _outcome(state: dict) -> str:
@@ -267,6 +292,8 @@ RESUMABLE = ("cancelled", "interrupted", "completed_with_errors", "failed", "com
 def _group_key(record: dict) -> str | None:
     """Stepped records of one sample share a key; anything else stands alone."""
     record = record or {}
+    if (record.get('_dataloader') or {}).get('group') is not None:
+        return 'loader:' + str(record['_dataloader']['group'])
     if record.get("sample_id") and record.get("as_of"):
         return str(record["sample_id"])
     return None
@@ -373,8 +400,8 @@ def _grouped(pairs) -> list[list]:
     groups: dict[str, list] = {}
     loose: list[list] = []
     for item, record in pairs:
-        key = (record or {}).get("sample_id")
-        if key and (record or {}).get("as_of"):
+        key = _group_key(record)
+        if key:
             groups.setdefault(str(key), []).append((item, record))
         else:
             loose.append([(item, record)])

@@ -728,3 +728,17 @@ it('sends native API batch size instead of workers to preview and run', async ()
   await user.click(run);
   expect(api.runBatchCanvas).toHaveBeenCalledWith('g1', {llm_batch_size:16});
 });
+
+it('uses the Input batch size for native requests without a second size field', async () => {
+  api.previewBatchCanvas.mockResolvedValue({...STEPPED, source:{config:{type:'dataloader',read_batch_size:7}}});
+  api.runBatchCanvas.mockResolvedValue({batch_id:'shared'});
+  const user=open();await batchTab(user);
+  await screen.findByText(/Batch size: 7/);
+  await user.selectOptions(screen.getByLabelText('Model execution'),'native');
+  expect(screen.queryByLabelText('API batch size')).not.toBeInTheDocument();
+  await waitFor(()=>expect(api.previewBatchCanvas).toHaveBeenLastCalledWith('g1',{llm_batch_size:7}));
+  const button=screen.getByRole('button',{name:'Run batch (24)'});
+  await waitFor(()=>expect(button).toBeEnabled());
+  await user.click(button);
+  expect(api.runBatchCanvas).toHaveBeenCalledWith('g1',{llm_batch_size:7});
+});

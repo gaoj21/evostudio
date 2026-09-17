@@ -370,6 +370,12 @@ def validate_source_tasks(tasks: list[dict]) -> None:
                  f"source type: {config.get('type')!r} "
                  f"(expected one of {sorted(known)})"]
             )
+        if config.get('type') == 'dataloader':
+            from backend.features.data.dataloaders import validate
+            try:
+                validate(config)
+            except Exception as exc:
+                raise GraphValidationError([str(exc)]) from exc
         for field in schema["config"]:
             if field.get("required") and not config.get(field["name"]):
                 raise GraphValidationError(
@@ -564,7 +570,7 @@ def compute_workflow_inputs(ordered_tasks: list[dict],
         if e.get("source") not in parked and e.get("target") not in parked])
     workflow_inputs, seen = [], set()
     for task in active:
-        if is_source_task(task):
+        if is_source_task(task) or task.get("kind") == "evaluator":
             continue
         fed = bindings.get(task.get("name"), {})
         for inp in task.get("inputs", []) or []:
@@ -604,6 +610,11 @@ def validate_graph(graph: dict, check_memory: bool = True) -> tuple[list[dict], 
     graph = migrate_flow(copy.deepcopy(graph))
     tasks = graph.get("tasks", []) or []
     edges = graph.get("edges", []) or []
+    from backend.features.evaluation.evaluator_tools import validate_graph as validate_evaluators
+    try:
+        validate_evaluators(graph)
+    except Exception as exc:
+        raise GraphValidationError([str(exc)]) from exc
     validate_harness_tasks(tasks)
     validate_source_tasks(tasks)
     validate_tool_tasks(tasks)
@@ -620,7 +631,7 @@ def validate_graph(graph: dict, check_memory: bool = True) -> tuple[list[dict], 
     # demanded output names unique across nodes and inferred edges from
     # them, and the edges are the canvas's to decide now.
     for task in ordered:
-        if is_source_task(task) or is_tool_task(task) or task["name"] in parked:
+        if is_source_task(task) or is_tool_task(task) or task.get("kind") == "evaluator" or task["name"] in parked:
             continue
         try:
             SequentialWorkFlowGraph(goal=graph.get("goal", ""), tasks=[strip_task(task)])

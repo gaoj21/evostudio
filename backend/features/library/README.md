@@ -8,6 +8,8 @@
 - `custom_tools.py` — User-defined tools for EvoAgentX Studio.
 - `tools_registry.py` — Tool registry for EvoAgentX Studio.
 
+- `data_evaluation_tools.py` — DataLoader and Evaluator exposure through the ordinary tool registry.
+
 ## 修改边界
 
 - 只改本功能时先提供涉及文件；HTTP 合同变化再附 `frontend/src/api.js` 与对应前端 feature。
@@ -18,3 +20,9 @@
 ## 验证
 
 `.venv/bin/python -m pytest tests/api tests/studio -q`（从仓库根目录）
+
+## Chat-generated Tool verification
+
+`tool_verification.py` installs explicitly declared `requirements` into a versioned per-tool directory under the runtime tools directory. Studio's Python environment is not modified. Import names are not guessed as package names. Generated code should declare tests as `{"tool":"function_name","args":{...},"expected":...}` for every exported function. Tests execute through the same subprocess runtime as workflow calls; declared dependencies are also available during later execution.
+
+Canvas Chat automatically verifies after creating a tool and receives the report for corrections. `verify_tool` or `POST /api/tools/custom/{name}/verify` reruns saved tests. Reports distinguish `verified` (all exported functions have passing expected-result examples), `failed`, and `unverified` (missing assertions or missing function coverage). Verification covers supplied examples, not all inputs. Chat Stop cancels its verification worker and child processes. Missing credentials/resources must be reported instead of fabricated. Custom code retains the existing local-user execution permissions.

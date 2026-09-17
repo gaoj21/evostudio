@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { api } from '../../api.js';
+import EvaluatorReports from './EvaluatorReports.jsx';
 import JsonView from '../../components/JsonView.jsx';
 
 /**
@@ -11,6 +12,7 @@ import JsonView from '../../components/JsonView.jsx';
  * and the field holding the expected answer, here, once the results exist.
  */
 export default function EvaluationTab({ batch }) {
+  const [canvasReports, setCanvasReports] = useState(batch?.evaluations || {});
   const [report, setReport] = useState(batch?.evaluation || null);
   const [creditRisk, setCreditRisk] = useState(null);
   const [metrics, setMetrics] = useState([]);
@@ -49,6 +51,8 @@ export default function EvaluationTab({ batch }) {
 
   return (
     <div className="drawer-body eval-tab">
+      <EvaluatorReports reports={{...batch?.evaluations,...canvasReports}} />
+      {batch?.graph_id && <button disabled={!settled || busy} onClick={async()=>{setBusy(true);setError(null);try{const value=await api.evaluateCanvasResults(batch.graph_id,{batch_id:batchId});setCanvasReports(value.evaluations);}catch(e){setError(e.body?.detail || e.message);}finally{setBusy(false);}}}>Evaluate with canvas evaluators (no workflow rerun)</button>}
       <div className="eval-actions">
         {creditRisk === false && (
           <>

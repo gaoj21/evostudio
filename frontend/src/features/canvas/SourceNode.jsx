@@ -8,7 +8,7 @@ export default function SourceNode({ id, data, selected }) {
   if (status) cls.push(`run-${status}`);
   const cfg = data.source || {};
   const preview = Object.entries(cfg)
-    .filter(([k]) => k !== 'type')
+    .filter(([k]) => !['type','code','input_schema','output_schema','preview_snapshot'].includes(k))
     .slice(0, 3)
     .map(([k, v]) => `${k}=${String(v).slice(0, 24)}`)
     .join(' · ');
@@ -34,6 +34,11 @@ export default function SourceNode({ id, data, selected }) {
         {cfg.type || 'source'}
         {preview ? ` · ${preview}` : ''}
       </div>
+      {cfg.type === 'dataloader' && <div className="node-tools">
+        <div>{cfg.output_schema?.length ? 'Interface ready' : 'Draft · preview to define outputs'}</div>
+        {!!cfg.input_schema?.inputs?.length && <div>Inputs: {cfg.input_schema.inputs.map(f=>f.name).join(', ')}</div>}
+        {!!data.outputs?.length && <div>Outputs: {data.outputs.map(f=>`${f.name}: ${f.type}`).join(', ')}</div>}
+      </div>}
       {data.batchBadge && <div className="node-tools batch-badge">{data.batchBadge}</div>}
       {status && <div className={`node-status status-${status}`}>{status}</div>}
       <Handle type="source" position={Position.Right} />

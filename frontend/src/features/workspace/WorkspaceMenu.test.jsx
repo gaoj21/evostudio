@@ -215,3 +215,19 @@ describe('workspace right-click menu', () => {
     expect(clicked[0]).toContain('memory/decide');
   });
 });
+
+it('copies the usable full path for uploaded dataset folders and files',async()=>{
+  setup([{path:'datasets',dir:true,readonly:true},
+    {path:'datasets/upload',dir:true,readonly:true,absolute_path:'/server/data/files'},
+    {path:'datasets/upload/a.json',size:2,mtime:'',readonly:true,absolute_path:'/server/data/files/a.json'}]);
+  const clipboard=vi.spyOn(navigator.clipboard,'writeText').mockResolvedValue();
+  await openFolder('datasets');
+  await menuFor('upload',true);
+  fireEvent.click(item('Copy path'));
+  expect(clipboard).toHaveBeenLastCalledWith('/server/data/files');
+  await openFolder('upload');
+  await menuFor('a.json');
+  expect(screen.queryByRole('button',{name:'Delete',exact:true})).not.toBeInTheDocument();
+  fireEvent.click(item('Copy path'));
+  expect(clipboard).toHaveBeenLastCalledWith('/server/data/files/a.json');
+});

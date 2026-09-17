@@ -11,6 +11,10 @@
 - `source_collection.py` — Collect canvas inputs once, persist them, then run the saved records.
 - `preprocess.py` — Input preprocessing for EvoAgentX Studio.
 
+- `data_resources.py` — immutable uploaded files/folders, versions and lifecycle.
+- `dataloaders.py` — reader/transform contracts, prepared-data cache and provenance.
+- `input_composition.py` — per-record data plus shared references, available before Loader transforms.
+
 ## 修改边界
 
 - 只改本功能时先提供涉及文件；HTTP 合同变化再附 `frontend/src/api.js` 与对应前端 feature。
@@ -23,3 +27,7 @@
 `.venv/bin/python -m pytest tests/api tests/studio -q`（从仓库根目录）
 
 用户数据集的使用方法及格式见 [custom-datasets.md](../../../docs/custom-datasets.md)。
+
+- `torch_loader.py` — Shared PyTorch Dataset/DataLoader adapter and isolated Python dataset factory; dictionary collation, no shuffle, no dropped tail. Input code is stored with the graph.
+
+- `dataset_interface.py` — Static factory-argument discovery and runtime form-value validation; no model-provider dependencies.

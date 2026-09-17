@@ -306,6 +306,9 @@ def records_from_source_node(node: dict) -> list[dict]:
     """
     config = node.get("source") or {}
     type_ = config.get("type")
+    if type_ == "dataloader":
+        from .dataloaders import records
+        return records(config)
     if type_ == "user_dataset":
         from backend.features.data.user_datasets import records
         return records(config)
@@ -358,5 +361,7 @@ def map_to_workflow_inputs(records: list[dict], workflow_inputs: list[dict]) -> 
                 f"Record {i}: missing required workflow inputs {missing}. "
                 f"Available record fields: {sorted(record.keys())}"
             )
+        if '_dataloader' in record:
+            inputs['_dataloader'] = record['_dataloader']
         mapped.append(inputs)
     return mapped

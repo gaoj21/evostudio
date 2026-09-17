@@ -95,7 +95,8 @@ def execute_collection(job, graph, node, control, workers, metric, label_key):
         control.check()
         if not isinstance(record, dict) or declared - record.keys():
             raise sources.SourceError('Source record is missing declared outputs.')
-        record = composition.merge([record], job.get('reference_inputs', {}))[0]
+        if node['source'].get('type') != 'dataloader':
+            record = composition.merge([record], job.get('reference_inputs', {}))[0]
         with _lock:
             job['records'].append(record)
             job['record_count'] = len(job['records'])
@@ -106,10 +107,10 @@ def execute_collection(job, graph, node, control, workers, metric, label_key):
         control.check()
         mapped, labels = mapped_chunk(run_graph, node, records, metric, label_key)
         source = {'type': 'canvas', 'node': node['name'], 'collection_id': job['id'],
-                  'mode': job['mode'], 'chunk': len(job['batches']) + 1}
+                  'mode': job['mode'], 'chunk': len(job['batches']) + 1, 'config': job['config']}
         with _lock:
             control.check()
-            id = batch.start_batch(run_graph, mapped, source, workers=workers, metric=metric, labels=labels)
+            id = batch.start_batch({**run_graph, '_defer_evaluators': True}, mapped, source, workers=workers, metric=metric, labels=labels)
             job['batches'].append({'id': id, 'total': len(mapped)})
             job['submitted_records'] += len(records)
             save(job)
@@ -155,7 +156,10 @@ def execute_collection(job, graph, node, control, workers, metric, label_key):
                     job.update(completed=data['completed'], total=data['total'])
             except (ValueError, KeyError):
                 pass
-        records = chat_control.worker('collect', node, on_stage=stage, on_record=receive)
+        worker_node = copy.deepcopy(node)
+        if worker_node['source'].get('type') == 'dataloader':
+            worker_node['source']['reference_inputs'] = job.get('reference_inputs', {})
+        records = chat_control.worker('collect', worker_node, on_stage=stage, on_record=receive)
         # Compatibility with source workers that only return a final list.
         if not job['records']:
             for record in records:
@@ -189,6 +193,16 @@ def execute_collection(job, graph, node, control, workers, metric, label_key):
         done.set()
         if consumer:
             consumer.join()
+        if (streaming or prepared) and not errors and not control.event.is_set():
+            from backend.api import runner
+            from backend.features.evaluation.evaluator_tools import evaluate_runs
+            runs = [(runner.get_run(item['run_id']) if item.get('run_id') else None) or {**item, 'nodes': []}
+                    for entry in job.get('batches', [])
+                    for item in (batch.get_batch(entry['id']) or {}).get('items', [])]
+            try:
+                job['evaluations'] = evaluate_runs(graph, [run for run in runs if run], timing={'batch'})
+            except Exception as exc:
+                job['evaluation_error'] = str(exc)
         with _lock:
             if errors:
                 job.update(status='failed', error=errors[0])
@@ -212,7 +226,10 @@ def collect(graph_id: str, body: dict = Body(default={})):
         original = fingerprint(node, graph)
         from backend.features.execution import provider_batch
         try:
-            size = provider_batch.validate(graph, body.get('llm_batch_size'))
+            from backend.features.execution.batch_settings import loader_batch_size
+            shared_size = loader_batch_size({'config':node['source']})
+            requested = body.get('llm_batch_size')
+            size = provider_batch.validate(graph, shared_size if shared_size is not None and requested not in (None, '') else requested)
         except ValueError as exc:
             raise sources.SourceError(str(exc)) from exc
         if size is not None:
@@ -221,11 +238,11 @@ def collect(graph_id: str, body: dict = Body(default={})):
         if mode not in ('all', 'stream', 'prepare'):
             raise sources.SourceError('Choose collect-all, streaming, or preprocess-all then batch mode.')
         try:
-            batch_size = int(body.get('batch_size', 10))
+            batch_size = shared_size if shared_size is not None else int(body.get('batch_size', 10))
             workers = int(body.get('workers', 2))
         except (ValueError, TypeError) as exc:
             raise sources.SourceError('Batch size and workers must be whole numbers.') from exc
-        if not 1 <= batch_size <= 1000 or not 1 <= workers <= batch.MAX_WORKERS:
+        if not 1 <= batch_size <= (1024 if shared_size is not None else 1000) or not 1 <= workers <= batch.MAX_WORKERS:
             raise sources.SourceError('Batch size must be 1–1000; workers must be 1–64.')
         metric, label_key = body.get('metric') or None, body.get('label_key') or None
         if mode in ('stream', 'prepare'):

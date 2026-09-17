@@ -281,6 +281,7 @@ def source_presets() -> list[dict]:
                 "source": {
                     "type": type_,
                     **{f["name"]: f.get("default", "") for f in schema["config"]},
+                    **({"loader":"python", "read_batch_size":100} if type_ == "dataloader" else {}),
                 },
                 "inputs": [],
                 "outputs": [

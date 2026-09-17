@@ -65,7 +65,8 @@ export default function Palette({ templates, sources, graphTemplates, onAdd, onL
     return haystack.includes(query.trim().toLowerCase());
   };
   const domain = (templates || []).filter((tpl) => /^CR\b/i.test(tpl.label || ''));
-  const core = (templates || []).filter((tpl) => !domain.includes(tpl));
+  const core = [...(templates || []).filter((tpl) => !domain.includes(tpl)),
+    {type:'evaluate',label:'Evaluator',description:'Score intermediate or final outputs; use the same objective in Evolve.',defaults:{kind:'evaluator',evaluator:{type:'python',timing:'batch'},inputs:[{name:'prediction',type:'any',required:false},{name:'expected',type:'any',required:false}],outputs:[]}}];
   const filtered = {
     core: core.filter(matches),
     domain: domain.filter(matches),

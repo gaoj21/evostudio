@@ -49,7 +49,7 @@ import RunsPanel from './features/execution/RunsPanel.jsx';
 import SchedulePanel from './features/execution/SchedulePanel.jsx';
 import TopBar from './components/TopBar.jsx';
 
-const nodeTypes = { task: TaskNode, source: SourceNode, tool: ToolNode, memory: MemoryNode, chatAgent: ChatAgentNode };
+const nodeTypes = { task: TaskNode, source: SourceNode, tool: ToolNode, evaluator: ToolNode, memory: MemoryNode, chatAgent: ChatAgentNode };
 
 // Wide enough that the Library / Custom / Workspace tabs and the collapse chevron
 // all fit without truncating, and that palette descriptions stop wrapping to
@@ -656,11 +656,12 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
                 description: defaults.description || tpl.description || '',
                 inputs: [],
                 outputs: defaults.outputs ? JSON.parse(JSON.stringify(defaults.outputs)) : [],
-                source: { ...(defaults.source || { type: 'credit_risk', split: '', n: 1, seed: 42 }) },
+                source: { ...(defaults.source || { type: 'credit_risk', split: '', n: 1, seed: 42 }), ...(defaults.source?.type === 'dataloader' ? {loader:'python', read_batch_size:100} : {}) },
               },
             },
           ];
         }
+        if (defaults.kind === 'evaluator') return [...nds,{id:name,type:'evaluator',position:pos,data:JSON.parse(JSON.stringify(defaults))}];
         if (defaults.kind === 'tool') {
           return [
             ...nds,
@@ -1183,6 +1184,25 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
     setLocatingMemories(false);
   }, [locatingMemories, memoryNodes, fitView]);
   const canvasNodes = useMemo(() => [...displayNodes, ...memoryNodes, ...canvasAgents.nodes.map(n => ({ ...resourceGeometry(n, resourceMeasurements[n.id]), data: { ...n.data, onDelete: removeCanvasResource, runMode }, measured: resourceMeasurements[n.id], selected: n.id === selectedId }))], [displayNodes, memoryNodes, canvasAgents.nodes, selectedId, resourceMeasurements, removeCanvasResource, runMode]);
+  // Runtime decoration only: never persist animation into workflow edges.
+  const executionEdges = useMemo(() => {
+    const active = runMode && ['running', 'cancelling'].includes((batch || run)?.status);
+    const byId = new Map(displayNodes.map(node => [node.id, node]));
+    return displayEdges.map(edge => {
+      const source = byId.get(edge.source);
+      const target = byId.get(edge.target);
+      const from = source?.data.runStatus;
+      const to = target?.data.runStatus;
+      // Memory bindings describe permissions, not live read/write events.
+      const flowing = active && source && target
+        && source.data.enabled !== false && target.data.enabled !== false
+        && ((to === 'running' && ['completed', 'success', 'running'].includes(from))
+          || (from === 'running' && to === 'pending'));
+      const control = edge.data?.control_only;
+      return { ...edge, animated: !!flowing && !control,
+        className: [edge.className, flowing ? (control ? 'edge-order-active' : 'edge-flow-active') : ''].filter(Boolean).join(' ') };
+    });
+  }, [displayEdges, displayNodes, runMode, batch, run]);
   const chatAgent = canvasAgents.agents.find(a => chatNodeId(a.id) === selectedId);
   const chatEdges = showMemory ? canvasAgents.edges.filter(e => memoryNodes.some(n => n.id === e.source || n.id === e.target)).map(e => ({ ...e, selected: selectedMemoryEdges.has(e.id), deletable: true })) : [];
   const connectCanvas = conn => {
@@ -1341,7 +1361,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
       />}
       <ReactFlow
         nodes={canvasNodes}
-        edges={[...displayEdges, ...chatEdges]}
+        edges={[...executionEdges, ...chatEdges]}
         nodeTypes={nodeTypes}
         onNodesChange={changes => onNodesChange(runMode ? changes.filter(change => change.type === 'dimensions') : changes)}
         onEdgesChange={runMode ? undefined : changeCanvasEdges}
@@ -1501,7 +1521,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
         {(forcedTab || rightTab) === 'inspector' ? (
           chatAgent ? <ChatAgentInspector key={`${graph?.id}:${chatAgent.id}`} graphId={graph?.id} agent={chatAgent} saving={canvasAgents.isSaving(chatAgent.id)} memoryNodes={memoryOverlay(nodes, { resources: graph?.memory_resources || [], spaceNames }).memNodes} backLabel={inspectorParent ? '← Back to memory' : '← Back to workflow'} onBack={() => { if (inspectorParent) { setSelectedId(inspectorParent); setInspectorParent(null); } else returnToWorkflow(); }} onSave={canvasAgents.save} /> :
           isMemoryId(selectedId) ? <MemoryResourceInspector key={`${graph?.id}:${selectedId}`}
-            resource={selectedMemory} graphId={graph?.id} nodes={[...nodes, ...canvasAgents.nodes]} edges={[...displayEdges, ...chatEdges]} runMode={runMode}
+            resource={selectedMemory} graphId={graph?.id} nodes={[...nodes, ...canvasAgents.nodes]} edges={[...executionEdges, ...chatEdges]} runMode={runMode}
             onBack={returnToWorkflow}
             onEditAgent={id => { setInspectorParent(selectedId); setSelectedId(id); setNodes(nds => nds.map(n => ({ ...n, selected: n.id === id }))); openInspector(); }}
             onConnect={(agent, direction) => connectCanvas(direction === 'read' ? { source: selectedId, target: agent } : { source: agent, target: selectedId })}
@@ -1518,6 +1538,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
               }}>{inspectorParent ? '← Back to memory' : '← Back to workflow'}</button>
             </div>}
             <Inspector
+            getGraph={chatSnapshot}
             node={selectedNode}
             runInfo={selectedNode ? runByName[selectedNode.id] : null}
             runMode={runMode}

@@ -21,6 +21,10 @@
 `projects/credit_risk` 是项目资料、数据和领域代码，不是平台通用能力所在目录。冻结的数据集不应跟着代码重构改变。
 `backend/evoagentx` 是框架源码，暂时保留原目录；通常不要为页面功能去修改它。
 
+## DataLoader 与 Evaluator
+
+输入资源、Loader 预处理、画布评测节点及 evaluator-driven Evolve 的接口见 [dataloaders-and-evaluators.md](docs/dataloaders-and-evaluators.md)。不要在 Run 或 Evolve 中另写一套数据解析、评分逻辑。DataLoader 管数据准备，执行器管运行控制，Evaluator 管评分；新功能不需要修改模型适配层。
+
 ## 共享边界
 
 - `backend/api/app.py`：启动与 HTTP 路由装配，也仍保留部分公共路由。功能逻辑在 features。

@@ -19,3 +19,5 @@
 ## 验证
 
 `.venv/bin/python -m pytest tests/api tests/studio -q`（从仓库根目录）
+
+- `dataset_mounts.py` — Read-only Workspace views of uploaded Input/label resources, including absolute paths for Dataset code; associations include uploads before graph save.

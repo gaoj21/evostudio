@@ -98,7 +98,14 @@ def write_project(graph: dict) -> list[str]:
         and stamp.read_text(encoding="utf-8").strip() == fingerprint
     )
 
-    files, vendor = export_api.project_files(graph, include_vendor=not vendor_current)
+    if any(t.get('kind') == 'evaluator' or (t.get('source') or {}).get('type') == 'dataloader' for t in graph.get('tasks', [])):
+        # Platform resources are referenced by identity. Keep an inspectable
+        # graph artifact, but no stale Python runner that would skip evaluators.
+        files = {'workflow.json': json.dumps(graph, ensure_ascii=False, indent=2),
+                 'README.md': '# Studio workflow\n\nThis workflow uses DataLoaders or Evaluators. Run it in Studio. Resource IDs refer to uploaded runtime data; graph JSON does not contain those files.\n'}
+        vendor = {}
+    else:
+        files, vendor = export_api.project_files(graph, include_vendor=not vendor_current)
 
     for name in PROJECT_DIRS:
         shutil.rmtree(root / name, ignore_errors=True)
@@ -303,7 +310,8 @@ def tree(graph_id: str) -> list[dict]:
     is, but it lives in a vector store rather than as files.
     """
     root = workspace_root(graph_id)
-    entries = _memory_entries(graph_id)
+    from . import dataset_mounts
+    entries = _memory_entries(graph_id) + dataset_mounts.entries(graph_id)
     if not root.is_dir():
         return entries
     for path in sorted(root.rglob("*")):
@@ -313,13 +321,13 @@ def tree(graph_id: str) -> list[dict]:
         if rel == VENDOR_STAMP or "__pycache__" in rel:
             continue
         if path.is_dir():
-            entries.append({"path": rel, "dir": True})
+            entries.append({"path": rel, "dir": True, "absolute_path": str(path.resolve())})
             continue
         if not path.is_file():
             continue
         stat = path.stat()
         entries.append({
-            "path": rel,
+            "path": rel, "absolute_path": str(path.resolve()),
             "size": stat.st_size,
             "mtime": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
         })
@@ -460,14 +468,17 @@ def read_file(graph_id: str, relpath: str) -> dict:
     remembered = _memory_file(graph_id, relpath)
     if remembered is not None:
         return remembered
-    target = _resolve_in_workspace(graph_id, relpath)
+    from . import dataset_mounts
+    mounted = dataset_mounts.resolve(graph_id, relpath)
+    target = mounted or _resolve_in_workspace(graph_id, relpath)
     if not target.is_file():
         raise WorkspaceError(f"No such workspace file: {relpath!r}", not_found=True)
-    raw = target.read_bytes()
+    with target.open("rb") as stream:
+        raw = stream.read(MAX_READ_BYTES + 1)
     truncated = len(raw) > MAX_READ_BYTES
     text = raw[:MAX_READ_BYTES].decode("utf-8", errors="replace")
     return {"path": relpath, "size": target.stat().st_size,
-            "truncated": truncated, "content": text}
+            "truncated": truncated, "content": text, "readonly": mounted is not None, "absolute_path":str(target.resolve())}
 
 
 MAX_WRITE_BYTES = 10 * 1024 * 1024
@@ -475,6 +486,8 @@ MAX_WRITE_BYTES = 10 * 1024 * 1024
 
 def _refuse_if_memory(relpath: str, verb: str) -> None:
     """Memory is a view of a vector store, not a folder of files."""
+    from . import dataset_mounts
+    dataset_mounts.refuse(relpath)
     if relpath == MEMORY_DIR_NAME or relpath.startswith(f"{MEMORY_DIR_NAME}/"):
         raise WorkspaceError(
             f"{relpath!r} is a view of this workflow's long-term memory, not a "
@@ -498,6 +511,7 @@ def write_file(graph_id: str, relpath: str, content: bytes) -> dict:
 
 def make_dir(graph_id: str, relpath: str) -> dict:
     """Create a workspace directory (parents included)."""
+    _refuse_if_memory(relpath, "create")
     if not relpath or relpath.endswith("/"):
         raise WorkspaceError(f"Invalid directory path: {relpath!r}")
     target = _resolve_in_workspace(graph_id, relpath)
@@ -570,7 +584,8 @@ def download(graph_id: str, relpath: str = "") -> tuple[str, str, bytes]:
         return _download_memory(graph_id, relpath)
 
     root = workspace_root(graph_id)
-    target = _resolve_in_workspace(graph_id, relpath) if relpath else root
+    from . import dataset_mounts
+    target = dataset_mounts.resolve(graph_id, relpath) or (_resolve_in_workspace(graph_id, relpath) if relpath else root)
     if target.is_file():
         media = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
         return target.name, media, target.read_bytes()

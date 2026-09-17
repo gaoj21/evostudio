@@ -57,7 +57,7 @@ def check():
         control.check()
 
 
-def worker(kind, payload, on_stage=None, on_record=None):
+def worker(kind, payload, on_stage=None, on_record=None, timeout=None):
     check()
     control = current.get()
     with tempfile.TemporaryDirectory(prefix='assistant-worker-') as directory:
@@ -65,6 +65,7 @@ def worker(kind, payload, on_stage=None, on_record=None):
         (root / 'input.json').write_text(json.dumps(payload, ensure_ascii=False))
         process = subprocess.Popen([sys.executable, str(Path(__file__).with_name('chat_worker.py')), kind, directory],
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        started = time.monotonic()
         last_stage = None
         offset = 0
         def drain():
@@ -82,6 +83,8 @@ def worker(kind, payload, on_stage=None, on_record=None):
                     offset = stream.tell()
         try:
             while process.poll() is None:
+                if timeout is not None and time.monotonic() - started > timeout:
+                    raise TimeoutError(f'{kind} worker exceeded {timeout} seconds')
                 drain()
                 if control:
                     control.check()

@@ -93,7 +93,7 @@ export function buildTree(files) {
 
   (files || []).forEach((f) => {
     if (f.dir) {
-      folder(f.path);
+      Object.assign(folder(f.path), f);
       return;
     }
     const cut = f.path.lastIndexOf('/');
@@ -135,14 +135,14 @@ function TreeRows({ nodes, depth, expanded, onToggle, selected, onSelect, onDele
             {' '}
             {node.size > 1024 ? `${(node.size / 1024).toFixed(1)}K` : `${node.size}B`}
           </span>
-          <button
+          {!node.readonly && <button
             type="button"
             className="param-del ws-file-del"
             title="Delete file"
             onClick={(e) => { e.stopPropagation(); onDelete(node.path); }}
           >
             ✕
-          </button>
+          </button>}
         </div>
       );
     }
@@ -302,13 +302,13 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
 
   const copyPath = async (path) => {
     try {
-      await navigator.clipboard.writeText(path);
+      await navigator.clipboard.writeText(files.find(f=>f.path===path)?.absolute_path || path);
     } catch {
       setError(`Could not copy — the path is ${path}`);
     }
   };
 
-  const isMemory = (path) => path === 'memory' || path.startsWith('memory/');
+  const isMemory = (path) => path === 'memory' || path.startsWith('memory/') || files.find(f=>f.path===path)?.readonly;
 
   const menuItems = (entry) => (entry.isDir ? [
     { key: 'dl', label: 'Download as zip', onClick: () => download(entry.path) },
@@ -428,6 +428,7 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
           <>
             <div className="muted small">
               {selected}
+              <button type="button" onClick={()=>copyPath(selected)}>Copy full path</button>
               {file?.truncated ? ' · truncated to 100KB' : ''}
               {/* Memory is a view of a vector store, so there is no file to
                   edit — offering the button would only lead to a refusal. */}

@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import JsonView from '../../components/JsonView.jsx';
 import { api } from '../../api.js';
 import MemorySettings from '../memory/MemorySettings.jsx';
+import DataLoaderInput from '../data/DataLoaderInput.jsx';
+import EvaluatorInspector from '../evaluation/EvaluatorInspector.jsx';
 import DatasetInput from '../data/DatasetInput.jsx';
 
 const PARSE_MODES = ['str', 'json', 'title', 'xml'];
@@ -43,7 +45,7 @@ function SaveOutputToggle({ node, onUpdate }) {
   );
 }
 
-function SourceInspector({ node, onUpdate, onRename }) {
+function SourceInspector({ node, onUpdate, onRename, getGraph }) {
   const [schemas, setSchemas] = useState(null);
 
   useEffect(() => {
@@ -87,10 +89,12 @@ function SourceInspector({ node, onUpdate, onRename }) {
         <label>Name</label>
         <input value={d.editName ?? node.id} onChange={(e) => onUpdate(node.id, { editName: e.target.value })} onBlur={() => onRename(node.id, d.editName ?? node.id)} />
       </div>
+      {cfg.type === 'dataloader' && <DataLoaderInput key={node.id} config={cfg} nodeId={node.id} getGraph={getGraph} onChange={(source,outputs) => onUpdate(node.id,{source,...(outputs?{outputs}:{})})} />}
       {cfg.type === 'user_dataset' && <DatasetInput key={node.id} config={cfg}
         onChange={(source, outputs) => onUpdate(node.id, { source, ...(outputs ? { outputs } : {}) })} />}
+      {cfg.type !== 'dataloader' && <button onClick={() => onUpdate(node.id,{source:{type:'dataloader',loader:'source',source_config:cfg,n:0,read_batch_size:100,...(cfg.type==='credit_risk' && cfg.step && cfg.step!=='none'?{group_by:'sample_id',order_by:'as_of'}:{})}})}>Use DataLoader preprocessing</button>}
       {!schema && <p className="muted small">Loading source schema…</p>}
-      {(cfg.type === 'user_dataset' ? [] : schema?.config || []).map((f) => (
+      {(['user_dataset','dataloader'].includes(cfg.type) ? [] : schema?.config || []).map((f) => (
         <div className="field" key={f.name}>
           <label htmlFor={`source-config-${f.name}`}>
             {f.label || f.name}
@@ -440,7 +444,7 @@ function GraphSettings({ graph, onGraphChange, runMode }) {
   );
 }
 
-export default function Inspector({ node, runInfo, runMode, onUpdate, onRename, graph, onGraphChange, producedNames, siblings }) {
+export default function Inspector({ node, runInfo, runMode, onUpdate, onRename, graph, getGraph, onGraphChange, producedNames, siblings }) {
   if (!node) {
     return <GraphSettings graph={graph} onGraphChange={onGraphChange} runMode={runMode} />;
   }
@@ -467,8 +471,9 @@ export default function Inspector({ node, runInfo, runMode, onUpdate, onRename, 
 
   const d = node.data;
 
+  if (d.kind === 'evaluator') return <EvaluatorInspector node={node} onUpdate={onUpdate} onRename={onRename} getGraph={getGraph} />;
   if (d.kind === 'source') {
-    return <SourceInspector node={node} onUpdate={onUpdate} onRename={onRename} />;
+    return <SourceInspector node={node} onUpdate={onUpdate} onRename={onRename} getGraph={getGraph} />;
   }
 
   if (d.kind === 'tool') {

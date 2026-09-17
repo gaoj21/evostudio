@@ -1,3 +1,4 @@
+import EvaluatorReports from '../evaluation/EvaluatorReports.jsx';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../api.js';
 import { readInputFile } from './inputFiles.js';
@@ -493,14 +494,17 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
   const [workers, setWorkers] = useState(2);
   const [apiBatch, setApiBatch] = useState(false);
   const [apiBatchSize, setApiBatchSize] = useState(32);
-  const executionParams = apiBatch ? {llm_batch_size: Number(apiBatchSize)} : {workers};
-  const invalidApiBatch = apiBatch && (!Number.isInteger(Number(apiBatchSize)) || Number(apiBatchSize) < 1 || Number(apiBatchSize) > 1024);
   // An evaluation is this same batch with a metric attached; leaving the metric
   // empty runs it as an ordinary batch.
   const [metric, setMetric] = useState('');
   const [labelKey, setLabelKey] = useState('');
   const [metrics, setMetrics] = useState([]);
   const [preview, setPreview] = useState(null);
+  const loaderSize = source === 'canvas' && preview?.source?.config?.type === 'dataloader'
+    ? (preview.source.config.read_batch_size ?? 100) : null;
+  const effectiveBatchSize = loaderSize ?? Number(apiBatchSize);
+  const executionParams = apiBatch ? {llm_batch_size: effectiveBatchSize} : {workers};
+  const invalidApiBatch = apiBatch && (!Number.isInteger(effectiveBatchSize) || effectiveBatchSize < 1 || effectiveBatchSize > 1024);
   const [previewing, setPreviewing] = useState(false);
   const [previewError, setPreviewError] = useState(null);
   const [collection, setCollection] = useState(() => {
@@ -677,7 +681,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
       {source === 'canvas' ? (
         <div className="muted small">
 
-          {<div className="field">
+          {preview?.source?.config?.type === 'dataloader' ? <div role="status"><b>Using the canvas DataLoader</b><p>Reading, preprocessing, selection and trajectory order are configured in Input. This run uses {preview.total} prepared records. Batch size: {loaderSize}. This Input setting controls data loading, workflow batches and native API batching. Change it in Input.</p></div> : <div className="field">
             <label>Execution mode<select disabled={collecting || starting} value={collectionMode} onChange={e => { setCollectionMode(e.target.value); setCollection(null); }}>
               <option value="all">Use all available data</option>
               <option value="stream">Run in batches as data arrives</option>
@@ -705,6 +709,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
               </select></label>
             </details>}
             {collecting && <p role="status">{collection?.phase === 'preprocessing' ? 'Preprocessing the entire dataset; workflow has not started' : collection?.collection_complete ? 'Collection complete; finishing batches' : 'Collecting input data'}{collection?.total ? `: ${collection.completed} / ${collection.total} windows` : '…'} · {['stream', 'prepare'].includes(collection?.mode) ? `${collection.record_count || 0} records collected, ${collection.submitted_records || 0} submitted to batches` : 'Workflow has not started.'}</p>}
+            <EvaluatorReports reports={collection?.evaluations} />
             {['stream', 'prepare'].includes(collection?.mode) && <>
               {collection.status === 'completed' && <p role="status">Collection and all batches completed · {collection.record_count} input records{collection.processed_count != null ? ` → ${collection.processed_count} processed records` : ''}.</p>}
               {(collection.batches || []).map((item, index) => <div key={item.id}>Batch {index + 1} · {item.total} records · {item.status || 'running'} <button type="button" onClick={() => onBatchStart?.(item.id)}>View batch {index + 1}</button></div>)}
@@ -825,10 +830,10 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
           <option value="native">SafeChain / native batch API</option>
         </select>
       </div>
-      {apiBatch && <div className="field">
+      {apiBatch && loaderSize == null && <div className="field">
         <label htmlFor="api-batch-size">API batch size</label>
         <input id="api-batch-size" type="number" min="1" max="1024" disabled={collecting || starting} value={apiBatchSize} onChange={e => setApiBatchSize(e.target.value)} />
-        <p className="muted small">Maximum model requests per SafeChain batch. Different from records per workflow batch.</p>
+        <p className="muted small">Maximum model requests per SafeChain batch. Canvas DataLoader inputs use their Input batch size automatically.</p>
         {invalidApiBatch && <p role="alert">Enter a whole number from 1 to 1024.</p>}
       </div>}
       {!apiBatch && <details className="input-disclosure"><summary>Parallel runs · {workers} workers</summary>

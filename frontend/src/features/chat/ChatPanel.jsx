@@ -422,7 +422,11 @@ export default function ChatPanel({
             </div>}
             {m.runDeclined && <div className="chat-note">Run declined.</div>}
             {(m.tools || []).length > 0 && (
-              <div className="chat-summary">🔧 tool created: {m.tools.join(', ')}</div>
+              <div className="chat-summary">🔧 {m.tools.map(name => {
+                const check = [...(m.activity || [])].reverse().find(a => a.operation?.op === 'create_tool' && a.result?.name === name)?.result?.verification;
+                const status = check?.status === 'verified' ? 'example tests passed' : check?.status === 'failed' ? 'verification failed' : 'not verified';
+                return `${name} — created · ${status}`;
+              }).join('; ')}</div>
             )}
             {(m.notes || []).map((n, j) => (
               <div key={j} className="chat-note">{n}</div>

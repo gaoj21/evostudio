@@ -3,6 +3,7 @@ import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panel
 import { useLayoutMode } from '../../useLayoutMode.js';
 import { api } from '../../api.js';
 import ResultChat from '../chat/ResultChat.jsx';
+import EvaluatorReports from '../evaluation/EvaluatorReports.jsx';
 import JsonView from '../../components/JsonView.jsx';
 
 const RESULT_PANEL_IDS = ['result-detail', 'result-chat'];
@@ -84,6 +85,7 @@ export default function RunResultPage({ graphId, sourceNames = [], run, runs = [
     {!result && !error && <p role="status">Loading result…</p>}
     {result && <>
       {result.error && <div role="alert" className="platform-error">{typeof result.error === 'string' ? result.error : JSON.stringify(result.error)}</div>}
+      <EvaluatorReports reports={result.evaluations} />
       <details className="run-result-content result-input-data" aria-label="Input data" open><summary>Input data</summary>
         {Object.keys(result.inputs || {}).length > 0 ? <JsonView value={result.inputs} /> : <p>No manually supplied inputs. Source data is shown below when saved by the workflow.</p>}
         {(result.nodes || []).filter(node => sourceNames.includes(node.name) || node.name === 'feed' || node.name.startsWith('source_')).map(node => <details key={node.name}><summary>{node.name} · Source data</summary><JsonView value={node.output ?? 'No source data saved.'} /></details>)}
@@ -93,7 +95,7 @@ export default function RunResultPage({ graphId, sourceNames = [], run, runs = [
         <JsonView key={run.run_id} value={result.result ?? { message: ['pending', 'queued', 'running', 'stopping'].includes(status) ? 'This run is still in progress. Results will appear here automatically.' : 'No final result available.' }} />
       </details>
       <details className="run-result-content" aria-label="Step outputs" open><summary>Step outputs ({result.nodes?.length || 0})</summary>
-        {(result.nodes || []).map((node, index) => <details key={`${node.name}-${index}`}><summary>{node.name} · {node.status}</summary>{node.error && <p role="alert">{String(node.error)}</p>}<JsonView value={node.output ?? 'No output available.'} /></details>)}
+        {(result.nodes || []).map((node, index) => <details key={`${node.name}-${index}`}><summary>{node.name} · {node.status}</summary>{node.error && <p role="alert">{String(node.error)}</p>}<JsonView value={result.node_outputs?.[node.name] ?? node.output ?? 'No output available.'} /></details>)}
       </details>
     </>}
       </article>

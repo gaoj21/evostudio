@@ -35,6 +35,15 @@ def main():
         elif kind == 'preprocess':
             from backend.api.custom_tools import run_custom_tool
             value = run_custom_tool(payload['name'], payload['arguments'])
+        elif kind == 'evaluate_python':
+            from backend.features.evaluation.python_evaluator import execute
+            value = execute(payload)
+        elif kind == 'dataset':
+            from backend.features.data.torch_loader import execute_python
+            value = execute_python(payload)
+        elif kind == 'verify_tool':
+            from backend.features.library.tool_verification import verify
+            value = verify(payload['spec'])
         elif kind == 'generate':
             from backend.api.chat_api import _workflow_from_goal
             value = _workflow_from_goal(payload['goal'], on_stage=lambda text: (directory / 'stage.txt').write_text(text))

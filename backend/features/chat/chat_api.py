@@ -83,7 +83,10 @@ A workflow is a directed graph of tasks. Data crosses explicit edge mappings
 passing data. Inputs not fed by an edge are workflow inputs supplied at run time.
 Do not infer connections just because field names match.
 
-Three kinds of node:
+DataLoader source: {"kind":"source","source":{"type":"dataloader","resource_id":"uploaded resource ID","loader":"python","code":"<build_dataset(resource, config) returning a PyTorch Dataset>","n":0},"outputs":[...]}. Uploaded resources are chosen by the user. Never invent resource IDs. Loader owns transforms, selection and order; Run owns execution settings. Create new DataLoader inputs only with loader="python". Legacy reader modes are for existing saved inputs only. All loader modes use PyTorch DataLoader with drop_last=False and dictionary-preserving collation. For pasted Python use loader="python", code defining build_dataset(resource, config) returning torch.utils.data.Dataset or IterableDataset, and read_batch_size. Prefer named typed build_dataset arguments (resource, path: str, split: str = "dev") so Studio can generate the input form; resource is automatic. Legacy config keys are also supported. Each item must be a JSON-compatible dictionary; do not return an already batched DataLoader. Preview determines output fields and types, never guess them. Code is saved on the Input, not in the model adapter.
+Evaluator: {"kind":"evaluator","evaluator":{"type":"exact_match","timing":"run"},"inputs":[{"name":"prediction","type":"any","required":true},{"name":"expected","type":"any","required":false}],"outputs":[]}. Connect any workflow output to prediction using field mappings. Timings are node/run/batch. For new evaluators use type=python, code defining evaluate(records, threshold: float = 0.5), config containing additional typed arguments, and metric naming the chosen Evolve objective. Users can upload .py code and preview its returned metrics on saved runs/batches in the Inspector without rerunning agents. Keep existing registered type=tool evaluators compatible. Python evaluators and tools receive complete saved executions (inputs, result, all nodes and node_outputs, status/errors, execution_snapshot, focus), even for unconnected nodes. Tools own grouping and aggregation; return metrics with optional details/records and optional coverage declaring its unit. Never impose trajectory aggregation. Evaluators cannot feed workflow nodes. Evolve selects an evaluator as an objective, not via an outgoing edge.
+
+Four kinds of node:
 
 1. LLM task (the default, no `kind` field) -- calls the model.
    {"name": "detect", "description": "...", "prompt": "...", \
@@ -100,10 +103,8 @@ are appended to this node's system prompt at run time.
 2. Source node -- `{"kind": "source", "source": {"type": ...}}`. Fetches \
 input data at run start. Do not invent source types.
 3. Tool node -- `{"kind": "tool", "tool": "<sub-tool name>"}`. Deterministic, \
-no LLM call. Its inputs are the tool's parameters. A tool node may only take \
-input from source nodes, other tool nodes, or workflow inputs -- never from \
-an LLM task's output. Attach a tool to an LLM task via `tool_names` instead \
-when it needs an LLM's output.
+no LLM call. Its inputs are the tool's parameters. It can consume explicitly mapped outputs from sources, tools or LLM tasks.
+4. Evaluator node -- described above; a terminal evaluation branch, not a workflow data producer.
 
 Names must be lowercase identifiers (letters, digits, underscore).
 
@@ -174,6 +175,17 @@ Tools vs skills: a tool is code the workflow CALLS (deterministic, returns a \
 value); a skill is instructions a node FOLLOWS (a taxonomy, a rubric, a house \
 style). If the user describes judgement or standards, make a skill. If they \
 describe a computation, an API call or hand you code, make a tool.
+
+When creating a tool, include spec.requirements (explicit pip package names/version constraints,
+never infer a package name from an import) and spec.tests: [{"tool":"word_count",
+"args":{"text":"hello world"},"expected":{"words":2}}]. Provide representative small,
+non-destructive examples for every exported function, including an edge case. Missing
+credentials or required real resources must be reported, never invented. Declared dependencies
+are installed automatically in a per-tool directory, without changing Studio's environment.
+Creation returns an actual verification report to you. Fix failing code and recreate it;
+only call it verified if verification.status is verified. No tests means unverified;
+a successful smoke call alone is not correctness verification. Verification covers examples only.
+- {"op":"verify_tool","name":"text_stats"} -- rerun saved examples and dependency installation.
 
 ### Reading the workflow (these answer back to you)
 
@@ -559,6 +571,12 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None)
                 )
                 custom_tools.save_custom_tool(spec)
                 tools_created.append(spec["name"])
+                from backend.features.library.tool_verification import verify_saved
+                observe("create_tool", {"name":spec["name"], "verification":verify_saved(spec["name"])})
+
+            elif op == "verify_tool":
+                from backend.features.library.tool_verification import verify_saved
+                observe("verify_tool", verify_saved(raw.get("name") or ""))
 
             # ---- reads: results are fed back to the model ----
             elif op == "validate":

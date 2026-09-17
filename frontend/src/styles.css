@@ -3371,3 +3371,32 @@ button.run-badge:hover:not(:disabled) {
 .connection-field { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(180px, 2fr); gap: 12px; align-items: center; margin: 12px 0; }
 .connection-field small { opacity: .65; }
 .connection-editor select { width: 100%; }
+
+/* Execution activity follows source → target; dependency-only edges pulse. */
+.react-flow__edge.edge-flow-active .react-flow__edge-path {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-dasharray: 7 6;
+  opacity: 1;
+  animation: workflow-edge-flow 0.65s linear infinite;
+}
+.react-flow__edge.edge-order-active .react-flow__edge-path {
+  stroke: var(--accent);
+  stroke-width: 2;
+  animation: workflow-edge-pulse 1.4s ease-in-out infinite;
+}
+@keyframes workflow-edge-flow {
+  from { stroke-dashoffset: 26; }
+  to { stroke-dashoffset: 0; }
+}
+@keyframes workflow-edge-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__edge.edge-flow-active .react-flow__edge-path,
+  .react-flow__edge.edge-order-active .react-flow__edge-path {
+    animation: none;
+    opacity: 1;
+  }
+}

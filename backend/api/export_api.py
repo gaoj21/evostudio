@@ -434,6 +434,8 @@ def project_files(graph: dict, include_vendor: bool = True) -> tuple[dict, dict]
     # enabled flags made explicit, the same way a stored graph is on load.
     graph = migrate_flow(copy.deepcopy(graph))
     tasks = graph.get("tasks", []) or []
+    if any(t.get('kind') == 'evaluator' or (t.get('source') or {}).get('type') == 'dataloader' for t in tasks):
+        raise HTTPException(422, 'DataLoader and Evaluator workflows run in Studio. Export the graph JSON to preserve their configuration; standalone Python export is not supported.')
     if any((t.get('harness') or {}).get('engine') == 'deepagents' for t in tasks):
         raise HTTPException(422, 'Standalone export of Deep Agents harness nodes is not supported yet. Run this workflow in the platform.')
     if any(t.get('use_long_term_memory') and (t.get('memory') or {}).get('provider') == 'mem0' for t in tasks):

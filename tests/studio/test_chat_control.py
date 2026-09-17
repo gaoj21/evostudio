@@ -81,3 +81,16 @@ def test_stop_generation_never_publishes_a_graph(monkeypatch):
         time.sleep(.02)
     assert chat_api._jobs[job_id]['status'] == 'cancelled'
     assert chat_api._jobs[job_id]['graph'] is None
+
+
+def test_dataset_worker_deadline_terminates_process(monkeypatch):
+    processes = []
+    original = subprocess.Popen
+    def spawn(*args, **kwargs):
+        process = original([sys.executable, '-c', 'import time; time.sleep(30)'], **kwargs)
+        processes.append(process)
+        return process
+    monkeypatch.setattr(chat_control.subprocess, 'Popen', spawn)
+    with pytest.raises(TimeoutError, match='dataset worker exceeded'):
+        chat_control.worker('dataset', {}, timeout=.2)
+    assert processes[0].poll() is not None

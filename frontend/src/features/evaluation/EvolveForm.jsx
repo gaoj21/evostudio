@@ -2,6 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../../api.js';
 
 export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'saved_batch', initialMode = 'evaluate' }) {
+  const [evaluators, setEvaluators] = useState([]);
+  const [evaluator, setEvaluator] = useState('');
+  const [rounds, setRounds] = useState(1);
   const [mode, setMode] = useState(initialMode);
   const evaluationOnly = mode === 'evaluate';
   const [source, setSource] = useState(initialSource);
@@ -39,7 +42,7 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
     api.creditRiskSource(dataset).then(info => { if (active) { setSourceInfo(info); if (info.dataset && info.dataset !== dataset) setDataset(info.dataset); } }).catch(() => { if (active) setSourceInfo(null); }).finally(() => { if (active) setDatasetLoading(false); });
     if (graphId) {
       api.getGraph(graphId)
-        .then((g) => setNodes((g.tasks || []).filter((t) => !['source', 'tool'].includes(t.kind)).map((t) => t.name)))
+        .then((g) => { setNodes((g.tasks || []).filter((t) => !['source', 'tool', 'evaluator'].includes(t.kind)).map((t) => t.name)); setEvaluators((g.tasks || []).filter(t=>t.kind==='evaluator' && t.enabled!==false)); })
         .catch(() => setNodes([]));
     }
     return () => { active = false; };
@@ -60,15 +63,15 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
     setSelection(null); setSelectionError('');
     if (!savedSource || !savedId) { setSelectionLoading(false); return () => { active = false; }; }
     setSelectionLoading(true);
-    api.previewEvolveResults(graphId, {source, dataset: savedDataset || undefined, split: savedSplit, label_key: labelKey, metric: metric || undefined,
+    api.previewEvolveResults(graphId, {source, ...(evaluator ? {evaluator} : {}), dataset: savedDataset || undefined, split: savedSplit, label_key: labelKey, metric: metric || undefined,
       [source === 'saved_batch' ? 'batch_id' : 'run_id']: savedId}).then(value => {
         if (active) setSelection(value);
       }).catch(err => { if (active) setSelectionError(err?.body?.detail || err.message); })
       .finally(() => { if (active) setSelectionLoading(false); });
     return () => { active = false; };
-  }, [graphId, source, savedId, savedDataset, savedSplit, labelKey, metric]);
+  }, [graphId, source, savedId, savedDataset, savedSplit, labelKey, metric, evaluator]);
 
-  const effectiveMetric = metric || (source === 'credit_risk' ? 'credit_risk' : savedSource ? selection?.suggested_metric || 'exact_match' : 'exact_match');
+  const effectiveMetric = evaluator && (savedSource || source === 'canvas') ? `canvas:${evaluator}` : metric || (source === 'credit_risk' ? 'credit_risk' : savedSource ? selection?.suggested_metric || 'exact_match' : 'exact_match');
   const picked = chosen === null ? nodes : chosen;
   const toggleNode = (name) => setChosen((current) => {
     const base = current === null ? nodes : current;
@@ -85,8 +88,10 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
         Object.entries(adv).forEach(([k, v]) => { if (v !== '') extra[k] = Number(v); });
       }
       const params = { mode, metric: effectiveMetric, preset, nodes: picked.join(','), ...(source === 'credit_risk' && dataset !== 'contemporary' ? { dataset } : {}), ...extra };
-      const res = savedSource
-        ? await api.startEvolveResults(graphId, {source, mode, metric: effectiveMetric, nodes: evaluationOnly ? [] : picked, dataset: savedDataset || undefined, split: savedSplit, label_key: labelKey, [source === 'saved_batch' ? 'batch_id' : 'run_id']: savedId})
+      const res = source === 'canvas'
+        ? await api.startEvolveResults(graphId,{source:'canvas',mode,evaluator,nodes:evaluationOnly?[]:picked,rounds:Number(rounds)})
+        : savedSource
+        ? await api.startEvolveResults(graphId, {source, mode, ...(evaluator ? {evaluator} : {}), metric: effectiveMetric, nodes: evaluationOnly ? [] : picked, dataset: savedDataset || undefined, split: savedSplit, label_key: labelKey, [source === 'saved_batch' ? 'batch_id' : 'run_id']: savedId})
         : source === 'upload'
         ? await api.startEvolveUpload(graphId, file, params)
         : await api.startEvolveSource(graphId, {
@@ -103,7 +108,7 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
   const splits = Object.keys(sourceInfo?.splits || {});
   const chosenPreset = presets.find((p) => p.name === preset);
   const eligible = sourceInfo?.evolve_splits ? (split ? sourceInfo.evolve_splits[split] || 0 : Object.values(sourceInfo.evolve_splits).reduce((a,b) => a+b, 0)) : null;
-  const canStart = !starting && (!savedSource || (savedId && selection && !selectionLoading && !selectionError)) && (source !== 'upload' || file) && (evaluationOnly || picked.length > 0) && (source !== 'credit_risk' || (!datasetLoading && sourceInfo && (eligible === null || eligible >= (evaluationOnly ? 1 : 2)))); 
+  const canStart = !starting && (source !== 'canvas' || !!evaluator) && (!savedSource || (savedId && selection && !selectionLoading && !selectionError)) && (source !== 'upload' || file) && (evaluationOnly || picked.length > 0) && (source !== 'credit_risk' || (!datasetLoading && sourceInfo && (eligible === null || eligible >= (evaluationOnly ? 1 : 2))));
 
   return (
     <form onSubmit={start} className="evolve-form">
@@ -116,11 +121,14 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
             </label>
           ))}
         </div>
+        {(savedSource || source === 'canvas') && <div className="field"><label htmlFor="canvas-evaluator">Canvas evaluator</label><select id="canvas-evaluator" value={evaluator} onChange={e=>setEvaluator(e.target.value)}><option value="">{source === 'canvas' ? 'Choose an evaluator' : 'Use existing metric'}</option>{evaluators.map(t=><option key={t.name} value={t.name}>{t.name} · {t.evaluator?.type}</option>)}</select></div>}
+        {source === 'canvas' && !evaluationOnly && <div className="field"><label htmlFor="canvas-rounds">Candidate rounds</label><input id="canvas-rounds" type="number" min="1" max="10" value={rounds} onChange={e=>setRounds(e.target.value)} /></div>}
         <h4>1 · {evaluationOnly ? 'Data to evaluate' : 'Data to learn from'}</h4>
         <div className="evolve-grid">
           <div className="field">
             <label htmlFor="evolve-source">Source</label>
             <select id="evolve-source" value={source} onChange={(e) => setSource(e.target.value)}>
+              <option value="canvas">Canvas DataLoader + Evaluator — run workflow</option>
               <option value="saved_batch">Saved batch results — no workflow rerun</option>
               <option value="saved_run">Saved run result — no workflow rerun</option>
               <option value="credit_risk">Credit-risk dataset — rerun workflow</option>
@@ -153,7 +161,7 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
             </p>}
             {selection?.scoring && <p role="status">{selection.scoring.scored} records can be scored · {selection.scoring.unscored} unscored. {selection.scoring.scored === 0 && 'Choose the expected-answer field and metric before evaluating.'}</p>}
             <div className="field"><label htmlFor="evolve-label-key">Expected-answer field (optional)</label><input id="evolve-label-key" value={labelKey} onChange={e => setLabelKey(e.target.value)} placeholder="Uses saved labels when available" /></div>
-          </> : source === 'upload' ? (
+          </> : source === 'canvas' ? <p className="muted small">Uses the Input configuration and attached evaluator. Prepares data once; each candidate starts with empty isolated workflow memory. This runs the workflow and may call tools and models.</p> : source === 'upload' ? (
             <div className="field">
               <label htmlFor="evolve-file">File</label>
               <input id="evolve-file" type="file" accept=".json,.jsonl" onChange={(e) => setFile(e.target.files?.[0] || null)} />
@@ -188,8 +196,8 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
           Scored with <b>{effectiveMetric}</b>
           {source === 'credit_risk' ? ' — the dataset\'s own truth; ' : '; '}
           <button type="button" className="link small" onClick={() => setAdvanced(true)}>change</button>.
-          {savedSource ? ' Reads saved predictions and traces. No workflow rerun. Missing labels remain unscored. Evolution makes one model request to propose prompts from up to 40 saved traces; new prompts are not validated.' : evaluationOnly ? ' All selected records are scored with the current prompts. No optimization is performed.' : ' The selected split is divided internally: about 70% for training and 30% for candidate validation. Before/after scores use that validation subset, not an independent test set.'}
-          {!savedSource && ' This evaluates window snapshots; it does not replay the canvas trajectory or its memory.'}
+          {source === 'canvas' ? ' Replays the real workflow on the Input selection. All candidates use the same prepared records and empty isolated memory. Scores are development scores; use a separate Test run for final validation.' : savedSource ? ' Reads saved predictions and traces. No workflow rerun. Missing labels remain unscored. Evolution makes one model request to propose prompts from up to 40 saved traces; new prompts are not validated.' : evaluationOnly ? ' All selected records are scored with the current prompts. No optimization is performed.' : ' The selected split is divided internally: about 70% for training and 30% for candidate validation. Before/after scores use that validation subset, not an independent test set.'}
+          {!savedSource && source !== 'canvas' && ' This evaluates window snapshots; it does not replay the canvas trajectory or its memory.'}
         </div>
       </section>
 
@@ -212,8 +220,8 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
       </section>}
 
       <section>
-        {!evaluationOnly && !savedSource && <h4>3 · How hard to try</h4>}
-        {!evaluationOnly && !savedSource && <div className="evolve-presets">
+        {!evaluationOnly && !savedSource && source !== 'canvas' && <h4>3 · How hard to try</h4>}
+        {!evaluationOnly && !savedSource && source !== 'canvas' && <div className="evolve-presets">
           {(presets.length ? presets : [{ name: 'quick', label: 'Quick', blurb: '' }]).map((p) => (
             <label key={p.name} className={`evolve-preset ${preset === p.name ? 'selected' : ''}`}>
               <input type="radio" name="preset" value={p.name} checked={preset === p.name} onChange={() => setPreset(p.name)} />
@@ -230,12 +238,13 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
           <div className="evolve-grid evolve-advanced">
             <div className="field">
               <label htmlFor="evolve-metric">Metric</label>
-              <select id="evolve-metric" value={effectiveMetric} onChange={(e) => setMetric(e.target.value)}>
+              <select id="evolve-metric" disabled={!!evaluator} value={effectiveMetric} onChange={(e) => setMetric(e.target.value)}>
+                {evaluator && <option value={effectiveMetric}>{effectiveMetric}</option>}
                 {metrics.map((m) => <option key={m.name} value={m.name}>{m.name}</option>)}
                 {metrics.length === 0 && <option value={effectiveMetric}>{effectiveMetric}</option>}
               </select>
             </div>
-            {(evaluationOnly || savedSource ? [] : [['n_train', 'Train records'], ['n_dev', 'Judge records'], ['num_candidates', 'Candidates'], ['max_steps', 'Rounds'], ['seed', 'Optimizer seed']]).map(([key, label]) => (
+            {(evaluationOnly || savedSource || source === 'canvas' ? [] : [['n_train', 'Train records'], ['n_dev', 'Judge records'], ['num_candidates', 'Candidates'], ['max_steps', 'Rounds'], ['seed', 'Optimizer seed']]).map(([key, label]) => (
               <div className="field" key={key}>
                 <label htmlFor={`evolve-${key}`}>{label}</label>
                 <input

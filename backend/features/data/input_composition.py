@@ -5,7 +5,7 @@ from backend.api import sources
 
 def is_reference(node):
     config = node.get('source') or {}
-    return config.get('type') == 'user_dataset' and config.get('input_mode') == 'reference'
+    return config.get('type') in ('user_dataset', 'dataloader') and config.get('input_mode') == 'reference'
 
 
 def connected(graph):
@@ -47,3 +47,14 @@ def merge(records, reference_inputs):
 def all_outputs(graph):
     return [{'name': o['name'], 'required': False}
             for node in connected(graph) for o in node.get('outputs', [])]
+
+
+def load_primary(graph, main=None):
+    """Reference data is available inside a DataLoader transform, not only after it."""
+    main = main or primary(graph)
+    refs = snapshot(graph, main)
+    config = main.get('source') or {}
+    if config.get('type') == 'dataloader' and not is_reference(main):
+        from .dataloaders import records
+        return records({**config, 'reference_inputs': refs})
+    return merge(sources.records_from_source_node(main), refs)

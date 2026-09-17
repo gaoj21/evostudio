@@ -42,19 +42,25 @@
       "evolve_api",
       "evaluation",
       "evaluation_report",
-      "saved_result_evolution"
+      "saved_result_evolution",
+      "evaluator_tools",
+      "canvas_evolution"
     ],
     "data": [
       "datasets",
       "sources",
       "source_apis",
       "source_collection",
-      "preprocess"
+      "preprocess",
+      "data_resources",
+      "dataloaders",
+      "input_composition"
     ],
     "library": [
       "skills_api",
       "custom_tools",
-      "tools_registry"
+      "tools_registry",
+      "data_evaluation_tools"
     ],
     "workspace": [
       "projects",
@@ -81,7 +87,9 @@
     "evaluation": [
       "EvolvePanel",
       "EvaluationTab",
-      "BatchCompare"
+      "BatchCompare",
+      "EvaluatorInspector",
+      "EvaluatorReports"
     ],
     "memory": [
       "Mem0Spaces",
@@ -121,6 +129,10 @@
       "ToolNode",
       "convert",
       "canvasHandles"
+    ],
+    "data": [
+      "DatasetInput",
+      "DataLoaderInput"
     ]
   }
 }

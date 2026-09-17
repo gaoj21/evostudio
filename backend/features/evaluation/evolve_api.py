@@ -8,6 +8,7 @@ persisted to backend/data/evolve/<task_id>/.
 """
 
 import json
+import copy
 import os
 import threading
 import traceback
@@ -287,6 +288,7 @@ def _task_dir(task_id: str) -> Path:
 
 def start_evolve(graph: dict, records: list[dict], metric: str, params: dict) -> str:
     """Start a background MIPRO optimization task; returns the task_id."""
+    graph, params, records = copy.deepcopy(graph), copy.deepcopy(params), copy.deepcopy(records)
     task_id = uuid.uuid4().hex[:12]
     task_dir = _task_dir(task_id)
     task_dir.mkdir(parents=True, exist_ok=True)
@@ -335,15 +337,26 @@ def _stage(state: dict, name: str) -> None:
 def _execute_evolve(task_id: str, graph_doc: dict, metric: str, params: dict, task_dir: Path) -> None:
     state = _tasks[task_id]
     try:
+        if (params.get('source') or {}).get('type') == 'canvas':
+            from backend.features.evaluation import canvas_evolution
+            records = [json.loads(line) for line in (task_dir / 'dataset.jsonl').read_text().splitlines() if line.strip()]
+            state['execution_graph'] = graph_doc
+            canvas_evolution.execute(state, graph_doc, records, params, lambda text: _stage(state, text))
+            state['status'] = 'done'
+            return
         if (params.get("source") or {}).get("type") in ("saved_batch", "saved_run"):
             from backend.api import saved_result_evolution as saved
             records = [json.loads(line) for line in (task_dir / "dataset.jsonl").read_text().splitlines() if line.strip()]
             _stage(state, "scoring saved results")
-            state["baseline"] = saved.evaluate(records, metric, params["source"])
+            if params.get('evaluator'):
+                from backend.features.evaluation.canvas_evolution import score_saved
+                state['baseline'] = score_saved(graph_doc, records, params['evaluator'])
+            else:
+                state["baseline"] = saved.evaluate(records, metric, params["source"])
             if params.get("mode") != "evaluate":
                 from backend.api import runner
                 _stage(state, "proposing prompts")
-                updated, diff, used = saved.propose(graph_doc, records, params["nodes"], runner._make_llm())
+                updated, diff, used = saved.propose(graph_doc, records, params["nodes"], runner._make_llm(), **({"feedback": state["baseline"]} if params.get("evaluator") else {}))
                 state.update(optimized_graph=updated, diff=diff, validation_status="not_run", evidence_records=used)
             state["status"] = "done"
             return
@@ -356,7 +369,7 @@ def _execute_evolve(task_id: str, graph_doc: dict, metric: str, params: dict, ta
 
         llm = runner_mod._make_llm()
         ordered = topo_sort_tasks(graph_doc.get("tasks", []) or [], graph_doc.get("edges", []) or [])
-        ordered = [t for t in ordered if t.get("kind") not in ("source", "tool")]  # source/tool nodes are not optimizable
+        ordered = [t for t in ordered if t.get("kind") not in ("source", "tool", "evaluator")]  # source/tool nodes are not optimizable
         input_keys = [w["name"] for w in graph_store.compute_workflow_inputs(ordered)]
 
         # canvas prompt -> optimizable MiproPromptTemplate instruction, for
@@ -601,6 +614,12 @@ async def preview_saved_evaluation(graph_id: str, request: Request):
         raise HTTPException(status_code=422, detail="Select saved results to preview.")
     try:
         records, selection = saved.resolve(graph_id, body)
+        if body.get('evaluator'):
+            from backend.features.evaluation.canvas_evolution import select
+            select(graph_store.load_graph(graph_id) or {}, body['evaluator'])
+            return {**selection, 'suggested_metric': 'canvas:' + body['evaluator'],
+                    'scoring': {'scored': None, 'unscored': None, 'total': len(records)},
+                    'note': 'Canvas evaluator will score saved outputs. Preview does not execute evaluator tools.'}
         metric = body.get('metric') or saved.default_metric(selection)
         if metric not in METRICS:
             raise sources.SourceError('Choose an available metric.')
@@ -644,22 +663,31 @@ async def start_evolve_task(graph_id: str, request: Request):
             source = {"type": "upload", "filename": upload.filename}
         else:
             body = await request.json() or {}
+            if body.get('source') == 'canvas':
+                from backend.features.evaluation import canvas_evolution
+                from starlette.concurrency import run_in_threadpool
+                records, params = await run_in_threadpool(canvas_evolution.prepare, graph, body)
+                return {'task_id': start_evolve(graph, records, 'canvas:' + params['evaluator'], params)}
             if body.get("source") in ("saved_batch", "saved_run"):
                 from backend.api import saved_result_evolution as saved
                 records, source = saved.resolve(graph_id, body)
                 metric = body.get("metric") or saved.default_metric(source)
-                if metric not in METRICS:
+                if body.get('evaluator'):
+                    from backend.features.evaluation.canvas_evolution import select
+                    select(graph, body['evaluator'])
+                    metric = 'canvas:' + body['evaluator']
+                elif metric not in METRICS:
                     raise sources.SourceError("Choose an available metric.")
                 mode = body.get("mode", "evaluate")
                 if mode not in ("evaluate", "evolve_evaluate"):
                     raise sources.SourceError("Choose evaluation or evolution with evaluation.")
-                available = [t["name"] for t in ordered if t.get("kind") not in ("source", "tool")]
+                available = [t["name"] for t in ordered if t.get("kind") not in ("source", "tool", "evaluator")]
                 chosen = [] if mode == "evaluate" else body.get("nodes", available)
                 if not isinstance(chosen, list) or any(n not in available for n in chosen):
                     raise sources.SourceError("Choose valid nodes to improve.")
                 if mode != "evaluate" and not chosen:
                     raise sources.SourceError("Choose at least one prompt to improve.")
-                params = {"mode": mode, "source": source, "nodes": chosen, "n_dev": len(records), "n_train": 0}
+                params = {"mode": mode, "source": source, "nodes": chosen, "n_dev": len(records), "n_train": 0, "evaluator": body.get("evaluator")}
                 return {"task_id": start_evolve(graph, records, metric, params)}
             if body.get("source") != "credit_risk":
                 raise sources.SourceError("JSON body must be {\"source\": \"credit_risk\", ...}")
@@ -689,7 +717,7 @@ async def start_evolve_task(graph_id: str, request: Request):
             raise sources.SourceError("An optimization needs at least 2 records: one to learn from, one to judge by.")
         # every record's inputs must cover the graph's required workflow inputs
         sources.map_to_workflow_inputs([r["inputs"] for r in records], workflow_inputs)
-        llm_nodes = [t.get("name") for t in ordered if t.get("kind") not in ("source", "tool")]
+        llm_nodes = [t.get("name") for t in ordered if t.get("kind") not in ("source", "tool", "evaluator")]
         params = {**resolve_params(params, len(records), llm_nodes), "source": source}
     except sources.SourceError as e:
         raise HTTPException(status_code=422, detail=str(e))

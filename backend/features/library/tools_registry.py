@@ -38,6 +38,11 @@ def _make(module: str, class_name: str):
 # `storage`: toolkit accepts a storage_handler — runs pass one rooted at the
 # graph's workspace files/ dir.
 TOOL_REGISTRY: dict[str, dict] = {
+    "DataEvaluationToolkit": {
+        "factory": _make("backend.features.library.data_evaluation_tools", "DataEvaluationToolkit"),
+        "description": "Read uploaded data through DataLoaders and evaluate predictions with typed evaluator tools.",
+        "requires": [], "tool_names": ["read_dataset", "evaluate_records"],
+    },
     "FileToolkit": {
         "factory": _make("evoagentx.tools.file_tool", "FileToolkit"),
         "description": "Read, write and append files (read_file, write_file, append_file). Paths come from the LLM and are NOT redirected to the workspace.",

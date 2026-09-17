@@ -44,7 +44,7 @@ def _kind(task: dict) -> str:
 
 def _does_work(task: dict) -> bool:
     """A source only yields data; the run has to reach something that acts on it."""
-    return _kind(task) != "source"
+    return _kind(task) != "source" and task.get("kind") != "evaluator"
 
 
 def _reaches_work(tasks, edges, name: str) -> bool:
@@ -106,7 +106,7 @@ def compile_plan(graph: dict, start_at=None, mode: str = "single") -> dict:
     # A source wired to nothing is skipped by the runner; a plan that listed
     # it would describe a run that does not happen.
     wired = {e.get("source") for e in kept_edges}
-    active = [t for t in ordered if t.get("name") not in parked
+    active = [t for t in ordered if t.get("name") not in parked and t.get("kind") != "evaluator"
               and not (graph_store.is_source_task(t) and t.get("name") not in wired)]
 
     if not any(_does_work(t) for t in active):
@@ -269,5 +269,6 @@ def records_of(graph: dict, plan: dict) -> list[dict]:
                  if t.get("name") == source["node"]), None)
     if node is None:
         return []
-    return [{"index": i, "summary": summarise_record(r)}
-            for i, r in enumerate(sources.records_from_source_node(node))]
+    from backend.features.data.input_composition import load_primary
+    rows = load_primary(graph, node) if (node.get('source') or {}).get('type') == 'dataloader' else sources.records_from_source_node(node)
+    return [{"index": i, "summary": summarise_record(r)} for i, r in enumerate(rows)]

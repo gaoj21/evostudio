@@ -363,6 +363,8 @@ FETCHERS = {
 }
 
 SOURCE_TYPE_SCHEMAS = {
+    "dataloader": {"label": "DataLoader", "description": "Read files or folders, preprocess and emit workflow records.",
+        "config": [{"name": "resource_id", "type": "str", "required": False}], "outputs": []},
     "user_dataset": {
         "label": "My dataset",
         "description": "Upload and reuse your own CSV, TSV, JSON or JSONL records.",

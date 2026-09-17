@@ -17,6 +17,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "torch>=2.2",
     "overdue",
     "tenacity",
     "networkx>=3.3",

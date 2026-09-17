@@ -7,6 +7,7 @@ from the workflow Environment's execution data (best effort per output name).
 """
 
 import asyncio
+import copy
 import json
 import threading
 import traceback
@@ -87,6 +88,7 @@ def start_run(graph: dict, inputs: dict, background: bool = True, gray_zone=None
     record_index: which of the source's records this run takes. A source that
     yields several used to hand over the first one without saying so.
     """
+    graph = copy.deepcopy(graph)
     if start_at:
         tasks, edges = graph_store_subgraph(graph, start_at)
         graph = {**graph, "tasks": tasks, "edges": edges}
@@ -102,6 +104,8 @@ def start_run(graph: dict, inputs: dict, background: bool = True, gray_zone=None
         ],
         "result": None,
         "inputs": inputs or {},
+        "execution_snapshot": {"graph": copy.deepcopy(graph), "llm_batch_size": llm_batch_size,
+                               "session": session, "record_index": record_index},
         "review_status": None,
         "created_at": _utcnow(),
         "session": (session or "").strip() or None,
@@ -412,12 +416,17 @@ async def _walk(plan: dict, graph_doc: dict, inputs: dict, state: dict,
                 # batch the same first sample, whatever its inputs said.
                 declared = [o.get("name") for o in (task.get("outputs") or []) if o.get("name")]
                 supplied = {k: external[k] for k in declared if k in external}
-                if declared and len(supplied) == len(declared):
+                if state.get('batch_id'):
+                    missing = [o['name'] for o in task.get('outputs', []) if o.get('required', True) and o['name'] not in supplied]
+                    if missing:
+                        raise NodeError('source_failed', name, f"Prepared batch record is missing source fields: {missing}. The source was not reread.")
+                    out = {key: supplied.get(key) for key in declared}
+                elif declared and len(supplied) == len(declared):
                     out = supplied
                 else:
                     try:
-                        found = sources.records_from_source_node(task)
-                        from backend.features.data.input_composition import is_reference
+                        from backend.features.data.input_composition import is_reference, load_primary
+                        found = load_primary(graph_doc, task) if (task.get('source') or {}).get('type') == 'dataloader' and not is_reference(task) else sources.records_from_source_node(task)
                         index = 0 if is_reference(task) else (state.get("record_index") or 0)
                         out = {**dict(found[index]), **supplied}
                     except NodeError:
@@ -457,6 +466,9 @@ async def _walk(plan: dict, graph_doc: dict, inputs: dict, state: dict,
                     raise NodeError("llm_failed", name,
                                     f"Node '{name}' failed while calling the model: {e}") from e
             values[name] = out
+            state.setdefault('node_outputs', {})[name] = out
+            if node['kind'] == 'source':
+                state['inputs'] = {**state.get('inputs', {}), **out}
             env.data.update(out)
             state.setdefault("_node_io", {})[name] = {
                 "inputs": args if node["kind"] != "source" else {},
@@ -467,6 +479,14 @@ async def _walk(plan: dict, graph_doc: dict, inputs: dict, state: dict,
             state["_effective_inputs"] = dict(env.data)
             status[name]["status"] = "completed"
             status[name]["output"] = {k: _clip(v) for k, v in out.items()} or None
+            from backend.features.evaluation import evaluator_tools
+            immediate = [t['name'] for t in graph_doc.get('tasks', []) if t.get('kind') == 'evaluator'
+                         and (t.get('evaluator') or {}).get('timing') == 'node'
+                         and t['name'] not in state.get('evaluations', {})
+                         and all(e['source'] in values for e in graph_doc.get('edges', []) if e.get('target') == t['name'])]
+            if immediate:
+                state.setdefault('evaluations', {}).update(evaluator_tools.evaluate_runs(
+                    graph_doc, [{**_public(state), 'status': 'success'}], immediate))
         except Exception as e:
             status[name]["status"] = "failed"
             status[name]["output"] = {"error": (getattr(e, "message", None) or str(e))[:500]}
@@ -474,6 +494,8 @@ async def _walk(plan: dict, graph_doc: dict, inputs: dict, state: dict,
 
     result = {}
     for node in plan["nodes"]:
+        if node['kind'] == 'source':
+            continue
         if node["name"] not in consumed:
             result.update(values.get(node["name"], {}))
     return result
@@ -547,6 +569,12 @@ def _execute_run(run_id: str, graph_doc: dict, inputs: dict) -> None:
         finally:
             state.pop("_cancel", None)
             loop.close()
+        from backend.features.evaluation.evaluator_tools import evaluate_runs
+        if state.get('_cancel_requested'):
+            raise asyncio.CancelledError()
+        state.setdefault('evaluations', {}).update(evaluate_runs(graph_doc, [{**_public(state), 'status': 'success', 'result': result}], timing={'run'}))
+        if state.get('_cancel_requested'):
+            raise asyncio.CancelledError()
         _set_status(state, "success", result=result)
         if graph is not None:
             _save_ltm(graph_doc, memories, graph, env, state)
@@ -1057,7 +1085,7 @@ def mark_interrupted() -> int:
 
 def _persist_run(state: dict) -> None:
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    data = {k: v for k, v in state.items() if not k.startswith("_")}
+    data = _public(state)
     try:
         with open(RUNS_DIR / f"{state['run_id']}.json", "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False, default=str)
@@ -1075,6 +1103,10 @@ def _public(state: dict) -> dict:
             {**n, "status": live.get(n["name"], n["status"])}
             for n in out["nodes"]
         ]
+    evaluations = out.get('evaluations') or {}
+    out['nodes'] = [({**node, 'status': 'completed' if evaluations[node['name']].get('status') == 'success' else 'failed',
+                     'output': evaluations[node['name']]} if node['name'] in evaluations else node)
+                    for node in out.get('nodes', [])]
     return out
 
 

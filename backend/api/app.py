@@ -139,6 +139,11 @@ app.include_router(result_chat.router)
 app.include_router(source_collection.router)
 from backend.features.data import user_datasets, input_composition
 app.include_router(user_datasets.router)
+from backend.features.data import data_resources, dataloaders
+from backend.features.evaluation import evaluator_tools
+app.include_router(data_resources.router)
+app.include_router(dataloaders.router)
+app.include_router(evaluator_tools.router)
 app.include_router(skills_api.router)
 app.include_router(export_api.router)
 app.include_router(agent_api.router)
@@ -498,8 +503,11 @@ def _validate_source_nodes(graph: dict) -> None:
     for node in sources.find_source_nodes(graph):
         if node.get("name") not in wired:
             continue
-        if (node.get("source") or {}).get("type") in {"credit_risk", "user_dataset"}:
-            sources.records_from_source_node(node)
+        if (node.get("source") or {}).get("type") in {"credit_risk", "user_dataset", "dataloader"}:
+            if (node.get('source') or {}).get('type') == 'dataloader':
+                input_composition.load_primary(graph, node)
+            else:
+                sources.records_from_source_node(node)
 
 
 @app.get("/api/runs")
@@ -686,12 +694,13 @@ async def _batch_payload(graph_id: str, request: Request):
                 config = node["source"]
                 if body.get("collection_id"):
                     records, source = source_collection.records_for(graph, node, body["collection_id"])
-                elif config.get("type") not in {"credit_risk", "user_dataset"}:
+                elif config.get("type") not in {"credit_risk", "user_dataset", "dataloader"}:
                     raise sources.SourceError("Collect this API source before starting the batch.")
                 else:
-                    records = sources.records_from_source_node(node)
+                    from starlette.concurrency import run_in_threadpool
+                    records = await run_in_threadpool(input_composition.load_primary, graph, node) if config.get('type') == 'dataloader' else await run_in_threadpool(sources.records_from_source_node, node)
                     source = {"type": "canvas", "node": node.get("name"),
-                              "dataset": config.get("dataset", "contemporary"),
+                              "dataset": config.get("dataset", "contemporary") if config.get("type") != "dataloader" else None, "config": config,
                               **({"dataset_id": config["dataset_id"], "config": config} if config.get("type") == "user_dataset" else {}),
                               "split": config.get("split"), "n": config.get("n", 1),
                               "seed": int(config.get("seed") or 42),
@@ -723,13 +732,16 @@ async def _batch_payload(graph_id: str, request: Request):
             label_key = body.get("label_key") or None
         from backend.features.execution import provider_batch
         try:
-            size = provider_batch.validate(graph, form.get('llm_batch_size') if content_type.startswith('multipart/form-data') else body.get('llm_batch_size'))
+            from backend.features.execution.batch_settings import loader_batch_size
+            requested = form.get('llm_batch_size') if content_type.startswith('multipart/form-data') else body.get('llm_batch_size')
+            shared_size = loader_batch_size(source)
+            size = provider_batch.validate(graph, shared_size if shared_size is not None and requested not in (None, '') else requested)
         except ValueError as exc:
             raise sources.SourceError(str(exc)) from exc
         if size is not None:
             graph = {**graph, '_llm_batch_size': size}
         # Collected records already contain the reference snapshot taken at collection start.
-        if not source.get('collection_id'):
+        if not source.get('collection_id') and (source.get('config') or {}).get('type') != 'dataloader':
             main = source_collection.node_for(graph) if source.get('type') == 'canvas' else None
             records = input_composition.merge(records, input_composition.snapshot(graph, main))
         # batch records must also cover fields provided by connected canvas
@@ -801,7 +813,7 @@ async def preview_batch(graph_id: str, request: Request):
                 node = source_collection.node_for(graph)
             except sources.SourceError as exc:
                 raise HTTPException(422, str(exc)) from exc
-            if node["source"].get("type") not in {"credit_risk", "user_dataset"}:
+            if node["source"].get("type") not in {"credit_risk", "user_dataset", "dataloader"}:
                 config = node["source"]
                 return {"requires_collection": True, "source": {"node": node["name"],
                         **{key: config.get(key) for key in ('type', 'query', 'days', 'start_date', 'end_date', 'batch_step')}}}

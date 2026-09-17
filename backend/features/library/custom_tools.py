@@ -78,6 +78,8 @@ import json, os, sys
 
 payload = json.loads(sys.stdin.read())
 ns = {}
+if payload.get("dependency_dir"):
+    sys.path.insert(0, payload["dependency_dir"])
 try:
     package_dir = payload.get("package_dir")
     if package_dir:
@@ -348,8 +350,11 @@ def validate_spec(spec: dict, builtin_names: list[str],
             f"{unknown} cannot be input sources: not exported by this module "
             f"(it exports {sorted(exported)})."
         )
-    return {"name": name, "description": description, "tools": tools, "code": code,
-            "sources": wanted}
+    result = {"name": name, "description": description, "tools": tools, "code": code,
+              "sources": wanted, "requirements": spec.get("requirements") or [], "tests": spec.get("tests") or []}
+    from backend.features.library.tool_verification import configuration
+    configuration(result)
+    return result
 
 
 _PARAM_FIELD_TYPES = {"integer": "number", "number": "number", "boolean": "select"}
@@ -633,10 +638,12 @@ def run_custom_tool(name: str, args: dict) -> dict:
     if found is None:
         return {"error": f"Custom tool '{name}' not found"}
     spec, _tool = found
+    from backend.features.library.tool_verification import dependency_path
     try:
         proc = subprocess.run(
             [sys.executable, "-c", _WRAPPER],
             input=json.dumps({"code": spec["code"], "args": args, "entry": name,
+                              "dependency_dir": str(dependency_path(spec)) if spec.get("requirements") else None,
                               "package_dir": str(package_dir(spec["name"]))
                               if spec.get("package") else None,
                               "entry_file": (spec.get("package") or {}).get("entry")},
@@ -768,3 +775,12 @@ def delete_custom(name: str):
     if not delete_custom_tool(name):
         raise HTTPException(status_code=404, detail=f"Custom tool '{name}' not found")
     return {"ok": True}
+
+
+@router.post("/tools/custom/{name}/verify")
+def verify_custom(name: str):
+    from backend.features.library.tool_verification import verify_saved
+    try:
+        return verify_saved(name)
+    except CustomToolError as exc:
+        raise HTTPException(422, str(exc)) from exc

@@ -98,6 +98,8 @@ def parse(filename, content):
     ext = filename.lower().rsplit(".", 1)[-1]
     try:
         if ext in ("csv", "tsv"):
+            # Third-party tool imports may reset this process-global setting.
+            csv.field_size_limit(sys.maxsize)
             reader = csv.DictReader(io.StringIO(text), delimiter="\t" if ext == "tsv" else ",")
             headers = reader.fieldnames or []
             if not headers or any(not h.strip() for h in headers) or len(headers) != len(set(headers)):
