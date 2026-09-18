@@ -1,3 +1,4 @@
+import NumberInput from '../../components/NumberInput.jsx';
 import React, { useState } from 'react';
 import { Mem0SpacePicker } from './Mem0Spaces.jsx';
 
@@ -381,7 +382,7 @@ export default function MemorySettings({ node, onUpdate, siblings = [], graphId 
           <div className="memory-row">
             <label>
               Session
-              <input
+              <NumberInput
                 type="number"
                 min={0}
                 max={MAX_RETRIEVE}
@@ -396,12 +397,12 @@ export default function MemorySettings({ node, onUpdate, siblings = [], graphId 
           </div>
 
           <div className="memory-row"><label>Memory character budget
-            <input type="number" min={200} max={20000} value={raw.limit ?? 4000}
+            <NumberInput type="number" min={200} max={20000} value={raw.limit ?? 4000}
               onChange={(e) => patch({ limit: Number(e.target.value) })} /></label></div>
           <div className="memory-row">
             <label>
               Recall
-              <input
+              <NumberInput
                 type="number"
                 min={0}
                 max={MAX_RETRIEVE}

@@ -44,7 +44,7 @@ def _summarize(text, limit: int = _SUMMARY_CHARS) -> str:
 
 def start_batch(graph: dict, records: list[dict], source: dict, gray_zone=None,
                 workers: int = 2, metric: str | None = None,
-                labels: list | None = None) -> str:
+                labels: list | None = None, record_chunks=None) -> str:
     """Start a batch over pre-mapped input records; returns the batch_id.
 
     With `metric` and `labels`, the batch is an evaluation: each item is scored
@@ -92,7 +92,12 @@ def start_batch(graph: dict, records: list[dict], source: dict, gray_zone=None,
     # Persisted before execution: a batch the process never finishes would
     # otherwise disappear, leaving the canvas polling an id nothing knows.
     _persist_batch(state)
-    thread = threading.Thread(
+    if record_chunks is not None:
+        state.update(streaming=True, collection_complete=False)
+        from .stream_batch import execute_stream
+        thread = threading.Thread(target=execute_stream, args=(batch_id,graph,record_chunks,workers),daemon=True)
+    else:
+        thread = threading.Thread(
         target=_execute_batch,
         args=(batch_id, graph, list(zip(state["items"], records)), workers), daemon=True
     )
@@ -126,7 +131,7 @@ def _retryable(item: dict, run: dict | None) -> bool:
     return item.get("status") == "failed" and bool(node_error.get("retryable"))
 
 
-def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int) -> None:
+def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finalize=True) -> None:
     """Run `pairs` — (item, record) — of the batch; the rest of its items are
     left as they are. A fresh batch passes all of them; a resumed one only
     what did not finish."""
@@ -217,6 +222,13 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int) -> Non
         execute_chunks(again)
     with _lock:
         state.pop("retry_note", None)
+    if not finalize:
+        _persist_batch(state)
+        return
+    _finish_batch(state, graph)
+
+
+def _finish_batch(state, graph):
     if state.get("metric"):
         from backend.api import evaluation
         with _lock:
@@ -224,9 +236,10 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int) -> Non
             # mean, and `scored`/`total` show how much of the set it covers.
             state["summary"] = evaluation.summarise(state["items"])
     from backend.features.evaluation.evaluator_tools import evaluate_runs
+    has_evaluator = any(t.get('kind') == 'evaluator' and t.get('enabled',True) and (t.get('evaluator') or {}).get('timing','run') == 'batch' for t in graph.get('tasks',[]))
     runs = [(runner.get_run(item.get('run_id')) if item.get('run_id') else None)
             or {**item, 'nodes': []}
-            for item in state['items']]
+            for item in state['items']] if has_evaluator else []
     reports = {} if graph.get('_defer_evaluators') else evaluate_runs(graph, runs, timing={'batch'})
     # Publish completion only once its report exists, so polling clients cannot
     # stop on a terminal status before evaluation has finished.
@@ -348,6 +361,8 @@ def resume_batch(batch_id: str, graph: dict) -> dict:
             return {"resumed": False, "reason": "batch is still running"}
         if state.get("graph_id") and graph.get("id") and state["graph_id"] != graph.get("id"):
             return {"resumed": False, "reason": "batch belongs to another workflow"}
+        if state.get('streaming') and not state.get('collection_complete'):
+            return {'resumed':False,'reason':'Streaming input was interrupted. Start a new run with DataLoader offset/sample settings; unread records were not collected.'}
         todo = unfinished(state)
         if not todo:
             return {"resumed": False, "reason": "nothing left to run"}
@@ -365,7 +380,7 @@ def resume_batch(batch_id: str, graph: dict) -> dict:
         state.setdefault("resumed_at", []).append(_utcnow())
         state["summary"] = None
         _batches[batch_id] = state
-        pairs = [(item, item.get("inputs") or {}) for item in todo]
+        pairs = [(item, json.loads((BATCHES_DIR / item['input_file']).read_text()) if item.get('input_file') else item.get('inputs') or {}) for item in todo]
         workers = max(1, min(int(state.get("workers") or 2), MAX_WORKERS))
     _persist_batch(state)
     thread = threading.Thread(

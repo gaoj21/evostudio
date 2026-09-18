@@ -295,7 +295,8 @@ def test_api_dataloader_batch_and_canvas_evaluator_end_to_end(client,monkeypatch
     assert not saved.json().get('project_error'),saved.json().get('project_error')
     preview=client.post('/api/graphs/'+graph['id']+'/run-batch/preview',json={'source':'canvas'})
     assert preview.status_code==200,preview.text
-    assert preview.json()['total']==3
+    assert preview.json()['total'] is None
+    assert preview.json()['deferred'] is True
     started=client.post('/api/graphs/'+graph['id']+'/run-batch',json={'source':'canvas'})
     assert started.status_code==200,started.text
     batch_id=started.json()['batch_id']

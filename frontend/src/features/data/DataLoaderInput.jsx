@@ -1,3 +1,4 @@
+import NumberInput from '../../components/NumberInput.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../../api.js';
 import JsonView from '../../components/JsonView.jsx';
@@ -61,14 +62,15 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
       onChange({...kept,loader:'python',code:DATASET_EXAMPLE},[]);
     }}>Replace with PyTorch Dataset</button></div> : <details open={!config.output_schema?.length}><summary>Dataset code</summary><PythonDatasetEditor key={nodeId} onDirtyChange={setCodeDirty} code={config.code} onChange={code=>update({code})} disabled={busy}/></details>}
     <p className="muted small">Read and preprocess in build_dataset or Dataset.__getitem__. Studio handles batching and keeps the final partial batch.</p>
-    <div className="field"><label htmlFor="loader-read_batch_size">Batch size</label><input id="loader-read_batch_size" type="number" min={1} max={1024} value={config.read_batch_size ?? 100} onChange={e=>update({read_batch_size:Number(e.target.value)})}/><small className="muted">Shared by data loading, workflow batches and native API batching.</small></div>
+    <div className="field"><label htmlFor="loader-read_batch_size">Batch size</label><NumberInput id="loader-read_batch_size" type="number" min={1} max={1024} value={config.read_batch_size ?? 100} onChange={e=>update({read_batch_size:Number(e.target.value)})}/><small className="muted">Shared by data loading, workflow batches and native API batching.</small></div>
+    <div className="field"><label htmlFor="loader-n">Sample count (0 = all records)</label><NumberInput id="loader-n" min={0} step={1} value={config.n ?? 0} onChange={e=>update({n:Number(e.target.value)})}/><small className="muted">Limits records at the reader before materialization. Dataset constructors must still use lazy loading for large files.</small></div>
     <div className="field"><label htmlFor="loader-role">How to use the data</label><select id="loader-role" value={config.input_mode || 'records'} onChange={e => update({input_mode:e.target.value})}><option value="records">Per-record input</option><option value="reference">Shared reference</option></select></div>
     {config.input_mode === 'reference' && field('reference_field', 'Reference output name', 'reference_data')}
     {!legacy && <DatasetInterface code={config.code} values={config.reader_config || {}} onChange={reader_config=>update({reader_config})} onSchema={setInputSchema} disabled={busy}/>}
     <details className="input-disclosure"><summary>Advanced settings</summary>
       <label><input type="checkbox" checked={config.cache !== false} onChange={e=>update({cache:e.target.checked})}/> Reuse prepared data until code, configuration or files change</label>
       {field('file_pattern','File pattern','*')}
-      {['offset','n'].map(key=><div className="field" key={key}><label htmlFor={`loader-${key}`}>{key==='offset'?'Skip records':'Record limit (0 = all)'}</label><input id={`loader-${key}`} type="number" min={0} value={config[key] ?? 0} onChange={e=>update({[key]:Number(e.target.value)})}/></div>)}
+      {['offset'].map(key=><div className="field" key={key}><label htmlFor={`loader-${key}`}>{key==='offset'?'Skip records':'Record limit (0 = all)'}</label><NumberInput id={`loader-${key}`} type="number" min={0} value={config[key] ?? 0} onChange={e=>update({[key]:Number(e.target.value)})}/></div>)}
       {field('group_by','Sequential group field','Optional')}{field('order_by','Order within group','Optional')}
     </details>
     <button className="primary" disabled={busy || codeDirty || (!legacy && !inputSchema) || (config.loader !== 'source' && !config.resource_id)} onClick={()=>inspect()}>{busy ? 'Inspecting…' : '3. Read output interface'}</button>

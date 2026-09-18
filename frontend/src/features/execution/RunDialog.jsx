@@ -1,3 +1,4 @@
+import NumberInput from '../../components/NumberInput.jsx';
 import EvaluatorReports from '../evaluation/EvaluatorReports.jsx';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../api.js';
@@ -373,7 +374,7 @@ function SingleRunForm({ graphId, onCancel, onSubmit, submitting, beforeRun, onS
                 <option value="false">false</option>
               </select>
             ) : isNumber ? (
-              <input
+              <NumberInput
                 id={id}
                 type="number"
                 step={['int', 'integer'].includes(type) ? '1' : 'any'}
@@ -446,6 +447,7 @@ function BatchPreview({ preview, loading, error, idle }) {
   }
   if (loading && !preview) return <div className="muted small batch-preview">Counting records…</div>;
   if (!preview || preview.requires_collection) return null;
+  if (preview.deferred) return <div className="batch-preview">DataLoader settings: batch size {preview.source.config.read_batch_size ?? 100}; {preview.record_limit ? `up to ${preview.record_limit} records` : 'all records'}. Data is loaded only when Run starts; total count is not scanned here.</div>;
   return (
     <div className={`batch-preview${preview.total >= BIG_BATCH ? ' batch-preview-big' : ''}`}>
       <strong>{previewSummary(preview)}</strong>
@@ -503,7 +505,9 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
   const loaderSize = source === 'canvas' && preview?.source?.config?.type === 'dataloader'
     ? (preview.source.config.read_batch_size ?? 100) : null;
   const effectiveBatchSize = loaderSize ?? Number(apiBatchSize);
-  const executionParams = apiBatch ? {llm_batch_size: effectiveBatchSize} : {workers};
+  const [loaderPeriod,setLoaderPeriod]=useState('none');
+  const [dateField,setDateField]=useState('as_of');
+  const executionParams = {...(apiBatch ? {llm_batch_size: effectiveBatchSize} : {workers}), ...(loaderSize != null && loaderPeriod !== 'none' ? {period:loaderPeriod,date_field:dateField} : {})};
   const invalidApiBatch = apiBatch && (!Number.isInteger(effectiveBatchSize) || effectiveBatchSize < 1 || effectiveBatchSize > 1024);
   const [previewing, setPreviewing] = useState(false);
   const [previewError, setPreviewError] = useState(null);
@@ -625,7 +629,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
       }
     }, 350);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [graphId, source, file, split, n, fullSplit, seed, step, metric, labelKey, workers, collectionId, dataset, collectionMode, apiBatch, apiBatchSize]);
+  }, [graphId, source, file, split, n, fullSplit, seed, step, metric, labelKey, workers, collectionId, dataset, collectionMode, apiBatch, apiBatchSize, loaderPeriod, dateField]);
 
   const start = async (e) => {
     e.preventDefault();
@@ -659,7 +663,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
   const selfLabelled = (preview?.fields || []).includes('sample_json');
   const runLabel = preview?.total ? `Run batch (${preview.total})` : 'Run batch';
   // Nothing starts on a count that has not arrived, failed, or is zero.
-  const canStart = !invalidApiBatch && !(source === 'canvas' && collectionMode !== 'all') && !!preview?.total && !previewing && !previewError && !starting && !collecting && !(source === 'canvas' && collectionSource && !collectionId);
+  const canStart = !invalidApiBatch && !(source === 'canvas' && collectionMode !== 'all') && (!!preview?.total || preview?.deferred) && !previewing && !previewError && !starting && !collecting && !(source === 'canvas' && collectionSource && !collectionId);
   const needsCollection = source === 'canvas' && (collectionMode !== 'all' || (!!preview?.requires_collection && !collectionId));
   const collectionInvalid = invalidApiBatch || collecting || starting || (collectionMode === 'prepare' && !collectionOptions.preprocess_tool)
     || (collectionMode !== 'all' && (!Number.isInteger(Number(chunkSize)) || Number(chunkSize) < 1 || Number(chunkSize) > 1000));
@@ -681,14 +685,14 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
       {source === 'canvas' ? (
         <div className="muted small">
 
-          {preview?.source?.config?.type === 'dataloader' ? <div role="status"><b>Using the canvas DataLoader</b><p>Reading, preprocessing, selection and trajectory order are configured in Input. This run uses {preview.total} prepared records. Batch size: {loaderSize}. This Input setting controls data loading, workflow batches and native API batching. Change it in Input.</p></div> : <div className="field">
+          {preview?.source?.config?.type === 'dataloader' ? <div role="status"><b>Using the canvas DataLoader</b><p>Reading, preprocessing, selection and trajectory order are configured in Input. {preview.deferred ? 'Data is read incrementally only after Run starts.' : `This run uses ${preview.total} prepared records.`} Batch size: {loaderSize}. This Input setting controls data loading, workflow batches and native API batching. Change it in Input.</p></div> : <div className="field">
             <label>Execution mode<select disabled={collecting || starting} value={collectionMode} onChange={e => { setCollectionMode(e.target.value); setCollection(null); }}>
               <option value="all">Use all available data</option>
               <option value="stream">Run in batches as data arrives</option>
               <option value="prepare">Clean all data first, then run batches</option>
             </select></label>
             {collectionMode !== 'all' && <>
-              <label>Records per batch<input type="number" min="1" max="1000" disabled={collecting} value={chunkSize} onChange={e => setChunkSize(e.target.value)} /></label>
+              <label>Records per batch<NumberInput type="number" min="1" max="1000" disabled={collecting} value={chunkSize} onChange={e => setChunkSize(e.target.value)} /></label>
               <p>{collectionMode === 'prepare' ? 'Clean the complete dataset once, then run it in batches.' : 'Start as each batch fills. The final batch includes any remaining records.'}</p>
             </>}
             {collectionMode === 'prepare' && <label>Whole-dataset preprocessor
@@ -747,7 +751,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
           </div>
           <div className="field">
             <label>Records (n)</label>
-            <input type="number" min="1" value={n} disabled={fullSplit} onChange={(e) => setN(e.target.value)} />
+            <NumberInput type="number" min="1" value={n} disabled={fullSplit} onChange={(e) => setN(e.target.value)} />
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, fontWeight: 'normal' }}>
               <input type="checkbox" checked={fullSplit} onChange={(e) => setFullSplit(e.target.checked)} />
               Entire split ({split ? (sourceInfo?.splits?.[split] ?? '?') : Object.values(sourceInfo?.splits || {}).reduce((a, b) => a + b, 0)} records)
@@ -770,7 +774,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
           </div>
           <div className="field">
             <label htmlFor="batch-seed">Seed</label>
-            <input id="batch-seed" type="number" value={seed} onChange={(e) => setSeed(e.target.value)} />
+            <NumberInput id="batch-seed" type="number" value={seed} onChange={(e) => setSeed(e.target.value)} />
           </div>
           {sourceInfo && (
             <div className="muted small">Sample fields: {sourceInfo.fields.join(', ')}</div>
@@ -830,9 +834,11 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
           <option value="native">SafeChain / native batch API</option>
         </select>
       </div>
+      {loaderSize != null && <div className="field"><label htmlFor="loader-period">Execution grouping</label><select id="loader-period" value={loaderPeriod} onChange={e=>setLoaderPeriod(e.target.value)}><option value="none">In dataset order</option><option value="daily">By day</option><option value="weekly">By week</option><option value="monthly">By month</option></select>
+      {loaderPeriod!=='none' && <><label htmlFor="loader-date-field">Date field</label><input id="loader-date-field" value={dateField} onChange={e=>setDateField(e.target.value)}/><p className="muted small">DataLoader must yield chronologically ordered records with ISO dates. Execution batches stay within a period and respect the DataLoader batch size. Records are not aggregated.</p></>}</div>}
       {apiBatch && loaderSize == null && <div className="field">
         <label htmlFor="api-batch-size">API batch size</label>
-        <input id="api-batch-size" type="number" min="1" max="1024" disabled={collecting || starting} value={apiBatchSize} onChange={e => setApiBatchSize(e.target.value)} />
+        <NumberInput id="api-batch-size" type="number" min="1" max="1024" disabled={collecting || starting} value={apiBatchSize} onChange={e => setApiBatchSize(e.target.value)} />
         <p className="muted small">Maximum model requests per SafeChain batch. Canvas DataLoader inputs use their Input batch size automatically.</p>
         {invalidApiBatch && <p role="alert">Enter a whole number from 1 to 1024.</p>}
       </div>}
@@ -840,7 +846,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
       <div className="field">
         <label htmlFor="batch-workers">Workers (records run at the same time)</label>
         <div className="workers-row">
-          <input id="batch-workers" type="number" min="1" max="64" value={workers} onChange={(e) => setWorkers(Math.max(1, Math.min(64, Number(e.target.value) || 1)))} />
+          <NumberInput id="batch-workers" type="number" min="1" max="64" value={workers} onChange={(e) => setWorkers(Math.max(1, Math.min(64, Number(e.target.value) || 1)))} />
           {preview?.samples > 0 && preview.samples !== workers && (
             <button type="button" className="link small" onClick={() => setWorkers(Math.min(64, preview.samples))}>
               one per sample ({preview.samples})

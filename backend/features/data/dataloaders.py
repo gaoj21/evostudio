@@ -124,7 +124,7 @@ def raw_records(config, sample_limit=None):
             rows = chat_control.worker('dataset', {'code':config['code'],
                 'resource':{**resource, 'root':str(root), 'files':entries},
                 'config':{**(config.get('reader_config') or {}), 'reference_inputs':config.get('reference_inputs') or {}},
-                'batch_size':config.get('read_batch_size', 100), 'sample_limit':sample_limit}, timeout=30 if sample_limit is not None else 120)
+                'batch_size':config.get('read_batch_size', 100), 'sample_limit':sample_limit, 'offset':config.get('offset',0), 'record_limit':config.get('n',0)}, timeout=30 if sample_limit is not None else 120)
         except Exception as exc:
             raise SourceError(f'Python DataLoader failed: {exc}') from exc
         return rows, resource
@@ -209,7 +209,8 @@ def _prepare(config):
     rows = [{key: row.get(key) for key in fields} for row in rows]
     digest = hashlib.sha256(json.dumps({'config': config, 'resource': resource, 'records': rows}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     offset, limit = config.get('offset', 0), config.get('n', 0)
-    rows = rows[offset:offset + limit if limit else None]
+    if config.get('loader') != 'python':
+        rows = rows[offset:offset + limit if limit else None]
     for i, row in enumerate(rows, offset):
         row['_dataloader'] = {'snapshot': digest, 'record_id': f'{digest[:16]}:{i}',
                               'resource_id': resource.get('id'), 'resource_version': resource.get('version'),

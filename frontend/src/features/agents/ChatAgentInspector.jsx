@@ -1,3 +1,4 @@
+import NumberInput from '../../components/NumberInput.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import { memoryId, memoryBinding } from './useCanvasAgents.js';
 import ResourceActions from '../../components/ResourceActions.jsx';
@@ -74,8 +75,8 @@ export default function ChatAgentInspector({ graphId, agent, onBack, onSave, sav
         <div className="field"><label>Name<input value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} /></label></div>
         <div className="field"><label>Instructions<textarea rows={5} value={draft.instructions} onChange={e => setDraft({ ...draft, instructions: e.target.value })} /></label></div>
         <div className="field"><label>Model provider<input placeholder="Platform default" value={draft.provider || ''} onChange={e => setDraft({ ...draft, provider: e.target.value || null })} /></label></div>
-        <div className="field"><label>Maximum model steps<input type="number" min="1" max="100" value={draft.max_steps} onChange={e => setDraft({ ...draft, max_steps: Number(e.target.value) })} /></label></div>
-        <div className="field"><label>Time limit (seconds)<input type="number" min="10" max="1800" value={draft.timeout} onChange={e => setDraft({ ...draft, timeout: Number(e.target.value) })} /></label></div>
+        <div className="field"><label>Maximum model steps<NumberInput type="number" min="1" max="100" value={draft.max_steps} onChange={e => setDraft({ ...draft, max_steps: Number(e.target.value) })} /></label></div>
+        <div className="field"><label>Time limit (seconds)<NumberInput type="number" min="10" max="1800" value={draft.timeout} onChange={e => setDraft({ ...draft, timeout: Number(e.target.value) })} /></label></div>
         <h4>Tools</h4>
         <div className="field"><label>Tool access<select value={draft.tools == null && draft.toolkits == null ? 'all' : 'selected'} onChange={e => setDraft({ ...draft, toolkits: null, tools: e.target.value === 'all' ? null : (draft.tools || toolkits.filter(t => t.available && (draft.toolkits == null || draft.toolkits.includes(t.name))).flatMap(t => (t.tools || []).map(x => x.name))) })}>
           <option value="all">All available tools (default)</option><option value="selected">Selected tools only</option>

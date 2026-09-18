@@ -1,3 +1,4 @@
+import NumberInput from '../../components/NumberInput.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../../api.js';
 import JsonView from '../../components/JsonView.jsx';
@@ -112,7 +113,7 @@ export default function DatasetInput({ config, onChange }) {
         </div>}
         <div className="field">
           <label htmlFor="dataset-limit">Record limit (0 = all)</label>
-          <input id="dataset-limit" type="number" min="0" step="1" value={config.n ?? 0}
+          <NumberInput id="dataset-limit" type="number" min="0" step="1" value={config.n ?? 0}
             onChange={e => onChange({ ...config, n: Number(e.target.value) })} />
         </div>
         <details><summary>Field mapping</summary>

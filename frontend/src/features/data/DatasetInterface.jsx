@@ -1,4 +1,5 @@
 import React, {useEffect, useState} from 'react';
+import NumberInput from '../../components/NumberInput.jsx';
 import {api} from '../../api.js';
 
 export default function DatasetInterface({code, values, onChange, onSchema, disabled, inspectCode=api.inspectDataLoaderCode, title='Dataset', providedText='Upload selection supplies resource automatically. Fill in the inputs detected from your code below.'}) {
@@ -29,7 +30,8 @@ export default function DatasetInterface({code, values, onChange, onSchema, disa
         {field.options ? <select id={id} value={JSON.stringify(value)} disabled={disabled} onChange={e=>update(field.name,JSON.parse(e.target.value))}><option value={JSON.stringify('')}>Select…</option>{field.options.map(v=><option key={JSON.stringify(v)} value={JSON.stringify(v)}>{String(v)}</option>)}</select>
         : field.type==='bool' ? <select id={id} disabled={disabled} value={String(value)} onChange={e=>update(field.name,e.target.value===''?undefined:e.target.value==='true')}><option value="">Select…</option><option value="true">True</option><option value="false">False</option></select>
         : ['list','dict'].includes(field.type) ? <textarea id={id} key={`${field.name}:${code}`} disabled={disabled} defaultValue={value===''?'':JSON.stringify(value,null,2)} onBlur={e=>{try{update(field.name,e.target.value?JSON.parse(e.target.value):undefined);e.target.setCustomValidity('');}catch{e.target.setCustomValidity('Enter valid JSON');e.target.reportValidity();}}}/>
-        : <input id={id} disabled={disabled} required={field.required} type={['int','float'].includes(field.type)?'number':'text'} step={field.type==='int'?1:'any'} value={value} placeholder={field.name==='path'?'Paste a Workspace path':''} onChange={e=>update(field.name,['int','float'].includes(field.type)?(e.target.value===''?undefined:Number(e.target.value)):e.target.value)}/>}
+        : ['int','float'].includes(field.type) ? <NumberInput id={id} disabled={disabled} required={field.required} step={field.type==='int'?1:'any'} value={value} onChange={e=>update(field.name,Number(e.target.value))}/>
+        : <input id={id} disabled={disabled} required={field.required} type="text" step={field.type==='int'?1:'any'} value={value} placeholder={field.name==='path'?'Paste a Workspace path':''} onChange={e=>update(field.name,['int','float'].includes(field.type)?(e.target.value===''?undefined:Number(e.target.value)):e.target.value)}/>}
       </div>;
     })}
   </section>;

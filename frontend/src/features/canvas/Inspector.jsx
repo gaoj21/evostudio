@@ -1,3 +1,4 @@
+import NumberInput from '../../components/NumberInput.jsx';
 import React, { useEffect, useState } from 'react';
 import JsonView from '../../components/JsonView.jsx';
 import { api } from '../../api.js';
@@ -109,7 +110,7 @@ function SourceInspector({ node, onUpdate, onRename, getGraph }) {
               ))}
             </select>
           ) : f.type === 'number' ? (
-            <input type="number" value={cfg[f.name] ?? f.default ?? 0} onChange={(e) => setCfg({ [f.name]: Number(e.target.value) })} />
+            <NumberInput type="number" value={cfg[f.name] ?? f.default ?? 0} onChange={(e) => setCfg({ [f.name]: Number(e.target.value) })} />
           ) : f.type === 'textarea' ? (
             <textarea rows={3} value={cfg[f.name] ?? f.default ?? ''} onChange={(e) => setCfg({ [f.name]: e.target.value })} />
           ) : (
@@ -140,7 +141,7 @@ function SourceInspector({ node, onUpdate, onRename, getGraph }) {
                 />
               )}
               {schedule.mode === 'interval' && (
-                <input
+                <NumberInput
                   type="number"
                   min="5"
                   value={schedule.interval_minutes ?? 60}
@@ -536,8 +537,8 @@ export default function Inspector({ node, runInfo, runMode, onUpdate, onRename, 
           <option value="workflow">Standard workflow Agent</option><option value="deepagents">Deep Agents + LangGraph</option>
         </select></label>
         {d.harness?.engine === 'deepagents' && <>
-          <label>Maximum model steps<input type="number" min="1" max="100" value={d.harness.max_steps || 20} onChange={e => onUpdate(node.id, { harness: { ...d.harness, max_steps: Number(e.target.value) } })} /></label>
-          <label>Time limit (seconds)<input type="number" min="10" max="1800" value={d.harness.timeout || 300} onChange={e => onUpdate(node.id, { harness: { ...d.harness, timeout: Number(e.target.value) } })} /></label>
+          <label>Maximum model steps<NumberInput type="number" min="1" max="100" value={d.harness.max_steps || 20} onChange={e => onUpdate(node.id, { harness: { ...d.harness, max_steps: Number(e.target.value) } })} /></label>
+          <label>Time limit (seconds)<NumberInput type="number" min="10" max="1800" value={d.harness.timeout || 300} onChange={e => onUpdate(node.id, { harness: { ...d.harness, timeout: Number(e.target.value) } })} /></label>
           <p className="muted small">Uses this node’s selected tools, Skills and Memory. Each workflow execution has isolated conversation state.</p>
         </>}
       </fieldset>

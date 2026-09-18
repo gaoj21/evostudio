@@ -505,7 +505,8 @@ def _validate_source_nodes(graph: dict) -> None:
             continue
         if (node.get("source") or {}).get("type") in {"credit_risk", "user_dataset", "dataloader"}:
             if (node.get('source') or {}).get('type') == 'dataloader':
-                input_composition.load_primary(graph, node)
+                from backend.features.data.dataloaders import validate
+                validate(node['source'])
             else:
                 sources.records_from_source_node(node)
 
@@ -787,6 +788,18 @@ async def _batch_payload(graph_id: str, request: Request):
 @app.post("/api/graphs/{graph_id}/run-batch")
 async def run_batch(graph_id: str, request: Request):
     """Batch-run a graph over a file upload or a configured sample."""
+    if request.headers.get('content-type','').startswith('application/json'):
+        body = await request.json()
+        if body.get('source') == 'canvas' and not body.get('collection_id'):
+            graph = graph_store.load_graph(graph_id)
+            if graph is None: raise HTTPException(404, 'Task not found')
+            try:
+                node = source_collection.node_for(graph)
+                if node['source'].get('type') == 'dataloader' and node['source'].get('loader') == 'python':
+                    from backend.features.execution.loader_run import start
+                    return start(graph, node, body)
+            except (sources.SourceError, ValueError) as exc:
+                raise HTTPException(422, str(exc)) from exc
     graph, _records, mapped, source, review_zone, workers, metric, labels = (
         await _batch_payload(graph_id, request))
     batch_id = batch_store.start_batch(graph, mapped, source,
@@ -813,6 +826,16 @@ async def preview_batch(graph_id: str, request: Request):
                 node = source_collection.node_for(graph)
             except sources.SourceError as exc:
                 raise HTTPException(422, str(exc)) from exc
+            if node['source'].get('type') == 'dataloader':
+                config = node['source']
+                from backend.features.data.dataloaders import validate
+                try: validate(config)
+                except sources.SourceError as exc: raise HTTPException(422, str(exc)) from exc
+                plan = _plan_or_422(graph, None, 'batch')
+                return {'total': None, 'deferred': True, 'record_limit':config.get('n', 0),
+                        'source':{'type':'canvas','node':node['name'],'config':config},
+                        'fields':[f['name'] for f in node.get('outputs', [])],
+                        'nodes':plan['nodes'], 'skipped':plan['skipped'], 'node_count':len(plan['nodes'])}
             if node["source"].get("type") not in {"credit_risk", "user_dataset", "dataloader"}:
                 config = node["source"]
                 return {"requires_collection": True, "source": {"node": node["name"],

@@ -21,3 +21,28 @@
 ## 验证
 
 `.venv/bin/python -m pytest tests/api tests/studio -q`（从仓库根目录）
+
+## Incremental DataLoader runs
+
+- `loader_run.py` handles Python canvas DataLoader Run requests immediately and
+  creates one batch ID. No dataset scan occurs when opening the Run dialog.
+- `dataset_stream.py` runs PyTorch in a separate process and hands over one file
+  containing one batch; acknowledgement is delayed until execution finishes.
+  This bounds queued input data. Dataset constructors must themselves be lazy.
+- `stream_batch.py` executes those chunks, preserves the final partial batch,
+  archives full input records under `<batch_id>-inputs/`, and keeps small input
+  summaries in batch state. Full results remain in per-run files. CSV/JSON
+  exports hydrate archived inputs on explicit export.
+- The DataLoader owns `read_batch_size`, `n` and `offset`. `n=0` means all; finite
+  selection is applied while reading rather than after collecting everything.
+- Run owns workers/API mode and optional daily/weekly/monthly execution grouping
+  by an ISO date field. Records must already be ordered. Grouping does not
+  aggregate records or replace DataLoader batch size.
+- Stop terminates the reader and active runs. An unsuccessful chunk halts later
+  reading. An interrupted stream cannot use the old fully-collected resume
+  mechanism: restart with explicit DataLoader offset/count; unread records were
+  never collected. Existing collected-batch resume behavior is preserved.
+- Batch evaluators still receive all saved execution results after completion;
+  their memory usage is separate from incremental input loading. Full exports
+  also materialize their output. Legacy readers and Evolve replay retain their
+  existing preparation path; use the Python DataLoader run path for streaming.

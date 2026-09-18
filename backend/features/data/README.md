@@ -41,5 +41,4 @@ executing imports or constructing the Dataset. Without this declaration, interfa
 schema guarantee; preview counts are not dataset totals. Eager Dataset constructors
 can still allocate large amounts of memory: declare OUTPUT_SCHEMA to avoid running
 them for interface inspection. Inputs requiring shared references must declare the
-schema to avoid loading all references during preview. Formal Run still uses full
-preparation; this change does not make execution streaming.
+schema to avoid loading all references during preview. Python DataLoader batch Run now uses incremental reading through dataset_stream.py; legacy readers and Evolve preparation retain their previous paths.

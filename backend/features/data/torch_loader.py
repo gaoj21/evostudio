@@ -35,7 +35,7 @@ def batches(dataset, batch_size):
                       drop_last=False, num_workers=0, collate_fn=collate_records)
 
 
-def execute_python(payload):
+def execute_python(payload, emit=None):
     """Called in a killable worker, never exec user code in the API process."""
     from backend.features.data.dataset_interface import arguments
     values = arguments(payload['code'], payload.get('config') or {})
@@ -52,11 +52,29 @@ def execute_python(payload):
         if 'config' in signature.parameters: provided['config'] = values
         signature.bind(**provided)
         dataset = factory(**provided)
+        if emit is not None:
+            offset, limit = payload.get('offset', 0), payload.get('record_limit', 0)
+            iterator = (row for chunk in batches(dataset, 1 if offset or limit else payload['batch_size']) for row in chunk)
+            selected = islice(iterator, offset, offset + limit if limit else None)
+            buffer, count = [], 0
+            for row in selected:
+                json.dumps(row, allow_nan=False)
+                if not isinstance(row, dict): raise ValueError('Dataset items must be objects.')
+                buffer.append(row)
+                if len(buffer) == payload['batch_size']:
+                    emit(buffer); count += len(buffer); buffer = []
+            if buffer: emit(buffer); count += len(buffer)
+            return {'records':count}
         if payload.get('sample_limit') is not None:
             # Batch size one prevents fetching a full configured batch for preview.
             records = [chunk[0] for chunk in islice(batches(dataset, 1), payload['sample_limit'])]
         else:
-            records = [row for chunk in batches(dataset, payload['batch_size']) for row in chunk]
+            offset, limit = payload.get('offset', 0), payload.get('record_limit', 0)
+            # Select before materialization, without reading a full batch past the limit.
+            if offset or limit:
+                records = [chunk[0] for chunk in islice(batches(dataset, 1), offset, offset + limit if limit else None)]
+            else:
+                records = [row for chunk in batches(dataset, payload['batch_size']) for row in chunk]
     # Reject tensors / objects rather than silently stringify their values.
     json.dumps(records, allow_nan=False)
     return records

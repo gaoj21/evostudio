@@ -1,44 +1,38 @@
 import React, {useEffect, useRef, useState} from 'react';
 
-export const DATASET_EXAMPLE = `import json
-from pathlib import Path
-from torch.utils.data import Dataset
+export const DATASET_EXAMPLE = `from pathlib import Path
+from torch.utils.data import IterableDataset
+from backend.features.data.json_stream import read_json_records
 
 
-class JsonRecords(Dataset):
-    def __init__(self, resource, config):
+class JsonRecords(IterableDataset):
+    def __init__(self, resource, path, split):
         root = Path(resource["root"])
-        selected = Path(config.get("path") or root)
-        if not selected.is_absolute():
-            selected = root / selected
-        split = config.get("split") or ""
-        if split and selected.is_dir() and (selected / split).is_dir():
-            selected = selected / split
-            split = ""  # Already selected by directory.
-        if not selected.exists():
-            raise FileNotFoundError(str(selected))
-        paths = [selected] if selected.is_file() else sorted(selected.rglob("*.json"))
-        self.records = []
+        self.path = Path(path) if path else root
+        if not self.path.is_absolute():
+            self.path = root / self.path
+        self.split = split
+        if split and self.path.is_dir() and (self.path / split).is_dir():
+            self.path = self.path / split
+            self.split = ""
+        if not self.path.exists():
+            raise FileNotFoundError(str(self.path))
+
+    def __iter__(self):
+        paths = [self.path] if self.path.is_file() else self.path.rglob("*.json")
         for path in paths:
-            value = json.loads(path.read_text(encoding="utf-8-sig"))
-            rows = value if isinstance(value, list) else [value]
-            if split:
-                if any("split" not in row for row in rows):
-                    raise ValueError("Split needs a matching subfolder or a split field")
-                rows = [row for row in rows if row["split"] == split]
-            self.records.extend(rows)
-
-    def __len__(self):
-        return len(self.records)
-
-    def __getitem__(self, index):
-        return self.records[index]
+            for row in read_json_records(path):
+                if self.split:
+                    if "split" not in row:
+                        raise ValueError("Split needs a matching subfolder or a split field")
+                    if row["split"] != self.split:
+                        continue
+                yield row
 
 
 def build_dataset(resource, path: str = "", split: str = ""):
-    # Named, typed parameters become editable interface fields.
-    # resource is provided by the selected upload automatically.
-    return JsonRecords(resource, {"path": path, "split": split})
+    # Keep construction lazy. Studio controls sample count and batch size.
+    return JsonRecords(resource, path, split)
 `;
 
 export default function PythonDatasetEditor({code, onChange, disabled, kind='Dataset', example=DATASET_EXAMPLE, onDirtyChange}) {

@@ -18,7 +18,7 @@ it('loads a real Dataset example and rejects non-Python files',async()=>{
   await userEvent.click(screen.getByText('Load example'));
   expect(onChange).not.toHaveBeenCalled();
   await userEvent.click(screen.getByText('Confirm code'));
-  expect(onChange).toHaveBeenCalledWith(expect.stringContaining('from torch.utils.data import Dataset'));
+  expect(onChange).toHaveBeenCalledWith(expect.stringContaining('from torch.utils.data import IterableDataset'));
   fireEvent.drop(screen.getByLabelText('Python Dataset code'),{dataTransfer:{files:[new File(['bad'],'reader.json')]}});
   expect(await screen.findByRole('alert')).toHaveTextContent('Choose a Python');
 });
