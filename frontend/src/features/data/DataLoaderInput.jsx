@@ -61,13 +61,13 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
     } catch(e) { setError(e.body?.detail || e.message); }
     finally { setBusy(false); }
   }
-  async function inspect(mode='interface') {
+  async function sampleOutputs() {
     const token = ++version.current;
     setBusy(true); setError('');
     try {
-      const result = await api.previewDataLoader({...config,preview_mode:mode,...(getGraph ? {_graph:getGraph(),_node:nodeId} : {})});
+      const result = await api.previewDataLoader({...config,preview_mode:'sample',...(getGraph ? {_graph:getGraph(),_node:nodeId} : {})});
       if (token !== version.current) return;
-      if (!Array.isArray(result.fields) || !result.fields.length) throw new Error('No output fields were found. Add OUTPUT_SCHEMA with your record fields, or sample non-empty data.');
+      if (!Array.isArray(result.fields) || !result.fields.length) throw new Error('No output fields were found. Check that your Dataset returns non-empty records for the selected inputs.');
       setPreview(result); onChange({...config, preview_snapshot: result.snapshot, input_schema:inputSchema, output_schema:result.fields, output_schema_mode:result.preview_mode}, result.fields);
     } catch(e) { if (token === version.current) setError(e.body?.detail || e.message); }
     finally { setBusy(false); }
@@ -102,13 +102,10 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
       {['offset'].map(key=><div className="field" key={key}><label htmlFor={`loader-${key}`}>{key==='offset'?'Skip records':'Record limit (0 = all)'}</label><NumberInput id={`loader-${key}`} type="number" min={0} value={config[key] ?? 0} onChange={e=>update({[key]:Number(e.target.value)})}/></div>)}
       {field('group_by','Sequential group field','Optional')}{field('order_by','Order within group','Optional')}
     </details>
-    <button type="button" className="primary" disabled={busy || codeDirty || (!legacy && (!inputSchema || inputSchema.output_schema_available === false))} onClick={()=>inspect()}>{busy ? 'Inspecting…' : 'Apply OUTPUT_SCHEMA (no execution)'}</button>
-    {!legacy && <button disabled={busy || codeDirty || !inputSchema || !config.resource_id} onClick={()=>inspect('sample')}>Sample 5 records (detect outputs)</button>}
-    <p className="muted small">Both actions apply output fields to the canvas. OUTPUT_SCHEMA reads an explicit declaration; sampling detects fields from actual records and runs your Dataset with a 30-second limit.</p>
-    {!legacy && inputSchema?.output_schema_available === false && <p role="status" className="muted small">
-      {inputSchema.output_schema_error ? `OUTPUT_SCHEMA is invalid: ${inputSchema.output_schema_error}` : 'This code has no OUTPUT_SCHEMA declaration.'}
-      {' '}Use “Sample 5 records” to detect and apply outputs. You do not need both actions.
-    </p>}
+    {!legacy && <>
+      <button type="button" className="primary" disabled={busy || codeDirty || !inputSchema || !config.resource_id} onClick={sampleOutputs}>{busy ? 'Sampling…' : 'Sample 1 record (detect outputs)'}</button>
+      <p className="muted small">Runs your Dataset to sample 1 record, then applies their field names and types to the canvas output ports. Execution has a 30-second limit.</p>
+    </>}
     <div ref={resultRef} aria-live="polite">
     {error && <p role="alert">{String(error)}</p>}
     {preview && <><p role="status">{preview.fields.length} output field(s) applied to this node. {' '}{preview.preview_mode==='declared' ? 'Output schema read from code. Dataset was not loaded; runtime values have not been verified.' : preview.preview_mode==='sample' ? `Interface inferred from up to ${preview.sample_limit} sampled records. This is not a full dataset scan or record count.` : `${preview.raw_records} raw → ${preview.output_records} output records`}</p>{preview.preview?.length > 0 && <JsonView value={preview.preview} />}</>}

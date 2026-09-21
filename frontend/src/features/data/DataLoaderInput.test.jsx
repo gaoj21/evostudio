@@ -7,14 +7,14 @@ import {api} from '../../api.js';
 vi.mock('../../api.js',()=>({api:{listDataResources:vi.fn(),listCustomTools:vi.fn(),uploadDataResource:vi.fn(),previewDataLoader:vi.fn(),deleteDataResource:vi.fn(),attachDataResource:vi.fn(),listSourceTypes:vi.fn(),inspectDataLoaderCode:vi.fn()}}));
 beforeEach(()=>{vi.clearAllMocks();api.inspectDataLoaderCode.mockResolvedValue({inputs:[],warnings:[],output_schema_available:true});api.listDataResources.mockResolvedValue({resources:[{id:'data',name:'Folder',files:[{path:'a.json'}]}]});api.listCustomTools.mockResolvedValue({tools:[]});api.listSourceTypes.mockResolvedValue({source_types:[{type:'http_api'},{type:'user_dataset',local:true},{type:'project_feed',local:true,project:'demo'}]});});
 describe('DataLoader input',()=>{
- it('reads declared fields and applies them to the canvas',async()=>{
+ it('samples records and applies their fields to the canvas',async()=>{
   const onChange=vi.fn();const fields=[{name:'amount',type:'int',required:false}];
-  api.previewDataLoader.mockResolvedValue({fields,preview_mode:'declared',sample_count:0,preview:[],snapshot:null});
+  api.previewDataLoader.mockResolvedValue({fields,preview_mode:'sample',sample_limit:1,sample_count:0,preview:[],snapshot:null});
   render(<DataLoaderInput config={{type:'dataloader',loader:'python',code:'def build_dataset(resource): pass',resource_id:'data',n:0}} onChange={onChange}/>);
-  await waitFor(()=>expect(screen.getByText('Apply OUTPUT_SCHEMA (no execution)')).toBeEnabled());
-  await userEvent.click(screen.getByText('Apply OUTPUT_SCHEMA (no execution)'));
+  await waitFor(()=>expect(screen.getByText('Sample 1 record (detect outputs)')).toBeEnabled());
+  await userEvent.click(screen.getByText('Sample 1 record (detect outputs)'));
   expect(await screen.findByText(/1 output field\(s\) applied to this node/)).toBeTruthy();
-  expect(onChange).toHaveBeenCalledWith(expect.objectContaining({preview_snapshot:null,output_schema_mode:'declared'}),fields);
+  expect(onChange).toHaveBeenCalledWith(expect.objectContaining({preview_snapshot:null,output_schema_mode:'sample'}),fields);
  });
  it('shows only the PyTorch editor with a directory upload picker',async()=>{
   const {container}=render(<DataLoaderInput config={{loader:'python'}} onChange={vi.fn()}/>);
@@ -63,9 +63,9 @@ describe('DataLoader input settings',()=>{
 
 it('keeps the editor open and shows applied outputs after the parent updates', async()=>{
  const fields=[{name:'amount',type:'float',required:true,nullable:false}];
- api.previewDataLoader.mockResolvedValue({fields,preview:[],preview_mode:'declared',sample_count:0,snapshot:null});
+ api.previewDataLoader.mockResolvedValue({fields,preview:[],preview_mode:'sample',sample_limit:1,sample_count:0,snapshot:null});
  function StatefulInput() {
-   const [config,setConfig]=React.useState({type:'dataloader',loader:'python',code:'OUTPUT_SCHEMA = []\ndef build_dataset(resource): pass',read_batch_size:4});
+   const [config,setConfig]=React.useState({type:'dataloader',loader:'python',code:'def build_dataset(resource): pass',resource_id:'data',read_batch_size:4});
    const [outputs,setOutputs]=React.useState([]);
    return <><DataLoaderInput config={config} onChange={(next,fields)=>{setConfig(next);if(fields)setOutputs(fields);}}/>
      <output data-testid="canvas-fields">{outputs.map(f=>f.name).join(',')}</output></>;
@@ -73,8 +73,8 @@ it('keeps the editor open and shows applied outputs after the parent updates', a
  const {container}=render(<StatefulInput/>);
  const codeDisclosure=screen.getByText('Dataset code').closest('details');
  expect(codeDisclosure.open).toBe(true);
- const button=screen.getByRole('button',{name:'Apply OUTPUT_SCHEMA (no execution)'});
- // Static inspection does not require a resource.
+ const button=screen.getByRole('button',{name:'Sample 1 record (detect outputs)'});
+ // Sampling applies the detected fields after the parent saves the config.
  await waitFor(()=>expect(button).toBeEnabled());
  await userEvent.click(button);
  expect(await screen.findByText(/1 output field\(s\) applied/)).toBeVisible();
@@ -89,26 +89,26 @@ it('keeps the editor open and shows applied outputs after the parent updates', a
 });
 
 it('shows a persistent error when the server returns no fields', async()=>{
- api.previewDataLoader.mockResolvedValue({fields:[],preview:[],preview_mode:'declared'});
+ api.previewDataLoader.mockResolvedValue({fields:[],preview:[],preview_mode:'sample',sample_limit:1});
  const onChange=vi.fn();
- render(<DataLoaderInput config={{loader:'python',code:'def build_dataset(resource): pass'}} onChange={onChange}/>);
- await waitFor(()=>expect(screen.getByRole('button',{name:'Apply OUTPUT_SCHEMA (no execution)'})).toBeEnabled());
- await userEvent.click(screen.getByRole('button',{name:'Apply OUTPUT_SCHEMA (no execution)'}));
+ render(<DataLoaderInput config={{loader:'python',resource_id:'data',code:'def build_dataset(resource): pass'}} onChange={onChange}/>);
+ await waitFor(()=>expect(screen.getByRole('button',{name:'Sample 1 record (detect outputs)'})).toBeEnabled());
+ await userEvent.click(screen.getByRole('button',{name:'Sample 1 record (detect outputs)'}));
  expect(await screen.findByRole('alert')).toHaveTextContent('No output fields were found');
  expect(onChange).not.toHaveBeenCalled();
- expect(screen.getByRole('button',{name:'Apply OUTPUT_SCHEMA (no execution)'})).toBeEnabled();
+ expect(screen.getByRole('button',{name:'Sample 1 record (detect outputs)'})).toBeEnabled();
 });
 
 
-it('explains missing declarations and lets sampling apply outputs directly', async()=>{
+it('offers sampling without requiring an output declaration or a static output action', async()=>{
  api.inspectDataLoaderCode.mockResolvedValue({inputs:[],warnings:[],output_schema_available:false});
  const fields=[{name:'text',type:'str',nullable:false}];
- api.previewDataLoader.mockResolvedValue({fields,preview:[{text:'hello'}],preview_mode:'sample',sample_count:1,sample_limit:5});
+ api.previewDataLoader.mockResolvedValue({fields,preview:[{text:'hello'}],preview_mode:'sample',sample_count:1,sample_limit:1});
  const onChange=vi.fn();
  render(<DataLoaderInput config={{loader:'python',resource_id:'data',code:'def build_dataset(resource): pass'}} onChange={onChange}/>);
- expect(await screen.findByText(/This code has no OUTPUT_SCHEMA declaration/)).toHaveTextContent('You do not need both actions');
- expect(screen.getByRole('button',{name:'Apply OUTPUT_SCHEMA (no execution)'})).toBeDisabled();
- await userEvent.click(screen.getByRole('button',{name:'Sample 5 records (detect outputs)'}));
+ await waitFor(()=>expect(screen.getByRole('button',{name:'Sample 1 record (detect outputs)'})).toBeEnabled());
+ expect(screen.queryByRole('button',{name:/Read output interface|Apply OUTPUT_SCHEMA|no execution/i})).not.toBeInTheDocument();
+ await userEvent.click(screen.getByRole('button',{name:'Sample 1 record (detect outputs)'}));
  expect(api.previewDataLoader).toHaveBeenCalledWith(expect.objectContaining({preview_mode:'sample'}));
  expect(onChange).toHaveBeenCalledWith(expect.objectContaining({output_schema:fields,output_schema_mode:'sample'}),fields);
  expect(screen.getByRole('cell',{name:'text'})).toBeVisible();

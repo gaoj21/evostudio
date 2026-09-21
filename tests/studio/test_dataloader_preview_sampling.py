@@ -28,13 +28,13 @@ def build_dataset(resource):
 
 
 @pytest.mark.parametrize('base', ['Dataset','IterableDataset'])
-def test_preview_reads_only_five_records_even_with_large_batch(preview_client,base):
+def test_preview_reads_only_one_record_even_with_large_batch(preview_client,base):
     client,rid=preview_client
     code=f'''from torch.utils.data import {base}
 class Rows({base}):
     def __len__(self): return 1000000000
     def __getitem__(self, i):
-        if i >= 5: raise RuntimeError("Read beyond preview budget")
+        if i >= 1: raise RuntimeError("Read beyond preview budget")
         return {{"amount":i}}
     def __iter__(self):
         for i in range(1000000000): yield self[i]
@@ -43,7 +43,7 @@ def build_dataset(resource): return Rows()
     result=client.post('/api/dataloaders/preview',json={'loader':'python','resource_id':rid,'code':code,'read_batch_size':1024,'preview_mode':'sample'})
     assert result.status_code==200,result.text
     value=result.json()
-    assert value['sample_count']==5 and value['snapshot'] is None
+    assert value['sample_count']==1 and value['sample_limit']==1 and value['snapshot'] is None
     assert value['fields'][0]['name']=='amount'
     assert value['fields'][0]['type']=='int'
 
