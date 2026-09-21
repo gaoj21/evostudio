@@ -33,7 +33,7 @@ export default function DatasetInput({ config, onChange }) {
   }, [config.dataset_id]);
 
   const emit = (next, fields) => onChange(next, !next.dataset_id ? [] : next.input_mode === 'reference'
-    ? [{name: next.reference_field || 'obligor_list', type: 'list', description: 'Shared reference records', required: false}]
+    ? [{name: next.reference_field || 'reference', type: 'list', description: 'Shared reference records', required: false}]
     : fields.map(field => { const original = Object.entries(next.field_mapping || {}).find(([,target]) => target === field)?.[0] || field; return { name: field, type: next.column_types?.[original] || next.field_types?.[original] || selected?.field_types?.[original] || 'str', description: 'Dataset field', required: false }; }));
   const update = (item, mapping) => {
     const mapped = mapping || Object.fromEntries((item?.fields || []).map(f => [f, f]));
@@ -92,9 +92,9 @@ export default function DatasetInput({ config, onChange }) {
       <div className="input-step">
         <label htmlFor="dataset-input-mode">2. How to use it</label>
         <select id="dataset-input-mode" aria-label="Input role" value={config.input_mode || 'records'} disabled={busy}
-          onChange={e => emit({...config, input_mode:e.target.value, reference_field:config.reference_field || 'obligor_list'}, Object.values(mapping))}>
-          <option value="records">Process each record · news, transactions</option>
-          <option value="reference">Share the whole list · obligors, reference data</option>
+          onChange={e => emit({...config, input_mode:e.target.value, reference_field:config.reference_field || 'reference'}, Object.values(mapping))}>
+          <option value="records">Process each record · one run per record</option>
+          <option value="reference">Share the whole list · lookup or reference data</option>
         </select>
         <p className="input-hint">{config.input_mode === 'reference'
           ? 'Every run receives this complete list.'
@@ -107,7 +107,7 @@ export default function DatasetInput({ config, onChange }) {
       <details className="input-disclosure"><summary>Advanced settings{config.n > 0 ? ` · first ${config.n} records` : ''}</summary>
         {config.input_mode === 'reference' && <div className="field">
           <label htmlFor="reference-output">Reference output name</label>
-          <input id="reference-output" value={config.reference_field ?? 'obligor_list'}
+          <input id="reference-output" value={config.reference_field ?? 'reference'}
             onChange={e => emit({...config, reference_field:e.target.value}, Object.values(mapping))} />
           <p className="muted small">Use this name when connecting the list to an agent.</p>
         </div>}

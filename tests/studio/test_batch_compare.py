@@ -158,10 +158,11 @@ class TestLabels:
 
     def test_it_falls_back_to_the_first_field(self):
         result = batch_compare.compare(
-            batch("b1", [("x", 1.0)], field="ticker"),
-            batch("b2", [("x", 0.0)], field="ticker"),
+            batch("b1", [("7", 1.0)], field="ticker"),
+            batch("b2", [("7", 0.0)], field="ticker"),
         )
-        assert result["changes"][0]["label"] == "ticker=x"
+        # A bare number means nothing without its field name.
+        assert result["changes"][0]["label"] == "ticker=7"
 
     def test_a_record_with_no_inputs_is_still_nameable(self):
         before = {"metric": "m", "items": [

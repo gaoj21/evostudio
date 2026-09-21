@@ -60,7 +60,9 @@ def test_json_types_and_explicit_csv_conversion_are_input_local():
 
 def test_generic_saved_results_choose_generic_metric_and_keep_inputs():
     assert saved.default_metric({'type':'saved_run','origin':{}}) == 'exact_match'
-    assert saved.default_metric({'origin':{'type':'credit_risk'}}) == 'credit_risk'
+    # No project's source type picks a special metric: the platform default
+    # holds whatever produced the saved results.
+    assert saved.default_metric({'origin':{'type':'credit_risk'}}) == 'exact_match'
     captured = []
     class Model:
         def generate(self, prompt):

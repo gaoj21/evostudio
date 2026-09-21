@@ -21,18 +21,10 @@ import re
 import statistics
 
 from backend.api import custom_tools
-_LEVEL_SCORE_POS = {"low": 0.0, "medium": 0.5, "high": 1.0, "critical": 1.0}
-_LEVEL_SCORE_NEG = {"low": 1.0, "medium": 0.8, "high": 0.2, "critical": 0.0}
-
 METRICS = {
     "exact_match": "1.0 when the normalized prediction equals the label string",
     "contains": "1.0 when the label string appears in the prediction (case-insensitive)",
     "numeric": "1.0 when the first number in the prediction equals the label number",
-    "credit_risk": (
-        "Reads risk_level from the prediction. Positive samples (label.type="
-        "'positive') score 1.0/0.5/0.0 for high+/medium/low; negative samples "
-        "score 1.0/0.8/0.2/0.0 for low/medium/high/critical."
-    ),
 }
 
 
@@ -62,16 +54,6 @@ def _score(metric: str, prediction, label) -> float:
             return float(match is not None and abs(float(match.group()) - float(label)) < 1e-6)
         except (TypeError, ValueError):
             return 0.0
-    if metric == "credit_risk":
-        level_match = re.search(r"risk_level[\"'\s:]+(low|medium|high|critical)", pred, re.I)
-        if not level_match:
-            level_match = re.search(r"\b(low|medium|high|critical)\b", pred, re.I)
-        if not level_match:
-            return 0.0
-        level = level_match.group(1).lower()
-        label_type = (label or {}).get("type") if isinstance(label, dict) else str(label)
-        table = _LEVEL_SCORE_POS if label_type == "positive" else _LEVEL_SCORE_NEG
-        return table[level]
     raise ValueError(f"Unknown metric: {metric}")
 
 

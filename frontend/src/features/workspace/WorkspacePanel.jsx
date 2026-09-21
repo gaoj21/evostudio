@@ -225,6 +225,9 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
   const [draft, setDraft] = useState('');
   const [newFileOpen, setNewFileOpen] = useState(false);
   const [newPath, setNewPath] = useState('files/notes.txt');
+  const [newFileError, setNewFileError] = useState(null);
+  // The path of a file just created, to open in the editor once it loads.
+  const editAfterLoad = useRef(null);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderPath, setNewFolderPath] = useState('files/new-folder');
   const uploadRef = useRef(null);
@@ -242,6 +245,7 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
     setSelected(null);
     setFile(null);
     setEditing(false);
+    setError(null);
     load();
     // refresh the tree while docked so new run artifacts show up
     const t = setInterval(load, 5000);
@@ -251,11 +255,16 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
 
   useEffect(() => {
     if (!selected || !graphId) return;
+    const edit = editAfterLoad.current === selected;
+    editAfterLoad.current = null;
     setFile(null);
     setEditing(false);
     api
       .getWorkspaceFile(graphId, selected)
-      .then(setFile)
+      .then((loaded) => {
+        setFile(loaded);
+        if (edit && !loaded?.readonly) { setDraft(loaded?.content ?? ''); setEditing(true); }
+      })
       .catch((err) => setFile({ content: `Error: ${err?.body?.detail || err.message}` }));
   }, [selected, graphId]);
 
@@ -263,6 +272,7 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
 
   const removeFile = async (path, { recursive = false } = {}) => {
     if (!window.confirm(`Delete ${path}?`)) return;
+    setError(null);
     try {
       await api.deleteWorkspaceFile(graphId, path, recursive);
     } catch (err) {
@@ -332,6 +342,7 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
     const f = e.target.files?.[0];
     e.target.value = '';
     if (!f) return;
+    setError(null);
     try {
       await api.uploadWorkspaceFile(graphId, f);
       await load();
@@ -340,20 +351,36 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
     }
   };
 
+  const pathTaken = (path) => files.some((f) => f.path === path);
+  const openNewFile = () => {
+    // Suggest a path that is free: the default must never be an existing file.
+    let path = 'files/notes.txt';
+    for (let i = 2; pathTaken(path); i += 1) path = `files/notes-${i}.txt`;
+    setNewPath(path);
+    setNewFileError(null);
+    setNewFileOpen(true);
+  };
+
   const createFile = async () => {
+    const path = newPath.trim().replace(/^\/+/, '');
+    setNewFileError(null);
+    setError(null);
+    if (!path) { setNewFileError('Enter a path.'); return; }
+    // Creating writes an empty file: over an existing one it would erase it.
+    if (pathTaken(path)) { setNewFileError(`${path} already exists. Open it from the tree, or choose another path.`); return; }
     try {
-      await api.saveWorkspaceFile(graphId, newPath, '');
+      await api.saveWorkspaceFile(graphId, path, '');
       setNewFileOpen(false);
       await load();
-      setSelected(newPath);
-      setEditing(true);
-      setDraft('');
+      if (selected === path) { setFile({ path, content: '' }); setDraft(''); setEditing(true); }
+      else { editAfterLoad.current = path; setSelected(path); }
     } catch (err) {
-      setError(err?.body?.detail || err.message);
+      setNewFileError(err?.body?.detail || err.message);
     }
   };
 
   const createFolder = async () => {
+    setError(null);
     try {
       await api.mkdirWorkspace(graphId, newFolderPath);
       setNewFolderOpen(false);
@@ -364,6 +391,7 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
   };
 
   const saveEdit = async () => {
+    setError(null);
     try {
       await api.saveWorkspaceFile(graphId, selected, draft);
       setEditing(false);
@@ -394,7 +422,7 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
         <button onClick={onClose}>✕</button>
       </div>
       <div className="ws-toolbar">
-        <button type="button" onClick={() => setNewFileOpen(true)} disabled={!graphId}>
+        <button type="button" onClick={openNewFile} disabled={!graphId}>
           + New file
         </button>
         <button type="button" onClick={() => setNewFolderOpen(true)} disabled={!graphId}>
@@ -468,8 +496,9 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
             <h3>New workspace file</h3>
             <div className="field">
               <label>Path (relative to workspace)</label>
-              <input value={newPath} onChange={(e) => setNewPath(e.target.value)} placeholder="files/notes.txt" />
+              <input value={newPath} onChange={(e) => { setNewPath(e.target.value); setNewFileError(null); }} placeholder="files/notes.txt" />
             </div>
+            {newFileError && <div className="muted small batch-error" role="alert">{String(newFileError)}</div>}
             <div className="modal-actions">
               <button type="button" onClick={() => setNewFileOpen(false)}>Cancel</button>
               <button type="button" className="primary" onClick={createFile}>Create</button>

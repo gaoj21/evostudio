@@ -64,7 +64,7 @@ def settle(client, id):
 def test_collect_preview_run_reuses_snapshot_and_detects_config_change(client, monkeypatch):
     from backend.api import app, source_collection as sc, graphs
     calls = []
-    records = [{'company': 'Test', 'news_batch': f'day{i}', 'sample_id': 'Test', 'as_of': f'2026-01-0{i}'} for i in (1,2)]
+    records = [{'company': 'Test', 'news_batch': f'day{i}', 'as_of': f'2026-01-0{i}'} for i in (1,2)]
     def worker(*a, **kw):
         calls.append(a)
         return records
@@ -82,7 +82,9 @@ def test_collect_preview_run_reuses_snapshot_and_detects_config_change(client, m
     monkeypatch.setattr(app.batch_store, 'start_batch', lambda g,r,s,**kw: captured.append(r) or 'batch-test')
     assert client.post(root+'run-batch', json=body).status_code == 200
     assert len(calls) == 1
-    assert captured[0] == records
+    # GDELT declares no trajectory, so only the node's wired outputs reach
+    # the batch; nothing domain-specific (sample_id) is carried along.
+    assert captured[0] == [{k: r[k] for k in ('company', 'news_batch')} for r in records]
     graph = graphs.load_graph('collect-test')
     graph['tasks'][0]['source']['query'] = 'Changed'
     graphs.save_graph('collect-test',graph)

@@ -1,251 +1,16 @@
 """Batch input sources for EvoAgentX Studio.
 
-Two sources turn records into workflow inputs:
-- Uploaded JSONL (one JSON object per line) / CSV (column names -> input names).
-- The credit_risk feed simulator, sampling projects/credit_risk/dataset/contemporary/
-  samples.jsonl and projecting each sample onto a canonical field set.
+Records become workflow inputs from:
+- uploaded JSON/JSONL/CSV files (column names -> input names);
+- canvas Input nodes: DataLoaders, user datasets, API connectors, custom
+  toolkit sources, and Input types offered by project plugins.
 
 Mapping rule (shared): a record fills a workflow input when the names match;
 unmatched required inputs are a hard error, unmatched record fields ignored.
 """
 
-import csv
-import io
-import json
-import random
-from pathlib import Path
-
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-
-CREDIT_RISK_SAMPLES = _REPO_ROOT / "projects" / "credit_risk" / "dataset" / "contemporary" / "samples.jsonl"
-
-CREDIT_RISK_FIELDS = [
-    "sample_id", "company", "symbol", "cik",
-    "window_start", "window_end", "as_of", "news_batch", "filing_batch",
-    "sample_json", "flags",
-]
-
-# A sample is one obligor over one window, and its window holds tens of dated
-# news items (median 78, up to 773). Fed as one blob they are all seen at once:
-# July's signal and December's arrive together, nothing accumulates, and the
-# pipeline's own "is this a duplicate of something we already alerted on"
-# reasoning has nothing to compare against.
-#
-# Stepping through the window instead turns one sample into a sequence of
-# runs, each seeing only what had arrived by its own `as_of` date. Memory then
-# has a timeline to be about.
-STEP_CHOICES = ("none", "daily", "weekly", "monthly")
-_STEP_DAYS = {"daily": 1, "weekly": 7, "monthly": 30}
-
-_NEWS_MAX_ITEMS = 20
-_NEWS_SNIPPET_CHARS = 300
-_NEWS_TOTAL_CHARS = 8000
-_FILING_MAX_ITEMS = 5
-_FILING_SNIPPET_CHARS = 1500
-_FILING_TOTAL_CHARS = 6000
-
-
 class SourceError(Exception):
     """User-facing source/mapping error (returned as HTTP 422)."""
-
-
-# ---------------------------------------------------------------------------
-# credit_risk feed simulator
-# ---------------------------------------------------------------------------
-
-def _news_batch(sample: dict) -> str:
-    """The window's news, most recent first.
-
-    Taking the first N of a date-sorted list handed a six-month window's worth
-    of monitoring the first three days of it and threw away everything since —
-    on a pipeline whose job is to notice distress building towards the end.
-    """
-    lines = []
-    total = 0
-    ordered = sorted(sample.get("news") or [], key=_item_date, reverse=True)
-    for item in ordered[:_NEWS_MAX_ITEMS]:
-        snippet = (item.get("text") or "").replace("\n", " ")[:_NEWS_SNIPPET_CHARS]
-        line = f"[{item.get('date', '')}] {item.get('title', '')} — {snippet}"
-        if total + len(line) > _NEWS_TOTAL_CHARS:
-            break
-        lines.append(line)
-        total += len(line)
-    return "\n".join(lines)
-
-
-def _filing_batch(sample: dict) -> str:
-    blocks = []
-    total = 0
-    ordered = sorted(sample.get("filings") or [],
-                     key=lambda f: str(f.get("filing_date") or ""), reverse=True)
-    for filing in ordered[:_FILING_MAX_ITEMS]:
-        items = ", ".join(filing.get("items") or [])
-        snippet = (filing.get("text") or "").replace("\n", " ")[:_FILING_SNIPPET_CHARS]
-        block = (
-            f"[{filing.get('filing_date', '')}] Form {filing.get('form', '')}"
-            f" (items: {items})\n{snippet}"
-        )
-        if total + len(block) > _FILING_TOTAL_CHARS:
-            break
-        blocks.append(block)
-        total += len(block)
-    return "\n\n".join(blocks) or "(no 8-K filings in window)"
-
-
-def _sample_to_record(sample: dict) -> dict:
-    company = sample.get("company") or {}
-    window = sample.get("window") or {}
-    return {
-        "sample_id": sample.get("sample_id", ""),
-        "company": company.get("query_name") or company.get("name", ""),
-        "symbol": company.get("symbol", ""),
-        "cik": company.get("cik", ""),
-        "window_start": window.get("start", ""),
-        "window_end": window.get("end", ""),
-        "as_of": window.get("end", ""),
-        "news_batch": _news_batch(sample),
-        "filing_batch": _filing_batch(sample),
-        "sample_json": json.dumps(sample, ensure_ascii=False),
-        # The dataset's own verdict on its news stream (R06 news_quality):
-        # "generic_name,noisy" on a sample whose headlines are not about the
-        # company. Travels with the record so a batch can be read with and
-        # without such samples; the pipeline itself never looks at it.
-        "flags": ",".join((sample.get("news_quality") or {}).get("flags") or []),
-    }
-
-
-def _item_date(item: dict) -> str:
-    return str(item.get("date") or item.get("seendate") or "")[:10]
-
-
-def step_sample(sample: dict, step: str) -> list[dict]:
-    """One sample as a sequence of records, one per step of its window.
-
-    Each record carries the news and filings dated up to and including its own
-    `as_of`, so a later run sees everything an earlier one did plus what has
-    since arrived — which is how the pipeline would meet them in real life.
-
-    Steps with nothing new are skipped: a run that sees exactly what the last
-    one saw has nothing to add and costs a round of LLM calls.
-    """
-    from datetime import date, timedelta
-
-    days = _STEP_DAYS.get(step)
-    window = sample.get("window") or {}
-    start, end = str(window.get("start") or "")[:10], str(window.get("end") or "")[:10]
-    if not days or not (start and end):
-        return [_sample_to_record(sample)]
-
-    try:
-        cursor, last = date.fromisoformat(start), date.fromisoformat(end)
-    except ValueError:
-        return [_sample_to_record(sample)]
-
-    news = sorted(sample.get("news") or [], key=_item_date)
-    filings = sorted(sample.get("filings") or [], key=lambda f: str(f.get("filing_date") or ""))
-
-    # Counted back from the window's close, so the last observation is always
-    # the window's end however the step divides into it — rather than landing
-    # a day short and leaving the window's own end unrepresented.
-    marks = []
-    while cursor <= last:
-        marks.append(last.isoformat())
-        last -= timedelta(days=days)
-    marks.reverse()
-
-    records, seen = [], -1
-    for as_of in marks:
-        upto_news = [i for i in news if _item_date(i) <= as_of]
-        upto_filings = [f for f in filings if str(f.get("filing_date") or "")[:10] <= as_of]
-        total = len(upto_news) + len(upto_filings)
-        if total and total > seen:
-            seen = total
-            records.append({
-                **_sample_to_record({**sample, "news": upto_news, "filings": upto_filings}),
-                "as_of": as_of,
-            })
-    return records
-
-
-def credit_risk_info(dataset=None) -> dict:
-    from backend.api import datasets
-    versions = datasets.catalog()
-    legacy = [{"id": "contemporary", "label": "Contemporary (legacy)"}] if CREDIT_RISK_SAMPLES.is_file() else []
-    available = [*legacy, *versions]
-    if not legacy and versions and dataset in (None, 'contemporary'):
-        dataset = versions[0]['id']
-    if dataset and dataset != "contemporary":
-        selected = next((item for item in versions if item["id"] == dataset), None)
-        if selected is None:
-            raise SourceError("Unknown dataset version")
-        return {**selected, "dataset": dataset, "fields": CREDIT_RISK_FIELDS, "datasets": available}
-    splits: dict[str, int] = {}
-    if CREDIT_RISK_SAMPLES.is_file():
-        with open(CREDIT_RISK_SAMPLES, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                split = json.loads(line).get("split", "")
-                splits[split] = splits.get(split, 0) + 1
-    return {
-        "id": "credit_risk",
-        "label": "credit_risk feed (contemporary/samples.jsonl)",
-        "dataset": "contemporary",
-        "datasets": [{**item, "splits": splits} for item in legacy] + versions,
-        "splits": splits,
-        "fields": CREDIT_RISK_FIELDS,
-    }
-
-
-def credit_risk_records(split: str | None = None, n: int = 5, seed: int = 42,
-                        with_labels: bool = False, step: str | None = None, dataset: str | None = None) -> list[dict]:
-    """Sample the credit_risk dataset.
-
-    n <= 0 means "the entire split" (file order, no sampling) — used for
-    full-dataset batch runs.
-
-    step ("daily"/"weekly"/"monthly") walks each window instead of handing it
-    over whole, so one sample becomes a sequence of runs and the pipeline meets
-    its news the way it would arrive.
-
-    with_labels=False: list of input-field dicts (for batch runs).
-    with_labels=True: list of {"inputs": {...}, "label": {...}, "id": ...}
-    evaluation records (for evolve).
-    """
-    if dataset and dataset != 'contemporary':
-        from backend.api.datasets import records
-        return records(dataset, split=split, n=n, seed=seed, with_labels=with_labels, step=step)
-    if not CREDIT_RISK_SAMPLES.is_file():
-        raise SourceError(f"credit_risk dataset not found at {CREDIT_RISK_SAMPLES}")
-    samples = []
-    with open(CREDIT_RISK_SAMPLES, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            sample = json.loads(line)
-            if split and sample.get("split") != split:
-                continue
-            samples.append(sample)
-    if not samples:
-        raise SourceError(f"No credit_risk samples found for split '{split}'")
-    if n and n > 0:
-        rng = random.Random(seed)
-        rng.shuffle(samples)
-        samples = samples[:n]
-    if not with_labels:
-        if step and step != "none":
-            return [record for sample in samples for record in step_sample(sample, step)]
-        return [_sample_to_record(s) for s in samples]
-    return [
-        {
-            "inputs": _sample_to_record(s),
-            "label": {"type": s.get("type"), "event": (s.get("label") or {}).get("event")},
-            "id": s.get("sample_id", f"sample-{i + 1}"),
-        }
-        for i, s in enumerate(samples)
-    ]
 
 
 def normalize_eval_records(records: list[dict]) -> list[dict]:
@@ -274,23 +39,11 @@ def normalize_eval_records(records: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def parse_upload(filename: str, content: bytes) -> list[dict]:
-    try:
-        text = content.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        raise SourceError('Export the file as UTF-8 and try again.') from None
-    name = (filename or "").lower()
-    if name.endswith(('.json', '.jsonl')):
-        from .json_records import parse_json_records
-        try:
-            records = parse_json_records(text)
-        except ValueError as exc:
-            raise SourceError(str(exc)) from None
-    elif name.endswith(".csv"):
-        records = [dict(row) for row in csv.DictReader(io.StringIO(text))]
-    else:
-        raise SourceError(f"Unsupported file type for '{filename}'; use .json, .jsonl or .csv")
-    if not records:
-        raise SourceError("Uploaded file contains no records")
+    """One parser for every upload: the same header, row-length and encoding
+    checks as saved datasets, so a ragged CSV fails here instead of feeding
+    the workflow a record keyed by None."""
+    from .user_datasets import parse
+    records, _fields = parse(filename or "", content)
     return records
 
 
@@ -299,10 +52,10 @@ def parse_upload(filename: str, content: bytes) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def records_from_source_node(node: dict) -> list[dict]:
-    """Execute a canvas source node (kind="source"); returns n records.
+    """Execute a canvas source node (kind="source"); returns its records.
 
-    type "credit_risk" samples the local dataset; other types dispatch to the
-    API fetchers in source_apis (single record per execution).
+    DataLoaders, user datasets and plugin Input types return many records;
+    API connectors return one per execution.
     """
     config = node.get("source") or {}
     type_ = config.get("type")
@@ -312,15 +65,13 @@ def records_from_source_node(node: dict) -> list[dict]:
     if type_ == "user_dataset":
         from backend.features.data.user_datasets import records
         return records(config)
-    if type_ == "credit_risk":
-        n_raw = config.get("n")
-        return credit_risk_records(
-            split=config.get("split") or None,
-            n=int(n_raw) if n_raw is not None else 1,  # n=0: entire split
-            seed=int(config.get("seed") or 42),
-            step=config.get("step"),
-            **({"dataset": config["dataset"]} if config.get("dataset") else {}),
-        )
+    from backend.features import plugins
+    plugin = plugins.source_type(type_)
+    if plugin is not None:
+        records = plugin["records"](config)
+        if not isinstance(records, list) or not all(isinstance(r, dict) for r in records):
+            raise SourceError(f"Input type {type_!r} did not return a list of records.")
+        return records
     from backend.api.source_apis import (SOURCE_TYPE_SCHEMAS, fetch_custom_records,
                               fetch_source_record, is_custom_source)
 
@@ -332,6 +83,27 @@ def records_from_source_node(node: dict) -> list[dict]:
             f"{type_!r} (expected one of {sorted(SOURCE_TYPE_SCHEMAS)})"
         )
     return [fetch_source_record(config)]
+
+
+def input_sequence(graph: dict) -> dict | None:
+    """The {"group", "order"} fields a wired Input type declares, if any.
+
+    An Input whose records form trajectories (several dated observations of
+    one subject) says so in its schema; the batch then runs each trajectory
+    in order and stops it at its first failure. Nothing here knows the field
+    names: they come from the Input type.
+    """
+    from .source_apis import all_source_types
+    wired = {e.get("source") for e in (graph.get("edges") or [])}
+    types = None
+    for node in find_source_nodes(graph):
+        if node.get("name") not in wired or node.get("enabled") is False:
+            continue
+        types = types if types is not None else all_source_types()
+        sequence = (types.get((node.get("source") or {}).get("type")) or {}).get("sequence")
+        if sequence and sequence.get("group"):
+            return dict(sequence)
+    return None
 
 
 def find_source_nodes(graph: dict) -> list[dict]:
@@ -359,7 +131,7 @@ def map_to_workflow_inputs(records: list[dict], workflow_inputs: list[dict]) -> 
         if missing:
             raise SourceError(
                 f"Record {i}: missing required workflow inputs {missing}. "
-                f"Available record fields: {sorted(record.keys())}"
+                f"Available record fields: {sorted(record.keys(), key=str)}"
             )
         if '_dataloader' in record:
             inputs['_dataloader'] = record['_dataloader']

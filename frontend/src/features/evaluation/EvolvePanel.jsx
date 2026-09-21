@@ -5,6 +5,9 @@ import { TaskDetail } from './EvolveResult.jsx';
 import { elapsed, fmt } from './format.js';
 export { NewTaskForm, TaskDetail };
 
+// A task's pill: finished, failed, ended early, or still going.
+const statusClass = (status) => ({ done: 'status-completed', failed: 'status-failed', stopped: 'status-stopped', interrupted: 'status-stopped' }[status] || 'status-running');
+
 export default function EvolvePanel({ open, graphId, onClose, onApplied }) {
   const [tasks, setTasks] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
@@ -12,10 +15,19 @@ export default function EvolvePanel({ open, graphId, onClose, onApplied }) {
   const [error, setError] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const pollRef = useRef(null);
+  const graphRef = useRef(graphId);
+
+  // Tasks belong to one workflow: a selection carried over from the previous
+  // one would show (and apply) another workflow's result.
+  useEffect(() => {
+    graphRef.current = graphId;
+    setTasks([]); setSelectedId(null); setDetail(null); setError(null); setShowForm(false);
+  }, [graphId]);
 
   const refresh = async () => {
     try {
       const list = await api.listEvolveTasks(graphId);
+      if (graphRef.current !== graphId) return [];
       setTasks(list);
       return list;
     } catch {
@@ -31,7 +43,7 @@ export default function EvolvePanel({ open, graphId, onClose, onApplied }) {
       if (selectedId) {
         const t = list.find((x) => x.task_id === selectedId);
         if (t && (t.status === 'running' || t.status !== detail?.status)) {
-          api.getEvolveTask(selectedId).then(setDetail).catch(() => {});
+          api.getEvolveTask(selectedId).then(value => { if (graphRef.current === graphId) setDetail(value); }).catch(() => {});
         }
       }
     }, 3000);
@@ -40,10 +52,12 @@ export default function EvolvePanel({ open, graphId, onClose, onApplied }) {
   }, [open, graphId, selectedId, detail?.status]);
 
   const select = async (taskId) => {
+    const forGraph = graphId;
     setSelectedId(taskId);
     setShowForm(false);
     try {
-      setDetail(await api.getEvolveTask(taskId));
+      const value = await api.getEvolveTask(taskId);
+      if (graphRef.current === forGraph) setDetail(value);
     } catch (err) {
       setError(err?.body?.detail || err.message);
     }
@@ -79,7 +93,7 @@ export default function EvolvePanel({ open, graphId, onClose, onApplied }) {
                 >
                   <div className="batch-item-head">
                     <span>{t.params?.mode === 'evaluate' ? 'Evaluation' : `Evolve · ${t.params?.preset || t.task_id}`}</span>
-                    <span className={`node-status status-${t.status === 'done' ? 'completed' : t.status === 'failed' ? 'failed' : 'running'}`}>
+                    <span className={`node-status ${statusClass(t.status)}`}>
                       {t.status === 'running' ? (t.stage || 'running') : t.status}
                     </span>
                   </div>
@@ -102,7 +116,7 @@ export default function EvolvePanel({ open, graphId, onClose, onApplied }) {
                 onError={setError}
               />
             ) : detail ? (
-              <TaskDetail task={detail} onApplied={(g, mode) => { onApplied?.(g, mode); onClose(); }} />
+              <TaskDetail key={detail.task_id} task={detail} onStopped={() => { refresh(); select(detail.task_id); }} onApplied={(g, mode) => { onApplied?.(g, mode); onClose(); }} />
             ) : (
               <p className="muted">Select a run or start a new one.</p>
             )}

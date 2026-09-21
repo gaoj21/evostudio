@@ -484,6 +484,13 @@ def save_custom_tool(spec: dict) -> dict:
         # the package or swap its code for a pasted copy.
         previous = _read_spec(spec["name"])
         if previous and previous.get("package") and not spec.get("package"):
+            if (spec.get("code") or "") != previous.get("code"):
+                # The folder's entry file is the code that runs, so what is
+                # advertised is re-derived from it too; a list of tools read
+                # off the pasted copy would name functions nothing defines.
+                from backend.api import tools_registry
+                spec = validate_spec({**spec, "code": previous["code"]},
+                                     tools_registry.builtin_names())
             spec = {**spec, "package": previous["package"], "code": previous["code"]}
         with open(_path(spec["name"]), "w", encoding="utf-8") as f:
             json.dump(spec, f, indent=2, ensure_ascii=False)
@@ -768,11 +775,19 @@ def list_custom():
 @router.post("/tools/custom")
 def save_custom(body: dict = Body(...)):
     from backend.api import tools_registry
+    previous = _read_spec((body.get("name") or "").strip()) if isinstance(body, dict) else None
+    if (previous and previous.get("package") and "code" in body
+            and (body.get("code") or "") != previous.get("code")):
+        raise HTTPException(status_code=422, detail=(
+            f"'{previous['name']}' is an uploaded folder toolkit: its code is the "
+            f"files in that folder ({previous['package'].get('entry') or 'tools.py'} "
+            "is the entry). Edit them and upload the folder again; the code here "
+            "cannot be edited."))
     try:
         spec = validate_spec(body, tools_registry.builtin_names())
+        return save_custom_tool(spec)
     except CustomToolError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    return save_custom_tool(spec)
 
 
 @router.post("/tools/custom/upload")

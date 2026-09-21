@@ -40,10 +40,10 @@ def fed_graph(n=4):
     that is wired to nothing at all."""
     feed = make_task("feed", outputs=["company", "news_batch"])
     feed["kind"] = "source"
-    feed["source"] = {"type": "credit_risk", "split": "test", "n": n, "seed": 1}
+    feed["source"] = {"type": "user_dataset", "dataset_id": "d1", "n": n}
     lonely = make_task("lonely", outputs=["ticker"])
     lonely["kind"] = "source"
-    lonely["source"] = {"type": "credit_risk", "split": "test", "n": 1, "seed": 1}
+    lonely["source"] = {"type": "user_dataset", "dataset_id": "d1", "n": 1}
     judge = make_task("judge", inputs=["company", "news_batch"], outputs=["verdict"])
     draft = make_task("draft", inputs=["company"], outputs=["note"])
     return make_graph([feed, lonely, judge, draft], edges=[("feed", "judge")])

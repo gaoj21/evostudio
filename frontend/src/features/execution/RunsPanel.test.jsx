@@ -86,10 +86,9 @@ describe('describeSource', () => {
     expect(describeSource({ type: 'canvas', node: 'feed' })).toBe('canvas · feed');
   });
 
-  it('includes the split for a dataset source', () => {
-    expect(describeSource({ type: 'credit_risk', split: 'test' }))
-      .toBe('credit_risk · test');
-    expect(describeSource({ type: 'credit_risk' })).toBe('credit_risk');
+  it('names any other source by its label or type, with no special cases', () => {
+    expect(describeSource({ type: 'project_feed', split: 'test' })).toBe('project_feed');
+    expect(describeSource({ type: 'project_feed', label: 'Project feed' })).toBe('Project feed');
   });
 
   it('says nothing rather than "undefined" when there is no source', () => {
@@ -265,9 +264,9 @@ describe('a stopped batch can be picked up from the list', () => {
     api.listRuns.mockResolvedValue([]);
     api.listBatches.mockResolvedValue([
       { batch_id: 'b1', status: 'cancelled', total: 42, counts: { success: 15, cancelled: 26, failed: 1 },
-        created_at: '2026-09-08T05:23:47+00:00', source: { type: 'credit_risk' } },
+        created_at: '2026-09-08T05:23:47+00:00', source: { type: 'project_feed' } },
       { batch_id: 'b2', status: 'succeeded', total: 3, counts: { success: 3 },
-        created_at: '2026-09-07T05:00:00+00:00', source: { type: 'credit_risk' } },
+        created_at: '2026-09-07T05:00:00+00:00', source: { type: 'project_feed' } },
     ]);
     const onResumeBatch = vi.fn();
     const onOpenBatch = vi.fn();

@@ -63,18 +63,31 @@ def _graph_from_upload(filename: str, payload: bytes) -> tuple[dict, dict, dict,
     root = graph_entry[: -len("graph.json")]
     tools: dict[str, dict] = {}
     skills: dict[str, dict] = {}
-    for entry in archive.namelist():
+    notes: list[str] = []
+    names = archive.namelist()
+    for entry in names:
         if not entry.startswith(root):
             continue
         rel = entry[len(root):]
-        if rel.startswith("tools/") and rel.endswith(".json"):
+        if rel.startswith("tools/") and rel.endswith(".json") and rel.count("/") == 1:
             try:
                 spec = json.loads(archive.read(entry).decode("utf-8"))
-                code_entry = entry[: -len(".json")] + ".py"
-                spec["code"] = archive.read(code_entry).decode("utf-8")
+                folder = entry[: -len(".json")] + "/"
+                if spec.get("package"):
+                    # An uploaded folder travels as tools/<name>/; its entry
+                    # file is the code, the rest comes along as it was.
+                    spec["_files"] = {n[len(folder):]: archive.read(n) for n in names
+                                      if n.startswith(folder) and not n.endswith("/")}
+                    entry_file = spec["package"].get("entry") or "tools.py"
+                    spec["code"] = spec["_files"][entry_file].decode("utf-8")
+                else:
+                    spec["code"] = archive.read(entry[: -len(".json")] + ".py").decode("utf-8")
                 tools[spec["name"]] = spec
-            except (KeyError, ValueError, UnicodeDecodeError):
-                continue  # a half-written tool must not sink the whole import
+            except (KeyError, ValueError, UnicodeDecodeError, AttributeError, TypeError) as e:
+                # A half-written tool must not sink the whole import, but it
+                # is said rather than dropped.
+                notes.append(f"Tool '{rel[len('tools/'):-len('.json')]}' could not be read "
+                             f"from the archive ({type(e).__name__}: {e}) — not installed")
         elif rel.startswith("skills/") and rel.endswith("/SKILL.md"):
             try:
                 text = archive.read(entry).decode("utf-8")
@@ -93,7 +106,6 @@ def _graph_from_upload(filename: str, payload: bytes) -> tuple[dict, dict, dict,
                 "content": body.strip(),
             }
 
-    notes: list[str] = []
     workflow_entry = f"{root}workflow.py"
     if workflow_entry in archive.namelist():
         try:
@@ -141,9 +153,7 @@ async def import_graph(file: UploadFile):
             notes.append(f"Tool '{name}' already exists — kept the existing one")
             continue
         try:
-            custom_tools.save_custom_tool(
-                custom_tools.validate_spec(spec, tools_registry.builtin_names())
-            )
+            _install_tool(spec)
             installed_tools.append(name)
         except Exception as e:
             notes.append(f"Tool '{name}' was not installed: {e}")
@@ -159,6 +169,15 @@ async def import_graph(file: UploadFile):
         except Exception as e:
             notes.append(f"Skill '{name}' was not installed: {e}")
 
+    # Checked before anything is created: a graph that cannot be saved as a
+    # valid canvas is refused, not stored broken.
+    try:
+        graph_store.validate_graph({
+            "name": graph.get("name") or "Imported workflow", "goal": graph.get("goal") or "",
+            "flow_version": graph.get("flow_version", 0),
+            "tasks": graph.get("tasks") or [], "edges": graph.get("edges") or []})
+    except graph_store.GraphValidationError as e:
+        raise HTTPException(status_code=422, detail=[*[str(x) for x in e.errors], *notes])
     created = graph_store.create_graph(
         graph.get("name") or "Imported workflow", graph.get("goal") or ""
     )
@@ -209,6 +228,31 @@ async def import_graph(file: UploadFile):
     }
 
 
+def _install_tool(spec: dict) -> dict:
+    """Install one bundled toolkit as it was stored: configuration, source
+    marking and requirements included, and an uploaded folder as a folder."""
+    from pathlib import Path
+
+    files = spec.pop("_files", None)
+    package = spec.get("package")
+    stored = custom_tools.validate_spec(spec, tools_registry.builtin_names())
+    if not package:
+        return custom_tools.save_custom_tool(stored)
+    folder = custom_tools.package_dir(stored["name"])
+    for rel in files or {}:
+        parts = Path(rel).parts
+        if not parts or rel.startswith("/") or ".." in parts or ":" in parts[0]:
+            raise custom_tools.CustomToolError(f"Archive member {rel!r} would escape the toolkit folder.")
+    import shutil
+    if folder.is_dir():
+        shutil.rmtree(folder)
+    for rel, blob in (files or {}).items():
+        target = folder / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(blob)
+    return custom_tools.save_custom_tool({**stored, "package": package})
+
+
 def _graph_from_workflow_py(source: str) -> dict | None:
     """Read TASKS / TOOL_NODES / EDGES / GOAL back out of an exported workflow.py.
 
@@ -244,7 +288,10 @@ def _graph_from_workflow_py(source: str) -> dict | None:
     tasks = [dict(t) for t in found["TASKS"] if isinstance(t, dict)]
     for tool in found.get("TOOL_NODES") or []:
         if isinstance(tool, dict):
-            tasks.append({**tool, "kind": "tool"})
+            # `toolkit`/`factory` are resolved at export for the runner; the
+            # canvas node names only its tool.
+            tasks.append({**{k: v for k, v in tool.items() if k not in ("toolkit", "factory")},
+                          "kind": "tool"})
     return {
         "goal": found.get("GOAL") or "",
         "tasks": tasks,

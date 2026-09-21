@@ -1,12 +1,22 @@
+"""The credit-risk project's dataset releases, read through its Studio plugin.
+
+The release reader and feed live in projects/credit_risk/studio/ (imported as
+`credit_risk.studio.*`); the platform only sees the plugin's "credit_risk"
+Input type.
+"""
 import json
 from pathlib import Path
 import pytest
+
+from credit_risk.studio import feed as sources
+from credit_risk.studio import releases as datasets
+from backend.features.data.sources import SourceError
 
 DATASET = '2026-09-14-eligible-trajectories-v1'
 
 
 def test_catalog_and_feed_read_selected_split_without_outcomes():
-    from backend.api import sources, datasets
+    from backend.api.sources import records_from_source_node
     info = sources.credit_risk_info(DATASET)
     assert info['splits'] == {'dev':30, 'test':23}
     records = sources.credit_risk_records(dataset=DATASET, split='test', n=0)
@@ -19,11 +29,10 @@ def test_catalog_and_feed_read_selected_split_without_outcomes():
         sample = json.loads(r['sample_json'])
         assert not {'label', 'outcome', 'reviewed_event', 'event_date'} & sample.keys()
         assert all(n['date'] <= r['as_of'] for n in sample['news'])
-    assert records == sources.records_from_source_node({'source': {'type':'credit_risk', 'dataset':DATASET, 'split':'test', 'n':0}})
+    assert records == records_from_source_node({'source': {'type':'credit_risk', 'dataset':DATASET, 'split':'test', 'n':0}})
 
 
 def test_evolve_joins_separate_labels_and_excludes_unknown_outcomes():
-    from backend.api import sources, datasets
     records = sources.credit_risk_records(dataset=DATASET, split='dev', n=0, with_labels=True)
     assert len(records) == sources.credit_risk_info(DATASET)['evolve_splits']['dev']
     for r in records:
@@ -31,9 +40,9 @@ def test_evolve_joins_separate_labels_and_excludes_unknown_outcomes():
         assert r['label']['event_date'] > r['inputs']['window_end']
         assert 'label' not in json.loads(r['inputs']['sample_json'])
         assert 'event_date' not in r['inputs']
-    with pytest.raises(sources.SourceError):
+    with pytest.raises(SourceError):
         sources.credit_risk_records(dataset='../../elsewhere')
-    with pytest.raises(sources.SourceError):
+    with pytest.raises(SourceError):
         sources.credit_risk_records(dataset=DATASET, split='train')
 
 
@@ -50,18 +59,26 @@ def test_endpoints_preserve_dataset_selection(tmp_path, monkeypatch):
     response=client.post('/api/graphs/data-choice/run-batch/preview',json={'source':'canvas'})
     assert response.status_code==200, response.text
     assert response.json()['total']==251
-    assert response.json()['source']['dataset']==DATASET
+    # The canvas source keeps the node's own config, dataset version included.
+    assert response.json()['source']['config']['dataset']==DATASET
+    assert response.json()['sequence']=={'group':'sample_id','order':'as_of'}
+    assert response.json()['samples']==23
+    # 'credit_risk' is no longer a platform metric.
     assert client.post('/api/graphs/data-choice/run-batch/preview',json={'source':'canvas','metric':'credit_risk'}).status_code==422
+    # Evolve takes canvas / saved results / an upload; a project's dataset
+    # name is not a JSON source any more.
     captured=[]
     monkeypatch.setattr(evolve_api,'start_evolve',lambda g,r,m,p: captured.append((r,p)) or 'chosen')
     response=client.post('/api/graphs/data-choice/evolve',json={'source':'credit_risk','dataset':DATASET,'split':'test','n':3,'nodes':['judge']})
-    assert response.status_code==200,response.text
-    assert len(captured[0][0])==3
-    assert captured[0][1]['source']['dataset']==DATASET
+    assert response.status_code==422,response.text
+    assert captured==[]
+    info=client.get('/api/sources/credit_risk/info',params={'dataset':DATASET})
+    assert info.status_code==200,info.text
+    assert info.json()['dataset']==DATASET and info.json()['splits']=={'dev':30,'test':23}
+    assert client.get('/api/sources/credit_risk/info',params={'dataset':'../../elsewhere'}).status_code==422
 
 
 def test_release_window_steps_preserve_all_evidence_without_future_data():
-    from backend.api import sources
     from collections import Counter, defaultdict
     daily = sources.credit_risk_records(dataset=DATASET, split='test', n=0, step='daily')
     expected = Counter((r['sample_id'], d) for r in daily for d in r['document_ids'])
@@ -84,7 +101,7 @@ def test_release_window_steps_preserve_all_evidence_without_future_data():
 
 
 def test_window_buckets_include_end_date_and_partial_tail():
-    from backend.api.datasets import walk_window
+    from credit_risk.studio.releases import walk_window
     def observation(day):
         return {'sample_id':'case','window_start':'2026-01-29','window_end':'2026-02-08',
                 'as_of':day,'document_ids':[day], 'news_batch':day,'filing_batch':'',
@@ -99,7 +116,7 @@ def test_window_buckets_include_end_date_and_partial_tail():
 
 
 def test_discovery_omits_missing_legacy_data_and_defaults_to_available_release(tmp_path, monkeypatch):
-    from backend.api import sources, source_apis
+    from backend.api import source_apis
     monkeypatch.setattr(sources, 'CREDIT_RISK_SAMPLES', tmp_path/'missing.jsonl')
     info = sources.credit_risk_info('contemporary')
     assert info['dataset'] == DATASET
@@ -110,7 +127,6 @@ def test_discovery_omits_missing_legacy_data_and_defaults_to_available_release(t
 
 
 def test_active_release_contains_only_current_eligible_cases_and_consistent_files():
-    from backend.api import datasets
     import csv, hashlib
     path = datasets.ROOT / DATASET
     cases = datasets.rows(path/'cases.jsonl')

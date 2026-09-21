@@ -19,7 +19,7 @@ import ResourceMenu from './components/ResourceMenu.jsx';
 import ChatAgentInspector from './features/agents/ChatAgentInspector.jsx';
 import { useCanvasAgents, isChatNode, chatNodeId, memoryId, memoryBinding } from './features/agents/useCanvasAgents.js';
 import MemoryResourceInspector from './features/memory/MemoryResourceInspector.jsx';
-import { connectMemory, disconnectMemory, removeMemoryReferences } from './features/memory/memoryConnections.js';
+import { connectMemory, disconnectMemory, removeMemoryReferences, renameMemoryReferences } from './features/memory/memoryConnections.js';
 import { connectEdge, graphToFlow, flowToGraph, uniqueName, memoryOverlay, isMemoryId } from './features/canvas/convert.js';
 import { useLayoutMode } from './useLayoutMode.js';
 import { BATCH_SETTLED, useExecutionSession } from './features/execution/useExecutionSession.js';
@@ -113,6 +113,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
   graphRef.current = graph;
   const reportAgentError = useCallback(e => setErrors(extractErrors(e)), []);
   const canvasAgents = useCanvasAgents(graph?.id, reportAgentError);
+
   const [spaceNames, setSpaceNames] = useState({});
   useEffect(() => {
     let current = true;
@@ -656,7 +657,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
                 description: defaults.description || tpl.description || '',
                 inputs: [],
                 outputs: defaults.outputs ? JSON.parse(JSON.stringify(defaults.outputs)) : [],
-                source: { ...(defaults.source || { type: 'credit_risk', split: '', n: 1, seed: 42 }), ...(defaults.source?.type === 'dataloader' ? {loader:'python', read_batch_size:100} : {}) },
+                source: { ...(defaults.source || {}), ...(defaults.source?.type === 'dataloader' ? {loader:'python', read_batch_size:100} : {}) },
               },
             },
           ];
@@ -729,13 +730,14 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
       taken.delete(id);
       const next = uniqueName(rawName, taken);
       setNodes((nds) =>
-        nds.map((n) => {
+        renameMemoryReferences(nds.map((n) => {
           if (n.id !== id) return n;
           const { editName, ...rest } = n.data;
           return { ...n, id: next, data: rest };
-        })
+        }), id, next)
       );
       if (next !== id) {
+        // Memory resource IDs are stable; Chat bindings and layout stay put.
         setEdges((eds) =>
           eds.map((e) => ({
             ...e,
@@ -744,7 +746,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
             target: e.target === id ? next : e.target,
           }))
         );
-        setSelectedId((sel) => (sel === id ? next : sel));
+        setSelectedId((sel) => (sel === id ? next : sel === oldStore ? newStore : sel));
       }
     },
     [nodes, setNodes, setEdges]
@@ -825,10 +827,20 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
     // may not be the one that went out. Everything downstream — run history,
     // the workspace, exports — is keyed on it, so follow it.
     if (saved.id !== graph.id) renameChatHistory(graph.id, saved.id);
-    const meta = { ...graph, id: saved.id, name: saved.name, goal: saved.goal || '',
-                   output_dir: saved.output_dir || 'runs',
-                   preprocess: saved.preprocess || null };
-    setGraph(meta);
+    const fromServer = { id: saved.id, name: saved.name, goal: saved.goal || '',
+                         output_dir: saved.output_dir || 'runs',
+                         preprocess: saved.preprocess || null };
+    const meta = { ...graph, ...fromServer };
+    // Merge onto the settings as they are now, not as they were sent: an edit
+    // made while the save was in flight must survive it (and stay unsaved).
+    setGraph((current) => {
+      if (!current || current.id !== graph.id) return current;
+      const merged = { ...current, id: saved.id };
+      for (const key of ['name', 'goal', 'output_dir', 'preprocess']) {
+        if (current[key] === graph[key]) merged[key] = fromServer[key];
+      }
+      return merged;
+    });
     markClean(meta, nodes, edges);
     refreshList();
     return meta;

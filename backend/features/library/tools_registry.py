@@ -37,7 +37,7 @@ def _make(module: str, class_name: str):
 # `requires` lists env vars that must be set before the toolkit can be used.
 # `storage`: toolkit accepts a storage_handler — runs pass one rooted at the
 # graph's workspace files/ dir.
-TOOL_REGISTRY: dict[str, dict] = {
+BUILTIN_TOOLKITS: dict[str, dict] = {
     "DataEvaluationToolkit": {
         "factory": _make("backend.features.library.data_evaluation_tools", "DataEvaluationToolkit"),
         "description": "Read uploaded data through DataLoaders and evaluate predictions with typed evaluator tools.",
@@ -100,12 +100,6 @@ TOOL_REGISTRY: dict[str, dict] = {
         "requires": [],
         "tool_names": ["rss_fetch", "rss_validate"],
     },
-    "ObligorMatchToolkit": {
-        "factory": _make("backend.api.obligor_tool", "ObligorMatchToolkit"),
-        "description": "Match company names / SEC CIKs against the internal credit-risk obligor list (match_company_name, match_cik).",
-        "requires": [],
-        "tool_names": ["match_company_name", "match_cik"],
-    },
     # --- listed but unavailable until credentials exist ---------------------
     "GoogleSearchToolkit": {
         "factory": _make("evoagentx.tools.search_google", "GoogleSearchToolkit"),
@@ -138,11 +132,18 @@ TOOL_REGISTRY: dict[str, dict] = {
 }
 
 
+def toolkits() -> dict[str, dict]:
+    """Built-in toolkits plus those offered by project plugins."""
+    from backend.features import plugins
+    return {**BUILTIN_TOOLKITS, **plugins.toolkits()}
+
+
 def builtin_names() -> list[str]:
     """All built-in names: toolkit names AND their sub-tool names (a custom
     tool colliding with either would break tool resolution)."""
-    names = set(TOOL_REGISTRY)
-    for entry in TOOL_REGISTRY.values():
+    registry = toolkits()
+    names = set(registry)
+    for entry in registry.values():
         names.update(entry.get("tool_names", ()))
     return sorted(names)
 
@@ -167,9 +168,7 @@ def find_tool(name: str):
     found = custom_tools.find(name)
     if found is not None:
         return ("custom", found[0])
-    for toolkit_name, entry in TOOL_REGISTRY.items():
-        if entry["requires"]:
-            continue
+    for toolkit_name, entry in toolkits().items():
         if any(var for var in entry["requires"] if not os.getenv(var)):
             continue
         if name in entry.get("tool_names", ()):
@@ -201,7 +200,7 @@ def list_tools() -> list[dict]:
     """Catalog for the frontend: name, description, sub-tool names, requires,
     and whether the toolkit is usable right now."""
     catalog = []
-    for name, entry in TOOL_REGISTRY.items():
+    for name, entry in toolkits().items():
         missing = [var for var in entry["requires"] if not os.getenv(var)]
         item = {
             "name": name,
@@ -254,10 +253,10 @@ def validate_tool_names(tool_names: list[str]) -> None:
     for name in tool_names or []:
         if name in custom:
             continue
-        entry = TOOL_REGISTRY.get(name)
+        entry = toolkits().get(name)
         if entry is None:
             raise ToolResolveError(
-                f"Unknown tool '{name}'. Available: {sorted(TOOL_REGISTRY) + sorted(custom)}"
+                f"Unknown tool '{name}'. Available: {sorted(toolkits()) + sorted(custom)}"
             )
         missing = [var for var in entry["requires"] if not os.getenv(var)]
         if missing:
@@ -286,7 +285,7 @@ def resolve_tools(tool_names: list[str], workspace_dir=None) -> list:
             except Exception as e:
                 raise ToolResolveError(f"Failed to build custom tool '{name}': {e}")
             continue
-        entry = TOOL_REGISTRY[name]
+        entry = toolkits()[name]
         try:
             if entry.get("storage") and workspace_dir is not None:
                 from evoagentx.tools.storage_handler import LocalStorageHandler

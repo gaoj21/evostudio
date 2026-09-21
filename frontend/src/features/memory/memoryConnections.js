@@ -10,14 +10,16 @@ export function connectMemory(nodes, resource, agentId, direction, connection = 
   const mem0 = store.kind === 'mem0';
   const switching = mem0 ? old.provider !== 'mem0' || old.space_id !== store.space_id : old.provider === 'mem0';
   if (active && switching) throw new Error('This Agent already uses another memory backend or space. Disconnect its read and write links first, or change its Memory settings explicitly.');
-  if (active && !mem0 && ((old.kind || (old.match ? 'table' : 'recall')) !== store.kind || (store.kind === 'table' && old.match !== store.match)))
+  if (active && !mem0 && ((old.kind || (old.version === 2 || old.match ? 'table' : 'recall')) !== store.kind || (store.kind === 'table' && old.match !== store.match)))
     throw new Error('These memory stores use different types or subject keys. Align their settings before connecting.');
   let policy = { ...old };
   if (!active) policy = { ...policy, read_enabled: false, write_enabled: false,
     provider: mem0 ? 'mem0' : 'legacy', kind: mem0 ? 'recall' : store.kind,
     space_id: mem0 ? store.space_id : undefined, match: mem0 ? '' : store.match || '',
-    at: mem0 ? '' : store.at || '', read: null, read_from: [],
-    context: [...new Set([...(old.context || []), ...(!mem0 ? [store.match, store.at] : [])].filter(Boolean))] };
+    at: mem0 ? '' : store.at || '', version: mem0 ? 1 : store.version || 1,
+    time_filter: mem0 ? false : store.time_filter ?? !!store.at, key: '',
+    write_mode: 'append', read: null, read_from: [],
+    context: old.context || [] };
   if (direction === 'write') policy.write_enabled = true;
   else {
     policy.read_enabled = true;
@@ -52,4 +54,31 @@ export function removeMemoryReferences(nodes, removed) {
     const read_from = policy.read_from.filter(id => !removed.includes(id));
     return { ...n, data: { ...n.data, memory: { ...policy, read_from, ...(read_from.length ? {} : { read_enabled: false }) } } };
   });
+}
+
+// Pin the legacy storage identity on first rename; resource IDs and handles
+// stay stable while node references and qualified field bindings follow.
+export function renameMemoryReferences(nodes, from, to) {
+  if (from === to) return nodes;
+  return nodes.map(n => {
+    const policy = n.data.memory || {};
+    const renamedOwner = n.id === to && (n.data.use_long_term_memory || n.data.memory != null);
+    const ref = value => typeof value === 'string' && value.startsWith(`nodes.${from}.`)
+      ? `nodes.${to}.` + value.slice(`nodes.${from}.`.length) : value;
+    const readsOld = policy.read_from?.includes(from);
+    const bound = ['at', 'match', 'key'].some(k => ref(policy[k]) !== policy[k])
+      || policy.context?.some(v => ref(v) !== v);
+    if (!renamedOwner && !bound && !readsOld) return n;
+    const memory = { ...policy };
+    if (renamedOwner && !memory.store_id) memory.store_id = from;
+    for (const key of ['at', 'match', 'key']) if (key in memory) memory[key] = ref(memory[key]);
+    if (memory.context) memory.context = memory.context.map(ref);
+    if (readsOld) memory.read_from = policy.read_from.map(id => id === from ? to : id);
+    return { ...n, data: { ...n.data, memory } };
+  });
+}
+
+export function renameMemoryPositions(positions) {
+  // Store IDs no longer change when their owning node is renamed.
+  return positions;
 }

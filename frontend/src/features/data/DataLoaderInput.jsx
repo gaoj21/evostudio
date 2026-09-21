@@ -18,6 +18,15 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
   useEffect(() => {
     api.listDataResources().then(r => setResources(r.resources)).catch(e => setError(e.body?.detail || e.message));
   }, []);
+  // Schemas by type, for the `local` flag; null until known.
+  const [sourceTypes, setSourceTypes] = useState(null);
+  const wrappedType = config.loader === 'source' ? config.source_config?.type : null;
+  useEffect(() => {
+    if (!wrappedType || !api.listSourceTypes) return undefined;
+    let active = true;
+    api.listSourceTypes().then(r => { if (active) setSourceTypes(Object.fromEntries((r.source_types || []).map(t => [t.type, t]))); }).catch(() => {});
+    return () => { active = false; };
+  }, [wrappedType]);
   async function selectResource(resourceId) {
     const graphId=getGraph?.()?.id;
     setError('');
@@ -49,7 +58,11 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
     finally { setBusy(false); }
   }
   const field = (key, title, placeholder = '') => <div className="field"><label htmlFor={`loader-${key}`}>{title}</label><input id={`loader-${key}`} value={config[key] || ''} placeholder={placeholder} onChange={e => update({[key]: e.target.value})} /></div>;
+  // Local Input types (files, project data) run inline; the rest call an API
+  // and are collected first. The schema says which is which.
+  const apiSource = config.loader === 'source' && !!config.source_config?.type && sourceTypes !== null && !sourceTypes[config.source_config.type]?.local;
   return <section aria-label="DataLoader">
+    {apiSource && <p role="status" className="muted small" data-testid="api-source-note">This Input reads an API source. A batch run collects it first, in the background, over the whole configured range; the collected records are saved as a data resource. To preprocess them in code, choose that resource in a PyTorch Dataset Input.</p>}
     {config.loader !== 'source' && <><div className="field"><label htmlFor="loader-resource">1. Data resource</label><select id="loader-resource" value={config.resource_id || ''} disabled={busy} onChange={e => selectResource(e.target.value)}><option value="">Select uploaded files</option>{resources.map(r => <option key={r.id} value={r.id}>{r.name} · {r.files.length} files</option>)}</select></div>
     <input hidden ref={files} type="file" multiple onChange={e => {upload(e.target.files); e.target.value='';}} />
     <input hidden ref={folder} type="file" webkitdirectory="" multiple onChange={e => {upload(e.target.files); e.target.value='';}} />
@@ -69,6 +82,7 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
     {!legacy && <DatasetInterface code={config.code} values={config.reader_config || {}} onChange={reader_config=>update({reader_config})} onSchema={setInputSchema} disabled={busy}/>}
     <details className="input-disclosure"><summary>Advanced settings</summary>
       <label><input type="checkbox" checked={config.cache !== false} onChange={e=>update({cache:e.target.checked})}/> Reuse prepared data until code, configuration or files change</label>
+      <div className="field"><label htmlFor="loader-batch_timeout">Seconds allowed per batch</label><NumberInput id="loader-batch_timeout" min={10} max={3600} step={1} value={config.batch_timeout ?? 120} onChange={e=>update({batch_timeout:Number(e.target.value)})}/><small className="muted">How long your Dataset may take to produce one batch before the run stops with an error (10–3600). Raise it when items do heavy work such as calling an API.</small></div>
       {field('file_pattern','File pattern','*')}
       {['offset'].map(key=><div className="field" key={key}><label htmlFor={`loader-${key}`}>{key==='offset'?'Skip records':'Record limit (0 = all)'}</label><NumberInput id={`loader-${key}`} type="number" min={0} value={config[key] ?? 0} onChange={e=>update({[key]:Number(e.target.value)})}/></div>)}
       {field('group_by','Sequential group field','Optional')}{field('order_by','Order within group','Optional')}

@@ -7,6 +7,8 @@ them by constructing a real SequentialWorkFlowGraph.
 import copy
 import json
 import math
+import os
+import uuid
 import re
 import threading
 from datetime import datetime, timezone
@@ -75,10 +77,32 @@ def free_id(name: str, taken: str | None = None) -> str:
     base = _slugify(name or "graph")
     candidate = base
     n = 2
-    while candidate != taken and graph_exists(candidate):
+    while candidate != taken and (graph_exists(candidate) or _has_data(candidate)):
         candidate = f"{base}-{n}"
         n += 1
     return candidate
+
+
+def _data_paths(graph_id: str) -> list[Path]:
+    """Everything filed under a workflow's id besides its graph file."""
+    from backend.api import memory_store
+    from backend.api import stm_store
+    from backend.api import table_store
+    from backend.api import workspace as workspace_mod
+    return [workspace_mod.workspace_root(graph_id), memory_store.MEMORY_DIR / graph_id,
+            table_store.TABLES_DIR / graph_id, stm_store.STM_DIR / f"{graph_id}.json"]
+
+
+def _has_data(graph_id: str) -> bool:
+    """Does some workflow's data still sit under this id?
+
+    A workflow deleted before its data was archived left its memory and
+    history behind; a new workflow given the id would inherit both.
+    """
+    if any(p.exists() for p in _data_paths(graph_id)):
+        return True
+    from backend.api import runner
+    return bool(runner.list_runs(graph_id=graph_id))
 
 
 def rename_graph(graph_id: str, name: str) -> dict:
@@ -110,12 +134,25 @@ def rename_graph(graph_id: str, name: str) -> dict:
             "they are writing to, so let them finish first."
         ])
 
+    # free_id counts leftover data as taken, so a destination in use here is
+    # a race; refuse before anything moves rather than merge two workflows.
+    occupied = [p.name for p in _data_paths(new_id) if p.exists()]
+    if occupied:
+        raise GraphValidationError([
+            f"Cannot rename to '{new_id}': data is already filed under that id "
+            f"({', '.join(occupied)})."
+        ])
+
     with _lock:
         graph["id"] = new_id
         graph["name"] = name
         _save(graph)
         _graph_path(graph_id).unlink(missing_ok=True)
-    _move_graph_data(graph_id, new_id)
+    failed = _move_graph_data(graph_id, new_id)
+    if failed:
+        # The rename stands (the graph is saved under its new id); what did
+        # not move is said rather than silently left under the old one.
+        return {**graph, "rename_warnings": failed}
     return graph
 
 
@@ -135,31 +172,32 @@ def _in_flight(graph_id: str) -> str:
     return " and ".join(parts)
 
 
-def _move_graph_data(old_id: str, new_id: str) -> None:
-    """Carry a renamed workflow's own data across.
+def _move_graph_data(old_id: str, new_id: str) -> list[str]:
+    """Carry a renamed workflow's own data across; returns what did not move.
 
-    Best effort per item: a workflow that has never run has none of these, and
-    failing to move one is not a reason to leave the rename half-done.
+    Per item: a workflow that has never run has none of these, and failing to
+    move one is not a reason to leave the rename half-done — but it is said,
+    never skipped in silence.
     """
+    import logging
     import shutil
 
-    from backend.api import memory_store
-    from backend.api import stm_store
-    from backend.api import table_store
-    from backend.api import workspace as workspace_mod
-    for old, new in ((workspace_mod.workspace_root(old_id), workspace_mod.workspace_root(new_id)),
-                     (memory_store.MEMORY_DIR / old_id, memory_store.MEMORY_DIR / new_id),
-                     (table_store.TABLES_DIR / old_id, table_store.TABLES_DIR / new_id),
-                     (stm_store.STM_DIR / f"{old_id}.json",
-                      stm_store.STM_DIR / f"{new_id}.json")):
-        try:
-            if old.exists() and not new.exists():
-                new.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(old), str(new))
-        except OSError:
+    failed = []
+    for old, new in zip(_data_paths(old_id), _data_paths(new_id)):
+        if not old.exists():
             continue
+        try:
+            if new.exists():
+                raise FileExistsError(f"{new} already exists")
+            new.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(old), str(new))
+        except OSError as exc:
+            logging.getLogger(__name__).warning(
+                "rename %s -> %s: could not move %s: %s", old_id, new_id, old, exc)
+            failed.append(f"{old.name} stayed under '{old_id}': {exc}")
 
     _repoint_history(old_id, new_id)
+    return failed
 
 
 def _repoint_history(old_id: str, new_id: str) -> None:
@@ -196,8 +234,16 @@ def _repoint_history(old_id: str, new_id: str) -> None:
 def _save(graph: dict) -> None:
     graph["updated_at"] = _utcnow()
     GRAPHS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(_graph_path(graph["id"]), "w", encoding="utf-8") as f:
-        json.dump(graph, f, indent=2, ensure_ascii=False)
+    target = _graph_path(graph['id'])
+    temporary = target.with_name(target.name + '.' + uuid.uuid4().hex + '.tmp')
+    try:
+        with temporary.open('w', encoding='utf-8') as stream:
+            json.dump(graph, stream, indent=2, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def load_graph(graph_id: str) -> dict | None:
@@ -236,7 +282,35 @@ def delete_graph(graph_id: str) -> bool:
         if not path.is_file():
             return False
         path.unlink()
-        return True
+    _archive_graph_data(graph_id)
+    return True
+
+
+def _archive_graph_data(graph_id: str) -> str:
+    """Set a deleted workflow's data aside, so a new one of that name starts
+    empty rather than inheriting its memory and history.
+
+    Moved, never removed: each item goes to a `.deleted-<timestamp>` folder
+    beside where it was, and its runs and batches are refiled under that
+    archived id. Returns the archived id.
+    """
+    import logging
+    import shutil
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    archived_id = f"{graph_id}.deleted-{stamp}"
+    for item in _data_paths(graph_id):
+        if not item.exists():
+            continue
+        target = item.parent / f".deleted-{stamp}" / item.name
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(item), str(target))
+        except OSError as exc:
+            logging.getLogger(__name__).warning(
+                "delete %s: could not archive %s: %s", graph_id, item, exc)
+    _repoint_history(graph_id, archived_id)
+    return archived_id
 
 
 def validate_harness_tasks(tasks):
@@ -276,16 +350,22 @@ def save_graph(graph_id: str, body: dict) -> dict:
         key not in ('x', 'y') or isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
         for key, value in point.items()) for point in points):
         raise GraphValidationError(['Memory positions must use finite x/y coordinates.'])
-    new_name = body.get("name")
-    if existing and new_name and new_name != existing.get("name"):
-        # Do this first: everything below writes under the id, and the point of
-        # a rename is that those writes land under the new one.
-        graph_id = rename_graph(graph_id, new_name)["id"]
+    # Every check before the rename: a rename moves the workflow's files, so a
+    # save refused after it would leave them moved and the canvas unsaved.
     output_dir = (body.get("output_dir") or "runs").strip().strip("/") or "runs"
     if output_dir.startswith("..") or "/../" in f"/{output_dir}/":
         raise GraphValidationError(
             [f"output_dir {output_dir!r} must stay inside the workspace"]
         )
+    from backend.api import workspace as workspace_mod
+    reserved = workspace_mod.check_output_dir(output_dir)
+    if reserved:
+        raise GraphValidationError([reserved])
+    new_name = body.get("name")
+    if existing and new_name and new_name != existing.get("name"):
+        # Do this first: everything below writes under the id, and the point of
+        # a rename is that those writes land under the new one.
+        graph_id = rename_graph(graph_id, new_name)["id"]
     graph = {
         "id": graph_id,
         "name": body.get("name", existing.get("name", graph_id)),
@@ -298,6 +378,8 @@ def save_graph(graph_id: str, body: dict) -> dict:
         "preprocess": (body.get("preprocess", existing.get("preprocess")) or None),
         "memory_resources": body.get("memory_resources", existing.get("memory_resources", [])),
         "memory_positions": body.get("memory_positions", existing.get("memory_positions", {})),
+        # Which outputs go to human review (backend/features/execution/review.py).
+        "review": review_rule(body.get("review", existing.get("review"))),
         "flow_version": body.get("flow_version", 0),
         "tasks": body.get("tasks", []),
         "edges": body.get("edges", []),
@@ -307,6 +389,16 @@ def save_graph(graph_id: str, body: dict) -> dict:
     return load_graph(graph_id)
 
 
+def review_rule(rule):
+    if rule in (None, {}):
+        return None
+    from backend.features.execution.review import validate_rule
+    try:
+        return validate_rule(rule)
+    except ValueError as exc:
+        raise GraphValidationError([str(exc)]) from None
+
+
 class GraphValidationError(Exception):
     def __init__(self, errors: list[str]):
         super().__init__("; ".join(errors))
@@ -314,7 +406,7 @@ class GraphValidationError(Exception):
 
 
 def is_source_task(task: dict) -> bool:
-    """Canvas input-source node (e.g. credit_risk feed) — not an LLM task."""
+    """Canvas Input node (a dataset, DataLoader, API or project Input type) — not an LLM task."""
     return task.get("kind") == "source"
 
 
@@ -587,6 +679,13 @@ def compute_workflow_inputs(ordered_tasks: list[dict],
                 # each value is actually for.
                 "consumed_by": task.get("name"),
             })
+    # Fields a node's memory is keyed or dated by, when no node produces them:
+    # they come with the data, so the workflow takes them as (optional) inputs.
+    from backend.features.memory.bindings import binding_inputs
+    for extra in binding_inputs(active):
+        if extra["name"] not in seen:
+            seen.add(extra["name"])
+            workflow_inputs.append(extra)
     return workflow_inputs
 
 

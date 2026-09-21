@@ -5,6 +5,7 @@ No provider implementation is embedded here. Saved-result proposals remain a
 separate no-replay operation.
 """
 import copy
+import uuid
 from backend.api.sources import SourceError
 from . import evaluator_tools
 
@@ -14,6 +15,12 @@ def select(graph, name):
     task = next((t for t in graph.get('tasks', []) if t.get('name') == name and t.get('kind') == 'evaluator' and t.get('enabled', True)), None)
     if task is None:
         raise SourceError('Choose an enabled canvas evaluator.')
+    cfg = task.get('evaluator') or {}
+    # A run may fall back to the first metric the code returns; an
+    # optimization objective must be the one the user chose.
+    # Legacy tool evaluators keep their documented default objective, 'score'.
+    if cfg.get('type') == 'python' and not cfg.get('metric'):
+        raise SourceError(f"Choose the objective metric of evaluator '{name}' first: open it, preview it on saved results and pick the metric Evolve should optimize.")
     return task
 
 
@@ -73,15 +80,25 @@ def execute(state, graph, rows, params, stage):
         candidate['preprocess'] = None  # already prepared, once for the experiment
         records = []
         blocked = set()
-        from backend.features.execution.batch import _group_key
+        # The same ordering a batch uses: an Input's trajectories and the
+        # records memory ties together run in order, and a failure blocks
+        # the rest of its sequence.
+        from backend.features.execution.batch import _group_key, assign_sequences
+        items = [{} for _ in rows]
+        assign_sequences(candidate, list(zip(items, rows)))
         for i, row in enumerate(rows):
             stage(f'{generation}: record {i+1}/{len(rows)}')
-            group = _group_key(row)
+            group = _group_key(row, items[i])
             if group is not None and group in blocked:
-                id, output = None, {'status':'blocked', 'error':'An earlier observation in this trajectory failed.'}
+                id, output = None, {'status':'blocked', 'error':'An earlier record in this sequence failed.'}
             else:
-                id = runner.start_run(candidate, copy.deepcopy(row), background=False)
+                # Known before it starts, so Stop can cancel it mid-run.
+                state['current_run'] = uuid.uuid4().hex[:12]
+                id = runner.start_run(candidate, copy.deepcopy(row), background=False, run_id=state['current_run'])
+                state.pop('current_run', None)
                 output = runner.get_run(id) or {}
+                if state.get('stop_requested'):
+                    stage('stopping')      # raises: the cancelled run is not a result
             if group is not None and output.get('status') != 'success':
                 blocked.add(group)
             records.append({**copy.deepcopy(output), 'id': str(i), 'run_id': id, 'inputs': row, 'status': output.get('status', 'failed'),

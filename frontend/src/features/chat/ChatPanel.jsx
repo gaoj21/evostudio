@@ -6,9 +6,10 @@ import ChatComposer from './ChatComposer.jsx';
 import { useChatHistory, chatHistoryKey, loadChatHistory, saveChatHistory, renameChatHistoryKey, newMessageId } from './chatSession.js';
 import WorkflowRunCard from '../execution/WorkflowRunCard.jsx';
 import { api } from '../../api.js';
+import { RUN_SETTLED } from '../execution/runStates.js';
 
 const SUGGESTIONS = [
-  'Build a workflow that monitors supplier credit risk from news',
+  'Build a workflow that summarises incoming support tickets by topic',
   'Add a step that summarises the findings for an analyst',
   'Check required inputs and prepare a run',
   'Inspect the latest failed run and explain what to fix',
@@ -306,8 +307,14 @@ export default function ChatPanel({
         const result = await api.getRun(trackedRun);
         if (!active) return;
         setLiveRun(result); setRunError('');
-        if (['success', 'failed', 'cancelled', 'interrupted'].includes(result.status)) return;
-      } catch (e) { if (active) setRunError(e.message); }
+        if (RUN_SETTLED.includes(result.status)) return;
+      } catch (e) {
+        if (!active) return;
+        // The server no longer knows this run: it will never settle, so stop
+        // asking and release the session controls.
+        if (e.status === 404) { setLiveRun({ run_id: trackedRun, status: 'lost' }); return; }
+        setRunError(e.message);
+      }
       if (active) timer = setTimeout(poll, 1500);
     };
     poll();
@@ -320,9 +327,11 @@ export default function ChatPanel({
   useEffect(() => {
     const runId = trackedRun || awaitingRun.current;
     if (!observedOutcome || !runId || observedOutcome.run_id !== runId || busy
-        || !['success', 'failed', 'cancelled', 'interrupted'].includes(observedOutcome.status)) return;
+        || !RUN_SETTLED.includes(observedOutcome.status)) return;
     awaitingRun.current = null;
     setMessages(rows => rows.map(m => m.runStarted === runId ? { ...m, runHandled: true, runStatus: observedOutcome.status } : m));
+    // A lost run has nothing to read back; there is nothing to diagnose.
+    if (observedOutcome.status === 'lost') return;
     submit(`The run you started (${runId}) finished with status "${observedOutcome.status}". Read this run, summarize its result and explain any failure. Suggest fixes; do not execute another run automatically.`, { silent: true });
   }, [observedOutcome, trackedRun, busy, submit]);
 

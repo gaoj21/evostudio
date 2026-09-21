@@ -1,5 +1,5 @@
 """Expanded datasets can supply their own entity roster without changing defaults."""
-from backend.api import obligor_tool
+from credit_risk.studio import obligor_tool
 
 
 def test_switching_dataset_changes_registry(monkeypatch, tmp_path):

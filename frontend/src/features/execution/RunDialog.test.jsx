@@ -16,17 +16,14 @@ vi.mock('../../api.js', () => ({
   api: {
     runPlan: vi.fn(),
     runGraph: vi.fn(),
-    creditRiskSource: vi.fn(),
     listMetrics: vi.fn(),
     listCustomTools: vi.fn(),
     previewBatchCanvas: vi.fn(),
-    previewBatchSource: vi.fn(),
     previewBatchUpload: vi.fn(),
     runBatchCanvas: vi.fn(),
     collectSource: vi.fn(),
     sourceCollection: vi.fn(),
     stopSourceCollection: vi.fn(),
-    runBatchSource: vi.fn(),
     runBatchUpload: vi.fn(),
   },
 }));
@@ -42,19 +39,17 @@ const PLAN = {
 };
 
 const STEPPED = {
-  total: 24, samples: 4, steps: 6, steps_min: 6,
-  dates: ['2025-03-31', '2025-08-31'], fields: ['company', 'news_batch'],
+  total: 24, samples: 4, steps: 6, steps_min: 6, sequence: { group: 'ticket', order: 'day' },
+  dates: ['2025-03-31', '2025-08-31'], fields: ['ticket', 'body'],
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
   window.localStorage.clear();   // last-used inputs would prefill the next test
   api.runPlan.mockResolvedValue(PLAN);
-  api.creditRiskSource.mockResolvedValue({ splits: { test: 41 }, fields: ['company'] });
   api.listMetrics.mockResolvedValue({ metrics: [] });
   api.listCustomTools.mockResolvedValue({ tools: [] });
   api.previewBatchCanvas.mockResolvedValue(STEPPED);
-  api.previewBatchSource.mockResolvedValue({ total: 3, samples: 3, steps: 1, steps_min: 1 });
 });
 
 function open({ hasCanvasSource = true, beforeRun, onSubmit } = {}) {
@@ -84,16 +79,21 @@ describe('previewSummary', () => {
       .toBe('4 runs');
   });
 
-  it('spells out that stepping multiplied the batch', () => {
-    // 4 samples, 6 dates each. The number you typed was 4.
+  it('describes trajectories by the fields the Input declares', () => {
     expect(previewSummary(STEPPED)).toBe(
-      '24 runs — 4 samples stepped over 6 dates each covering 2025-03-31 to 2025-08-31'
+      '24 runs — 4 trajectories by ticket (6 steps each), day from 2025-03-31 to 2025-08-31'
     );
   });
 
-  it('reports a range when windows differ in length', () => {
+  it('reports a range when trajectories differ in length', () => {
     expect(previewSummary({ ...STEPPED, steps_min: 3 }))
-      .toContain('3–6 dates each');
+      .toContain('3–6 steps each');
+  });
+
+  it('says nothing about trajectories when the Input declares none', () => {
+    const { sequence: _none, ...plain } = STEPPED;
+    expect(previewSummary(plain)).toBe('24 runs');
+    expect(previewSummary({ ...plain, sequence: null })).toBe('24 runs');
   });
 
   it('gets the singular right', () => {
@@ -123,6 +123,13 @@ describe('batch data source', () => {
 
     expect(await screen.findByLabelText(/data source/i)).toHaveValue('upload');
     expect(api.previewBatchCanvas).not.toHaveBeenCalled();
+  });
+
+  it('offers only the canvas Input and a file: no task-specific source', async () => {
+    const user = open();
+    await batchTab(user);
+    const options = [...(await screen.findByLabelText(/data source/i)).querySelectorAll('option')].map((o) => o.value);
+    expect(options).toEqual(['canvas', 'upload']);
   });
 
   it('saves the canvas first, so the count reflects what is on screen', async () => {
@@ -180,7 +187,7 @@ describe('how big this batch is', () => {
     const user = open();
     await batchTab(user);
 
-    expect(await screen.findByText(/company, news_batch/)).toBeInTheDocument();
+    expect(await screen.findByText(/ticket, body/)).toBeInTheDocument();
   });
 
   it('reports a source it cannot read instead of a count', async () => {
@@ -196,52 +203,12 @@ describe('how big this batch is', () => {
     const user = open({ hasCanvasSource: false });
     await batchTab(user);
 
-    await waitFor(() => expect(api.listMetrics).toHaveBeenCalled());
+    expect(await screen.findByTestId('evaluation-note')).toBeInTheDocument();
     expect(api.previewBatchUpload).not.toHaveBeenCalled();
   });
 });
 
-describe('stepping from the dialog', () => {
-  // Stepping used to be reachable only by editing the source node on the
-  // canvas, even though it is the setting that decides how big the batch is.
-  async function creditRiskTab() {
-    const user = open({ hasCanvasSource: false });
-    await batchTab(user);
-    await user.selectOptions(await screen.findByLabelText(/data source/i), 'credit_risk');
-    return user;
-  }
-
-  it('offers it alongside split and seed', async () => {
-    await creditRiskTab();
-    expect(await screen.findByLabelText(/walk the window/i)).toHaveValue('none');
-  });
-
-  it('re-counts the batch when it changes', async () => {
-    const user = await creditRiskTab();
-    api.previewBatchSource.mockResolvedValue({
-      total: 18, samples: 3, steps: 6, steps_min: 6, dates: ['2024-01-01', '2024-06-30'],
-    });
-    await user.selectOptions(screen.getByLabelText(/walk the window/i), 'monthly');
-
-    await waitFor(() => expect(api.previewBatchSource).toHaveBeenCalledWith(
-      'g1', expect.objectContaining({ step: 'monthly' })));
-    expect(await screen.findByText(/18 runs — 3 samples stepped over 6 dates each/))
-      .toBeInTheDocument();
-  });
-
-  it('runs with the same stepping it counted', async () => {
-    // A preview that counted 18 and a run that does 3 is worse than no count.
-    const user = await creditRiskTab();
-    api.runBatchSource.mockResolvedValue({ batch_id: 'b1' });
-    await user.selectOptions(screen.getByLabelText(/walk the window/i), 'weekly');
-    const run = await screen.findByRole('button', { name: /run batch/i });
-    await waitFor(() => expect(run).toBeEnabled());     // the count must land first
-    await user.click(run);
-
-    await waitFor(() => expect(api.runBatchSource).toHaveBeenCalledWith(
-      'g1', expect.objectContaining({ step: 'weekly' })));
-  });
-
+describe('starting a canvas batch', () => {
   it('starts the batch with the new graph id returned by save', async () => {
     const beforeRun = vi.fn().mockResolvedValue({ id: 'renamed-graph' });
     api.runBatchCanvas.mockResolvedValue({ batch_id: 'b1' });
@@ -358,7 +325,7 @@ describe('a source that yields several records forces a choice', () => {
   // record, silently. Now nothing runs until you say which.
   const fourRecords = {
     ...PLAN,
-    source: { node: 'feed', type: 'credit_risk', cardinality: 4, single_policy: 'first' },
+    source: { node: 'feed', type: 'project_feed', cardinality: 4, single_policy: 'first' },
     warnings: [],
   };
 
@@ -500,15 +467,13 @@ describe('the batch preview is authoritative', () => {
       .toBeInTheDocument();
   });
 
-  it('previews with the scoring it will run with', async () => {
-    api.listMetrics.mockResolvedValue({ metrics: [{ name: 'exact_match', description: '' }] });
+  it('leaves scoring to the canvas evaluators', async () => {
     const user = open();
     await batchTab(user);
-    await user.selectOptions(await screen.findByLabelText(/score the results/i), 'exact_match');
-    await user.type(screen.getByLabelText(/field holding the expected answer/i), 'verdict');
-
-    await waitFor(() => expect(api.previewBatchCanvas).toHaveBeenLastCalledWith(
-      'g1', expect.objectContaining({ metric: 'exact_match', label_key: 'verdict' })));
+    expect(await screen.findByTestId('evaluation-note')).toHaveTextContent('Evaluator nodes on the canvas');
+    expect(screen.queryByLabelText(/score the results/i)).not.toBeInTheDocument();
+    await waitFor(() => expect(api.previewBatchCanvas).toHaveBeenCalled());
+    expect(api.previewBatchCanvas.mock.calls.at(-1)[1]).not.toHaveProperty('metric');
   });
 
   it('tells you that stopping only spares what has not started', async () => {
@@ -520,12 +485,11 @@ describe('the batch preview is authoritative', () => {
 
 
 describe('workers are not capped at five', () => {
-  it('offers one worker per sample and accepts it', async () => {
-    api.previewBatchSource.mockResolvedValue({ total: 96, samples: 16, steps: 6, steps_min: 6, dates: ['a', 'b'], workers: 2, node_count: 8, node_executions: 768, fields: ['sample_json'] });
+  it('offers one worker per trajectory and accepts it', async () => {
+    api.previewBatchCanvas.mockResolvedValue({ total: 96, samples: 16, steps: 6, steps_min: 6, sequence: { group: 'id', order: 'at' }, dates: ['a', 'b'], workers: 2, node_count: 8, node_executions: 768, fields: ['record'] });
     const user = open();
     await batchTab(user);
-    await user.selectOptions(await screen.findByLabelText(/data source/i), 'credit_risk');
-    await user.click(await screen.findByRole('button', { name: /one per sample \(16\)/i }));
+    await user.click(await screen.findByRole('button', { name: /one per trajectory \(16\)/i }));
     expect(screen.getByLabelText(/workers/i)).toHaveValue(16);
   });
 });
@@ -630,10 +594,10 @@ it('keeps the original material after a failed file read and allows correction',
 describe('collect API inputs before batch execution', () => {
   it('waits for collection and runs the exact saved input snapshot', async () => {
     api.previewBatchCanvas.mockImplementation(async (_id, body) => body.collection_id
-      ? { total: 2, fields: ['news_batch'] }
+      ? { total: 2, fields: ['body'] }
       : { requires_collection: true, source: { type: 'gdelt_news', query: 'Acme' } });
     api.collectSource.mockResolvedValue({ id: 'collection-1', status: 'collecting', total: 2, completed: 0 });
-    api.sourceCollection.mockResolvedValue({ id: 'collection-1', status: 'ready', record_count: 2, sample: [{ news_batch: 'saved news' }] });
+    api.sourceCollection.mockResolvedValue({ id: 'collection-1', status: 'ready', record_count: 2, sample: [{ body: 'saved text' }] });
     api.runBatchCanvas.mockResolvedValue({ batch_id: 'b' });
     const user = open();
     await batchTab(user);
@@ -662,6 +626,46 @@ describe('collect API inputs before batch execution', () => {
     expect(screen.queryByRole('button', { name: 'Run batch' })).not.toBeInTheDocument();
     expect(api.runBatchCanvas).not.toHaveBeenCalled();
   });
+
+  it('keeps a running collection id only while it runs, and says it is reused', async () => {
+    api.previewBatchCanvas.mockImplementation(async (_id, body) => body.collection_id
+      ? { total: 2, fields: ['body'] }
+      : { requires_collection: true, source: { type: 'gdelt_news', query: 'Acme' } });
+    localStorage.setItem('source-collection:g1', 'old-1');
+    api.sourceCollection.mockResolvedValue({ id: 'old-1', status: 'ready', record_count: 2, sample: [] });
+    const user = open();
+    await batchTab(user);
+    expect(await screen.findByTestId('collection-restored')).toHaveTextContent('old-1');
+    await screen.findByText(/Collection complete/, {}, { timeout: 2500 });
+    expect(localStorage.getItem('source-collection:g1')).toBeNull();
+    expect(api.sourceCollection).toHaveBeenCalledTimes(1);
+  });
+
+  it('forgets a collection the server no longer has and stops polling', async () => {
+    api.previewBatchCanvas.mockResolvedValue({ requires_collection: true, source: { type: 'gdelt_news', query: 'Acme' } });
+    localStorage.setItem('source-collection:g1', 'gone-1');
+    api.sourceCollection.mockRejectedValue(Object.assign(new Error('HTTP 404'), { status: 404 }));
+    const user = open();
+    await batchTab(user);
+    await waitFor(() => expect(api.sourceCollection).toHaveBeenCalledTimes(1), { timeout: 2500 });
+    await waitFor(() => expect(localStorage.getItem('source-collection:g1')).toBeNull());
+    expect(await screen.findByRole('button', { name: 'Collect data' })).toBeEnabled();
+    expect(screen.queryByTestId('collection-restored')).not.toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(api.sourceCollection).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops polling after an error instead of repeating it every second', async () => {
+    api.previewBatchCanvas.mockResolvedValue({ requires_collection: true, source: { type: 'gdelt_news', query: 'Acme' } });
+    localStorage.setItem('source-collection:g1', 'broken-1');
+    api.sourceCollection.mockRejectedValue(Object.assign(new Error('HTTP 500'), { status: 500, body: { detail: 'server exploded' } }));
+    const user = open();
+    await batchTab(user);
+    expect(await screen.findByText('server exploded', {}, { timeout: 2500 })).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(api.sourceCollection).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem('source-collection:g1')).toBeNull();
+  });
 });
 
 it('offers streaming batches with a record threshold and no duplicate final run', async () => {
@@ -679,25 +683,6 @@ it('offers streaming batches with a record threshold and no duplicate final run'
   expect(screen.getByRole('button', { name: 'View batch 3' })).toBeEnabled();
   expect(screen.queryByRole('button', { name: 'Run batch' })).not.toBeInTheDocument();
   expect(api.runBatchCanvas).not.toHaveBeenCalled();
-});
-
-it('uses the selected release in both batch preview and batch start', async () => {
- const version='2026-09-10-random-dev-test-v1';
- api.creditRiskSource.mockResolvedValue({datasets:[{id:'contemporary',label:'Legacy'},{id:version,label:'Random 60:40'}],splits:{dev:64,test:43},fields:['company']});
- api.previewBatchSource.mockResolvedValue({total:707});
- api.runBatchSource.mockResolvedValue({batch_id:'selected-batch'});
- const user=open({hasCanvasSource:false});
- await batchTab(user);
- await user.selectOptions(screen.getByLabelText('Data source'),'credit_risk');
- await screen.findByRole('option',{name:'Random 60:40'});
- await user.selectOptions(screen.getByLabelText('Dataset version'),version);
- await user.selectOptions(screen.getByLabelText('Split'),'test');
- expect(screen.getByLabelText('Walk the window')).toBeEnabled();
- await user.selectOptions(screen.getByLabelText('Walk the window'),'weekly');
- await waitFor(()=>expect(api.previewBatchSource).toHaveBeenLastCalledWith('g1',expect.objectContaining({dataset:version,split:'test',step:'weekly'})));
- await waitFor(()=>expect(screen.getByRole('button',{name:'Run batch (707)'})).toBeEnabled());
- await user.click(screen.getByRole('button',{name:'Run batch (707)'}));
- expect(api.runBatchSource).toHaveBeenCalledWith('g1',expect.objectContaining({dataset:version,split:'test',step:'weekly'}));
 });
 
 it('offers whole-dataset preprocessing for a saved local input and submits it before batches', async () => {
@@ -741,4 +726,43 @@ it('uses the Input batch size for native requests without a second size field', 
   await waitFor(()=>expect(button).toBeEnabled());
   await user.click(button);
   expect(api.runBatchCanvas).toHaveBeenCalledWith('g1',{llm_batch_size:7});
+});
+
+describe('the preview says how memory orders the batch', () => {
+  const base = { total: 6, samples: 6, steps: 1, steps_min: 1, workers: 4, node_count: 1, node_executions: 6, fields: ['customer', 'text'] };
+
+  it('names the field records are ordered by', async () => {
+    api.previewBatchCanvas.mockResolvedValue({ ...base, memory_order: { mode: 'entity', field: 'customer', sequences: 2, unordered: 0 } });
+    const user = open();
+    await batchTab(user);
+    expect(await screen.findByTestId('memory-order')).toHaveTextContent('same customer run in order (2 sequences)');
+  });
+
+  it('says when the whole batch runs one at a time, and why', async () => {
+    api.previewBatchCanvas.mockResolvedValue({ ...base, memory_order: { mode: 'all', reason: "'triage' reads memory across all records" } });
+    const user = open();
+    await batchTab(user);
+    expect(await screen.findByTestId('memory-order')).toHaveTextContent('one at a time');
+  });
+});
+
+describe('grouping a DataLoader run by period names its date field', () => {
+  const loaderPreview = { total: null, deferred: true, record_limit: 0, fields: ['id', 'created', 'text'],
+    source: { type: 'canvas', node: 'input', config: { type: 'dataloader', loader: 'python', read_batch_size: 10 } },
+    nodes: [{ name: 'use' }], skipped: [], node_count: 1 };
+
+  it('cannot start by week until a date field is chosen, and offers the Input fields', async () => {
+    api.previewBatchCanvas.mockResolvedValue(loaderPreview);
+    const user = open();
+    await batchTab(user);
+    await user.selectOptions(await screen.findByLabelText(/execution grouping/i), 'weekly');
+    const dateField = screen.getByLabelText(/date field/i);
+    expect(dateField).toHaveValue('');
+    const run = () => screen.getByRole('button', { name: /^run batch/i });
+    expect(run()).toBeDisabled();
+    const offered = [...document.querySelectorAll('#loader-date-fields option')].map(o => o.value);
+    expect(offered).toEqual(['id', 'created', 'text']);
+    await user.type(dateField, 'created');
+    await waitFor(() => expect(run()).toBeEnabled());
+  });
 });

@@ -39,7 +39,8 @@ export function taskToNode(task, extra = {}) {
         description: task.description || '',
         inputs: [],
         outputs: task.outputs || [],
-        source: task.source || { type: 'credit_risk', split: '', n: 1, seed: 42 },
+        // No type until one is chosen in the Inspector: nothing is assumed.
+        source: task.source || {},
         save_output: task.save_output !== false,
         ...extra,
       },
@@ -156,7 +157,7 @@ export function flowToGraph(graphMeta, nodes, edges) {
             name: n.id,
             kind: 'source',
             description: n.data.description || '',
-            source: n.data.source || { type: 'credit_risk', split: '', n: 1, seed: 42 },
+            source: n.data.source || {},
             outputs: n.data.outputs || [],
             save_output: n.data.save_output !== false,
             enabled: n.data.enabled !== false,
@@ -261,8 +262,8 @@ export function memoryOverlay(nodes, { wrote = {}, resources = [], positions = {
         kind: 'mem0', space_id: policy.space_id, title: spaceNames[policy.space_id] || `Mem0 ${policy.space_id.slice(0, 8)}`, owner: null,
       }, { x: n.position.x + 300, y: n.position.y + 130 });
     }
-    return addStore(`mem:${n.id}`, {
-      owner: n.id, title: `${n.id} memory`, kind: policy.kind || (policy.match ? 'table' : 'recall'),
+    return addStore(`mem:${policy.store_id || n.id}`, {
+      owner: n.id, title: `${n.id} memory`, kind: policy.kind || (policy.version === 2 || policy.match ? 'table' : 'recall'), version: policy.version, time_filter: policy.time_filter,
       match: policy.match || '', at: policy.at || '',
       keeps: [...keptFields(policy, n.data.outputs, 'outputs'), ...keptFields(policy, n.data.inputs, 'inputs')],
       write_enabled: policy.write_enabled !== false, retrieve: policy.retrieve ?? 3,

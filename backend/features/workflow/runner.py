@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 
 from llm import get_evoagentx_llm
 
+from backend.features.memory.identity import execution_snapshot
+from backend.features.memory.bindings import runtime_context
 from backend.api import memory_policy
 from backend.api import memory_store
 from backend.api import table_store
@@ -177,8 +179,23 @@ def cancel_run(run_id: str) -> dict:
     state["_cancel_requested"] = True
     cancel = state.get("_cancel")
     if cancel is not None:
-        cancel()
+        try:
+            cancel()
+        except RuntimeError:
+            # The run settled between the check above and here.
+            pass
     return {"cancelled": True}
+
+
+def _cancel_on(loop, task) -> None:
+    """Cancel `task` from another thread; a loop that already closed means
+    the run has settled, and there is nothing left to stop."""
+    if loop.is_closed():
+        return
+    try:
+        loop.call_soon_threadsafe(task.cancel)
+    except RuntimeError:
+        pass
 
 
 def abandon_run(run_id: str) -> dict:
@@ -307,7 +324,7 @@ async def execute_llm_node(agent, task: dict, inputs: dict, state: dict) -> dict
                 block = await memory_policy.recall_async(
                     state.get('_harness_memories', {}), task, inputs,
                     history=lambda name: memory_store.list_entries(state.get('graph_id', 'graph'), name),
-                    run_data=state.get('_effective_inputs'), table=table_store,
+                    run_data=runtime_context(state), table=table_store,
                     graph_id=state.get('graph_id', 'graph'))
                 if state.get('session') and memory_policy.policy(task)['read_enabled']:
                     block = memory_policy.session_block(stm_store.recent(state['graph_id'], state['session'], memory_policy.policy(task)['session_recall']), task) + block
@@ -479,13 +496,13 @@ async def _walk(plan: dict, graph_doc: dict, inputs: dict, state: dict,
                 "output": out,
             }
             # What memory and the artifacts see; source fields are context
-            # (the obligor, the date) even though they only flow along edges.
+            # (the subject, the date) even though they only flow along edges.
             state["_effective_inputs"] = dict(env.data)
             status[name]["status"] = "completed"
             status[name]["output"] = {k: _clip(v) for k, v in out.items()} or None
             from backend.features.evaluation import evaluator_tools
             immediate = [t['name'] for t in graph_doc.get('tasks', []) if t.get('kind') == 'evaluator'
-                         and (t.get('evaluator') or {}).get('timing') == 'node'
+                         and evaluator_tools.timing_of(t.get('evaluator')) == 'node'
                          and t['name'] not in state.get('evaluations', {})
                          and all(e['source'] in values for e in graph_doc.get('edges', []) if e.get('target') == t['name'])]
             if immediate:
@@ -505,6 +522,7 @@ async def _walk(plan: dict, graph_doc: dict, inputs: dict, state: dict,
     return result
 
 
+@execution_snapshot
 def _execute_run(run_id: str, graph_doc: dict, inputs: dict) -> None:
     """Run a graph as the plan describes it: one DAG, every kind of node.
 
@@ -566,7 +584,7 @@ def _execute_run(run_id: str, graph_doc: dict, inputs: dict) -> None:
         loop = asyncio.new_event_loop()
         try:
             task = loop.create_task(_walk(plan, graph_doc, inputs, state, agents, env))
-            state["_cancel"] = lambda: loop.call_soon_threadsafe(task.cancel)
+            state["_cancel"] = lambda: _cancel_on(loop, task)
             if state.get("_cancel_requested"):
                 task.cancel()
             result = loop.run_until_complete(task)
@@ -583,7 +601,8 @@ def _execute_run(run_id: str, graph_doc: dict, inputs: dict) -> None:
         if graph is not None:
             _save_ltm(graph_doc, memories, graph, env, state)
         try:
-            review = review_mod.maybe_create_review(state, gray_zone=state.get("_gray_zone"))
+            review = review_mod.maybe_create_review(state, gray_zone=state.get("_gray_zone"),
+                                                    rule=graph_doc.get("review"))
             if review:
                 state["review_status"] = "awaiting_review"
                 state["review_id"] = review["review_id"]
@@ -602,20 +621,30 @@ def _execute_run(run_id: str, graph_doc: dict, inputs: dict) -> None:
     except Exception as e:
         # The sentence first, the traceback beside it — not instead of it.
         if isinstance(e, NodeError):
-            _set_status(state, "failed", error=e.message, node_error=e.as_dict(),
-                        debug_error=traceback.format_exc())
+            failure = dict(error=e.message, node_error=e.as_dict(), debug_error=traceback.format_exc())
         else:
-            _set_status(state, "failed", error=f"{type(e).__name__}: {e}"[:500],
-                        node_error=None, debug_error=traceback.format_exc())
+            failure = dict(error=f"{type(e).__name__}: {e}"[:500], node_error=None,
+                           debug_error=traceback.format_exc())
         for n in state.get("nodes") or []:
             if n.get("status") == "running":
                 n["status"] = "failed"
+        # Evaluators that run after each run see failed runs too: a failure is
+        # a result the user's evaluation code has to be able to count. Done
+        # before the status is published, as on success, so a client that
+        # stops polling at "failed" already finds the report.
+        try:
+            from backend.features.evaluation.evaluator_tools import evaluate_runs
+            state.setdefault('evaluations', {}).update(evaluate_runs(
+                graph_doc, [{**_public(state), 'status': 'failed', 'error': failure['error']}], timing={'run'}))
+        except Exception:
+            state.setdefault('evaluations_error', traceback.format_exc())
+        _set_status(state, "failed", **failure)
         if graph is not None:
             # A node set to remember failed runs too: what did complete has
             # real outputs, and what went wrong is often the thing to keep.
             _save_ltm(graph_doc, memories, graph, env, state, succeeded=False)
     finally:
-        _persist_run(state)
+        persisted = _persist_run(state)
         try:
             state["_save_output_flags"] = {
                 t.get("name"): t.get("save_output", True)
@@ -627,6 +656,25 @@ def _execute_run(run_id: str, graph_doc: dict, inputs: dict) -> None:
             )
         except Exception:
             pass
+        if persisted:
+            # Only once it is on disk: get_run falls back to the file.
+            _release(run_id, state)
+
+
+def _release(run_id: str, state: dict) -> None:
+    """Forget a settled run: it is on disk, and get_run reads it from there.
+
+    The live state holds the graph, the framework agents and the memory
+    handles; kept for every run, a long batch holds all of them at once. A
+    run abandoned but still executing stays until its thread ends here.
+    """
+    with _lock:
+        if state.get("status") == "running" and not state.get("_abandoned"):
+            return
+        for key in [k for k in state if k.startswith("_")]:
+            state.pop(key, None)
+        if _runs.get(run_id) is state:
+            _runs.pop(run_id, None)
 
 
 def _run_source_nodes(source_nodes: list[dict], inputs: dict, state: dict,
@@ -830,7 +878,7 @@ def _recall_before_running(agent, task: dict, stores: dict, state: dict,
                 history=lambda agent: memory_store.list_entries(graph_id, agent),
                 # Source-node outputs included, so a node dated by `as_of`
                 # can be held to it even though it never takes it as an input.
-                run_data=state.get("_effective_inputs"),
+                run_data=runtime_context(state),
                 table=table_store, graph_id=graph_id,
             )
         except Exception:
@@ -919,12 +967,28 @@ def _save_ltm(graph_doc: dict, memories: dict, graph, wf, state: dict,
             node_outputs = {
                 p.name: exec_data[p.name] for p in (node.outputs or []) if p.name in exec_data
             }
+            io = state.get("_node_io", {}).get(node.name)
+            if io is not None:
+                node_inputs, node_outputs = io.get("inputs") or {}, io.get("output") or {}
+            memory_context = runtime_context(state, exec_data)
+            resolved_context = memory_policy.with_context(task, node_inputs, memory_context)
+            missing_context = [field for field in memory_policy.policy(task)["context"] if field not in resolved_context]
+            if missing_context:
+                state.setdefault("memory_notes", []).append(
+                    f"Memory '{node.name}': optional recorded fields unavailable: {', '.join(missing_context)}. Other content is retained.")
             payload = memory_policy.select(
                 task, node_inputs, node_outputs, succeeded=succeeded,
-                run_data=exec_data,
+                run_data=memory_context,
             )
             if payload is None:
                 continue
+            for gap in payload.get("unbound") or []:
+                what = ("entity" if gap["label"] == "subject" else "time")
+                reads = ("reads matched on an entity" if gap["label"] == "subject"
+                         else "time-filtered reads")
+                state.setdefault("memory_notes", []).append(
+                    f"Memory '{node.name}': this run had no '{gap['reference']}' ({what}); "
+                    f"the record was kept without it and is left out of {reads}.")
             # The same selection, also appended to the session log when the run
             # is part of one: what to keep is the node's decision, and it does
             # not change with how long it is kept for.
@@ -951,8 +1015,11 @@ def _save_ltm(graph_doc: dict, memories: dict, graph, wf, state: dict,
             # a read-modify-write under a lock used to do, and badly.
             row = memory_policy.table_write(task, payload)
             if row is not None:
-                table_store.upsert(graph_id, node.name, row["subject"],
-                                   row["at"], row["payload"], _utcnow())
+                settings = memory_policy.policy(task)
+                table_store.write(graph_id, node.name, row["subject"],
+                                  row["at"], row["payload"], _utcnow(),
+                                  mode=settings["write_mode"], key=row.get("key"),
+                                  execution_id=state.get("run_id"))
                 state.setdefault("memory_written", []).append(
                     {"node": node.name, "kind": "table",
                      "subject": row["subject"], "at": row["at"]})
@@ -962,7 +1029,9 @@ def _save_ltm(graph_doc: dict, memories: dict, graph, wf, state: dict,
             # corpus, since the two storage kinds have different semantics.
             if _keeps_table(task):
                 state.setdefault("memory_notes", []).append(
-                    f"Node '{node.name}' produced no table-memory subject; nothing was stored."
+                    f"Memory '{node.name}': this run had no '{memory_policy.policy(task)['match']}', and this "
+                    f"memory updates one record per entity and date, so nothing was stored. "
+                    f"Switch Write mode to Append to keep records without an entity."
                 )
                 continue
             with _ltm_lock(f"{graph_id}/{node.name}"):
@@ -986,7 +1055,7 @@ def _write_entry(memory, graph_id: str, node_name: str, task: dict,
                  payload: dict, as_message) -> None:
     """Store this run's selection under the subject it is about.
 
-    A node that tracks a subject keeps one entry per subject — the obligor's
+    A node that tracks a subject keeps one entry per subject — the subject's
     whole history — rather than one per run. A run is a dated state folded
     into that entry, so "what has this company done over time" is a thing you
     can open, not something to be reassembled from scattered days.
@@ -1087,14 +1156,15 @@ def mark_interrupted() -> int:
     return marked
 
 
-def _persist_run(state: dict) -> None:
+def _persist_run(state: dict) -> bool:
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     data = _public(state)
     try:
         with open(RUNS_DIR / f"{state['run_id']}.json", "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+        return True
     except OSError:
-        pass
+        return False
 
 
 def _public(state: dict) -> dict:

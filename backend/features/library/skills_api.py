@@ -10,8 +10,7 @@ saving keeps the previous version under `.versions/`.
 Skills differ from tools: a tool is code the workflow *calls*, a skill is
 standing instructions a node *follows* (a taxonomy, a rubric, a house style).
 Attaching one to an LLM node appends its content to that node's system
-prompt at run time -- deterministic, no extra LLM call -- which is how
-credit_risk already injects its taxonomy and scoring rubric.
+prompt at run time -- deterministic, no extra LLM call.
 
 Routes: GET/POST/DELETE /api/skills (mounted via this module's router).
 """

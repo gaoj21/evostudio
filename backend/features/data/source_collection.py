@@ -25,10 +25,26 @@ def node_for(graph):
 
 
 def fingerprint(node, graph=None):
+    """What the collected data depends on: the Input's source settings and
+    those of its references — not where the node sits on the canvas or its
+    description, which change nothing about the records."""
+    refs = composition.references(graph, node) if graph else []
+    key = {"name": node.get("name"), "source": node.get("source") or {}}
+    if refs:
+        key = {"primary": key, "references": [{"name": r.get("name"), "source": r.get("source") or {}} for r in refs]}
+    return hashlib.sha256(json.dumps(key, sort_keys=True, default=str).encode()).hexdigest()
+
+def _legacy_fingerprint(node, graph=None):
+    # Collections saved before the fingerprint ignored layout stay usable.
     refs = composition.references(graph, node) if graph else []
     if refs:
         node = {"primary": node, "references": refs}
     return hashlib.sha256(json.dumps(node, sort_keys=True).encode()).hexdigest()
+
+
+def matches(job, node, graph):
+    return job.get('fingerprint') in (fingerprint(node, graph), _legacy_fingerprint(node, graph))
+
 
 def save(job):
     path = directory() / (job['id'] + '.json')
@@ -54,7 +70,7 @@ def read(graph_id, collection_id):
 
 def records_for(graph, node, collection_id):
     job = read(graph['id'], collection_id)
-    if job['fingerprint'] != fingerprint(node, graph):
+    if not matches(job, node, graph):
         raise sources.SourceError('Input source changed. Collect again before running.')
     if job['status'] != 'ready':
         raise sources.SourceError('Input collection is not complete.')
@@ -67,10 +83,16 @@ def public(job):
         'sample': job.get('records', [])[:3],
         'source': {key: job['config'].get(key) for key in ('type', 'query', 'days', 'start_date', 'end_date', 'batch_step')}}
 
+def sequence_inputs(graph):
+    """Keep the trajectory fields an Input declares through the mapping, so
+    the batch can still group the records it runs."""
+    declared = sources.input_sequence(graph) or {}
+    return [{'name': declared[k], 'required': False} for k in ('group', 'order') if declared.get(k)]
+
+
 def mapped_chunk(graph, node, records, metric, label_key):
     _, inputs = graphs.validate_graph(graph)
-    inputs = [*inputs, *composition.all_outputs(graph),
-              {'name': 'sample_id', 'required': False}, {'name': 'as_of', 'required': False}]
+    inputs = [*inputs, *composition.all_outputs(graph), *sequence_inputs(graph)]
     records = preprocess.apply(graph, records)
     labels = None
     if metric:
@@ -91,6 +113,8 @@ def execute_collection(job, graph, node, control, workers, metric, label_key):
     prepared = job['mode'] == 'prepare'
     run_graph = graph
     declared = {o['name'] for o in node.get('outputs', [])}
+    import time
+    last_save = [0.0]
     def receive(record):
         control.check()
         if not isinstance(record, dict) or declared - record.keys():
@@ -100,7 +124,12 @@ def execute_collection(job, graph, node, control, workers, metric, label_key):
         with _lock:
             job['records'].append(record)
             job['record_count'] = len(job['records'])
-            save(job)
+            # Rewriting the whole job (every record so far) per record made a
+            # long collection slower with each record and held the lock the
+            # status poll needs. At most once a second; the end saves it all.
+            if time.monotonic() - last_save[0] >= 1.0:
+                save(job)
+                last_save[0] = time.monotonic()
         if streaming:
             pending.put(record)
     def run_chunk(records):
@@ -168,6 +197,22 @@ def execute_collection(job, graph, node, control, workers, metric, label_key):
             raise sources.SourceError('No records found. Adjust the query or date range.')
         with _lock:
             job['collection_complete'] = True
+        # Keep what was fetched as a data resource: a DataLoader can read and
+        # preprocess it in code, and re-runs use the same data instead of
+        # fetching again.
+        try:
+            from backend.features.data import data_resources
+            config = node['source'].get('source_config') or node['source']
+            label = config.get('query') or config.get('url') or config.get('cik') or config.get('type') or 'source'
+            resource = data_resources.create_from_records(
+                job['records'], f"Collected · {label} · {job['id'][:8]} · {len(job['records'])} records",
+                graph.get('id'), origin={'collection_id': job['id'], 'source': copy.deepcopy(config)})
+            with _lock:
+                job['resource_id'], job['resource_name'] = resource['id'], resource['name']
+                save(job)
+        except Exception as exc:
+            with _lock:
+                job['resource_error'] = f"Collected records could not be saved as a data resource: {exc}"
         if prepared:
             control.check()
             with _lock:
@@ -255,10 +300,13 @@ def collect(graph_id: str, body: dict = Body(default={})):
             if not found:
                 raise sources.SourceError('Choose an existing whole-dataset preprocessing tool.')
             preprocess._single_param(found[1])
-        if node['source']['type'] == 'gdelt_news':
+        # Range options apply to the API source itself, also when a DataLoader wraps it.
+        target = (node['source'].get('source_config') if node['source']['type'] == 'dataloader'
+                  else node['source'])
+        if (target or {}).get('type') == 'gdelt_news':
             for key in ('start_date', 'end_date', 'batch_step'):
                 if key in body:
-                    node['source'][key] = body[key]
+                    target[key] = body[key]
         job = {'id': uuid.uuid4().hex, 'graph_id': graph_id, 'fingerprint': original,
                'preprocess_tool': whole_tool, 'phase': 'collecting', 'llm_batch_size': size,
                'config': node['source'], 'reference_inputs': composition.snapshot(graph, node), 'status': 'collecting', 'completed': 0, 'total': None,

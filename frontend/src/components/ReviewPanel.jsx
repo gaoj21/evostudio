@@ -1,6 +1,23 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 
+// Bookkeeping every review carries; the rest is what the reviewer judges.
+const REVIEW_META = new Set(['review_id', 'run_id', 'graph_id', 'status', 'node', 'score', 'zone', 'fields', 'output',
+  'approve_label', 'reject_label', 'final_action', 'note', 'created_at', 'resolved_at', 'resolution']);
+
+const shown = (value) => (value !== null && typeof value === 'object' ? JSON.stringify(value) : String(value));
+
+// The fields the review rule chose to show; a review saved before rules had
+// them shows whatever other keys it has, as they are.
+export function reviewFields(review) {
+  const source = review.fields && typeof review.fields === 'object'
+    ? review.fields
+    : Object.fromEntries(Object.entries(review).filter(([key]) => !REVIEW_META.has(key)));
+  return Object.entries(source)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => [key, shown(value)]);
+}
+
 export default function ReviewPanel({ open, onClose }) {
   const [reviews, setReviews] = useState([]);
   const [notes, setNotes] = useState({});
@@ -37,49 +54,51 @@ export default function ReviewPanel({ open, onClose }) {
   const pending = reviews.filter((r) => r.status === 'pending');
   const resolved = reviews.filter((r) => r.status !== 'pending');
 
-  const card = (r) => (
-    <div className="batch-item" key={r.review_id}>
-      <div className="batch-item-head">
-        <span>{r.company || '(unknown company)'}</span>
-        <span className={`node-status status-${r.status === 'pending' ? 'running' : r.status === 'approved' ? 'completed' : 'failed'}`}>
-          {r.status}
-        </span>
-      </div>
-      <div className="muted small">
-        {r.topic && <span>topic: {r.topic} · </span>}
-        {r.severity && <span>severity: {r.severity} · </span>}
-        {r.risk_level && <span>level: {r.risk_level} · </span>}
-        score {r.score ?? '—'} (gray zone {r.zone?.[0]}–{r.zone?.[1]})
-      </div>
-      {r.summary && <div className="small">{r.summary}</div>}
-      {r.decision?.rationale && <div className="muted small">rationale: {r.decision.rationale}</div>}
-      {r.status === 'pending' ? (
-        <div className="review-actions">
-          <input
-            placeholder="note (optional)"
-            value={notes[r.review_id] || ''}
-            onChange={(e) => setNotes((n) => ({ ...n, [r.review_id]: e.target.value }))}
-          />
-          <button className="primary" onClick={() => resolve(r.review_id, 'approve')}>
-            Approve (alert)
-          </button>
-          <button onClick={() => resolve(r.review_id, 'reject')}>
-            Reject (suppress)
-          </button>
+  const card = (r) => {
+    const approve = r.approve_label || 'approved';
+    const reject = r.reject_label || 'rejected';
+    return (
+      <div className="batch-item" key={r.review_id}>
+        <div className="batch-item-head">
+          <span>{r.node || 'Output'}{r.run_id ? ` · run ${r.run_id}` : ''}</span>
+          <span className={`node-status status-${r.status === 'pending' ? 'running' : r.status === 'approved' ? 'completed' : 'failed'}`}>
+            {r.status}
+          </span>
         </div>
-      ) : (
-        <div className="muted small">
-          → {r.final_action} {r.note ? `· note: ${r.note}` : ''} · {r.resolved_at}
-        </div>
-      )}
-    </div>
-  );
+        {(r.score != null || r.zone) && <div className="muted small">
+          score {r.score ?? '—'}{r.zone ? ` (review band ${r.zone[0]}–${r.zone[1]})` : ''}
+        </div>}
+        {reviewFields(r).map(([key, value]) => (
+          <div className="small" key={key}><span className="muted">{key}:</span> {value}</div>
+        ))}
+        {r.status === 'pending' ? (
+          <div className="review-actions">
+            <input
+              placeholder="note (optional)"
+              value={notes[r.review_id] || ''}
+              onChange={(e) => setNotes((n) => ({ ...n, [r.review_id]: e.target.value }))}
+            />
+            <button className="primary" onClick={() => resolve(r.review_id, 'approve')}>
+              Approve ({approve})
+            </button>
+            <button onClick={() => resolve(r.review_id, 'reject')}>
+              Reject ({reject})
+            </button>
+          </div>
+        ) : (
+          <div className="muted small">
+            → {r.final_action} {r.note ? `· note: ${r.note}` : ''} · {r.resolved_at}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal review-modal" onClick={(e) => e.stopPropagation()}>
         <div className="drawer-head">
-          <h3 style={{ margin: 0 }}>Review — alerts in the gray zone</h3>
+          <h3 style={{ margin: 0 }}>Review — outputs waiting for a decision</h3>
           <button onClick={onClose}>✕</button>
         </div>
         {error && <div className="muted small batch-error">{String(error)}</div>}

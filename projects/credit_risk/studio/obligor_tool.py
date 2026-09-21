@@ -11,8 +11,8 @@ from typing import Any, Dict, List, Optional
 
 from evoagentx.tools.tool import Tool, Toolkit
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-CANDIDATES_CSV = _REPO_ROOT / "projects" / "credit_risk" / "dataset" / "contemporary" / "candidates.csv"
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+CANDIDATES_CSV = Path(__file__).resolve().parents[1] / "dataset" / "contemporary" / "candidates.csv"
 
 _registry = None
 _registry_path = None

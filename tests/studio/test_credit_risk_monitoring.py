@@ -58,3 +58,39 @@ def test_table_recall_preserves_alerts_after_a_long_profile(graph):
         {'at': '2025-01-01', 'payload': {'outputs': {'context': context}}}
     ], task, 'Acme', '2025-02-01')
     assert 'CONFIRMED UNRESOLVED MISSED PAYMENT' in block
+
+
+def test_memory_is_dated_by_as_of_and_needs_no_window(graph):
+    """The risk pipeline dates everything by as_of. Its memory must work on a
+    feed record that carries no window_start/window_end at all."""
+    for name in ('investigate', 'decide'):
+        task = next(t for t in graph['tasks'] if t['name'] == name)
+        memory = task['memory']
+        assert memory['at'] == 'as_of' and memory['match'] == 'company'
+        assert not [f for f in memory.get('context') or [] if f.startswith('window')]
+        payload = memory_policy.select(
+            task, {'company': 'Acme'}, {task['outputs'][0]['name']: '{"x": 1}'},
+            run_data={'company': 'Acme', 'as_of': '2025-03-01',
+                      'detection': '{"source": "news"}'})
+        assert 'unbound' not in payload
+        assert memory_policy.table_write(task, payload)['at'].startswith('2025-03-01')
+
+
+def test_presets_and_api_sources_speak_as_of():
+    from credit_risk.studio.presets import credit_risk_presets
+    from backend.api import registry
+    from backend.features.data.source_apis import all_source_types
+    SOURCE_TYPES = all_source_types()
+    # The presets reach the palette through the plugin, grouped under it.
+    palette = {p['type']: p for p in registry.node_presets()}
+    for preset in credit_risk_presets():
+        assert palette[preset['type']]['group'] == 'Credit risk'
+    for preset in credit_risk_presets():
+        d = preset['defaults']
+        names = [i['name'] for i in d.get('inputs') or []]
+        assert not [n for n in names if n.startswith('window')], preset['type']
+        assert '{window_end}' not in d['prompt'] and '{window_start}' not in d['prompt']
+    detect = next(p for p in credit_risk_presets() if p['type'] == 'cr_detect')
+    assert 'as_of' in [i['name'] for i in detect['defaults']['inputs']]
+    for kind in ('credit_risk', 'gdelt_news', 'sec_edgar_8k'):
+        assert 'as_of' in SOURCE_TYPES[kind]['outputs'], kind

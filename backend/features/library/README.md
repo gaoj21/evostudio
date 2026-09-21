@@ -6,7 +6,7 @@
 
 - `skills_api.py` — Skills for EvoAgentX Studio.
 - `custom_tools.py` — User-defined tools for EvoAgentX Studio.
-- `tools_registry.py` — Tool registry for EvoAgentX Studio.
+- `tools_registry.py` — Tool registry for EvoAgentX Studio. `toolkits()` = `BUILTIN_TOOLKITS`（通用框架工具）+ 项目插件 `toolkits()` 提供的工具（同名时插件覆盖内置）。领域工具（例如 credit_risk 的 `ObligorMatchToolkit`）不写进内置表，放在 `projects/<p>/studio_plugin.py`，见 [projects/README.md](../../../projects/README.md)。
 
 - `data_evaluation_tools.py` — DataLoader and Evaluator exposure through the ordinary tool registry.
 

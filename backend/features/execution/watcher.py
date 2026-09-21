@@ -12,6 +12,7 @@ Interval floor: 5 minutes (GDELT fair use); EAX_WATCH_DEBUG=1 allows 0.2 min
 for testing.
 """
 
+import copy
 import hashlib
 import json
 import os
@@ -68,13 +69,20 @@ def _save_seen(graph_id: str, node_name: str, data: dict) -> None:
 # Per-type polling: return a list of NEW records (one run per record)
 # ---------------------------------------------------------------------------
 
-def _poll_credit_risk(node: dict, seen: dict) -> list[dict]:
+def _poll_plugin(node: dict, seen: dict, plugin: dict) -> list[dict]:
+    """A project Input type: its records, minus those already seen by the
+    field the type names as its watch key (all of them, without one)."""
     config = dict(node.get("source") or {})
-    config["seed"] = int(config.get("seed") or 42) + seen.get("fire_count", 0)
     records = sources.records_from_source_node({**node, "source": config})
-    fresh = [r for r in records if r.get("sample_id") not in seen["seen"]]
-    for r in fresh:
-        seen["seen"].append(r.get("sample_id"))
+    key = plugin.get("watch_key")
+    fresh = []
+    for record in records:
+        ident = str(record.get(key)) if key and record.get(key) not in (None, "") else hashlib.sha256(
+            json.dumps(record, sort_keys=True, default=str).encode()).hexdigest()
+        if ident in seen["seen"]:
+            continue
+        seen["seen"].append(ident)
+        fresh.append(record)
     return fresh
 
 
@@ -144,8 +152,10 @@ def _poll_http_api(node: dict, seen: dict) -> list[dict]:
 
 def poll_source(node: dict, seen: dict, last_poll: str | None) -> list[dict]:
     type_ = (node.get("source") or {}).get("type")
-    if type_ == "credit_risk":
-        return _poll_credit_risk(node, seen)
+    from backend.features import plugins
+    plugin = plugins.source_type(type_)
+    if plugin is not None:
+        return _poll_plugin(node, seen, plugin)
     if type_ == "gdelt_news":
         return _poll_gdelt(node, seen, last_poll)
     if type_ == "sec_edgar_8k":
@@ -162,11 +172,9 @@ def poll_source(node: dict, seen: dict, last_poll: str | None) -> list[dict]:
 def _next_fire(schedule: dict, from_dt: datetime) -> datetime:
     mode = schedule.get("mode")
     if mode == "daily":
+        from backend.features.execution.scheduler import next_local_time
         hh, mm = (schedule.get("time") or "09:00").split(":")[:2]
-        target = from_dt.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
-        if target <= from_dt:
-            target += timedelta(days=1)
-        return target
+        return next_local_time(from_dt, int(hh), int(mm))
     # interval
     minutes = max(float(schedule.get("interval_minutes") or 60), _min_interval())
     return from_dt + timedelta(minutes=minutes)
@@ -186,13 +194,18 @@ def _watch_loop(graph: dict, node: dict, stop: threading.Event, state: dict) -> 
             break
         state["last_poll"] = _utcnow()
         try:
-            records = poll_source(node, seen, state.get("last_fire"))
-            seen["fire_count"] = seen.get("fire_count", 0) + 1
-            _save_seen(graph_id, node_name, seen)
+            # Poll into a copy: a fetch that fails halfway, or a run that
+            # fails to start, must not mark its records as seen — they would
+            # never be run.
+            pending = copy.deepcopy(seen)
+            records = poll_source(node, pending, state.get("last_fire"))
+            pending["fire_count"] = pending.get("fire_count", 0) + 1
             for record in records:
                 run_id = runner.start_run(graph, record, background=True)
                 state["fired_runs"] = state.get("fired_runs", 0) + 1
                 state["last_run_id"] = run_id
+            seen = pending
+            _save_seen(graph_id, node_name, seen)
             if records:
                 state["last_fire"] = state["last_poll"]
             state["last_error"] = None

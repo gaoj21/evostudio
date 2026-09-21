@@ -21,7 +21,7 @@ def primary(graph):
         return streams[0]
     if len(nodes) == 1:
         return nodes[0]
-    raise sources.SourceError('Choose one per-record Input (for example news). Set other datasets to Shared reference (for example an obligor list).')
+    raise sources.SourceError('Choose one per-record Input. Set the other datasets to Shared reference (a list every record should see).')
 
 
 def references(graph, main=None):

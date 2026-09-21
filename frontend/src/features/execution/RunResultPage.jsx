@@ -8,7 +8,22 @@ import JsonView from '../../components/JsonView.jsx';
 
 const RESULT_PANEL_IDS = ['result-detail', 'result-chat'];
 
-export default function RunResultPage({ graphId, sourceNames = [], run, runs = [], onSelectRun, taskName, onBack }) {
+const isSourceNode = (node, sourceNames) => node.kind === 'source' || sourceNames.includes(node.name) || String(node.name || '').startsWith('source_');
+const shortScalar = value => (typeof value === 'string' && value.trim() && value.length <= 60) || typeof value === 'number' || typeof value === 'boolean';
+
+// What names a run in the list: the record its Input produced, read by the
+// trajectory fields the Input declares, else its first two short values.
+export function runLabel(item, { sourceNames = [], sequence = null } = {}) {
+  const fromSource = (item.nodes || []).find(node => isSourceNode(node, sourceNames)
+    && node.output && typeof node.output === 'object' && !Array.isArray(node.output))?.output;
+  const record = fromSource || item.input_summary || item.inputs || {};
+  const pick = keys => keys.map(key => record[key]).filter(shortScalar);
+  const declared = sequence?.group ? pick([sequence.group, sequence.order].filter(Boolean)) : [];
+  const parts = declared.length ? declared : pick(Object.keys(record)).slice(0, 2);
+  return parts.join(' · ') || item.run_id;
+}
+
+export default function RunResultPage({ graphId, sourceNames = [], sequence = null, run, runs = [], onSelectRun, taskName, onBack }) {
   const layout = useLayoutMode();
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: `results-${layout}`, panelIds: RESULT_PANEL_IDS });
   const [result, setResult] = useState(null);
@@ -19,10 +34,7 @@ export default function RunResultPage({ graphId, sourceNames = [], run, runs = [
   const [batch, setBatch] = useState('all');
   const [query, setQuery] = useState('');
   const batches = [...new Set(runs.map(item => item.batch_id).filter(Boolean))];
-  const label = item => {
-    const source = item.nodes?.find(node => node.name === 'feed')?.output || item.input_summary || item.inputs || {};
-    return [source.company || source.name, source.as_of].filter(Boolean).join(' · ') || item.run_id;
-  };
+  const label = item => runLabel(item, { sourceNames, sequence });
   const visibleRuns = runs.filter(item => (batch === 'all' || (batch === 'single' ? !item.batch_id : item.batch_id === batch)) && `${label(item)} ${item.run_id} ${item.status}`.toLowerCase().includes(query.toLowerCase()));
 
 
@@ -88,7 +100,7 @@ export default function RunResultPage({ graphId, sourceNames = [], run, runs = [
       <EvaluatorReports reports={result.evaluations} />
       <details className="run-result-content result-input-data" aria-label="Input data" open><summary>Input data</summary>
         {Object.keys(result.inputs || {}).length > 0 ? <JsonView value={result.inputs} /> : <p>No manually supplied inputs. Source data is shown below when saved by the workflow.</p>}
-        {(result.nodes || []).filter(node => sourceNames.includes(node.name) || node.name === 'feed' || node.name.startsWith('source_')).map(node => <details key={node.name}><summary>{node.name} · Source data</summary><JsonView value={node.output ?? 'No source data saved.'} /></details>)}
+        {(result.nodes || []).filter(node => isSourceNode(node, sourceNames)).map(node => <details key={node.name}><summary>{node.name} · Source data</summary><JsonView value={node.output ?? 'No source data saved.'} /></details>)}
       </details>
       <details className="run-result-content" aria-label="Run result" open>
         <summary>Final output</summary>

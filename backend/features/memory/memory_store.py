@@ -8,6 +8,7 @@ and corpus-id conventions.
 """
 
 from pathlib import Path
+from .identity import storage_name, display_names
 from backend.api.studio_config import data_path
 
 from memory import _backend  # dispatch on EAX_MEMORY_BACKEND
@@ -22,18 +23,18 @@ MEMORY_DIR = data_path("memory")
 
 
 def store_dir(graph_id: str, agent: str) -> Path:
-    return MEMORY_DIR / graph_id / agent
+    return MEMORY_DIR / graph_id / storage_name(graph_id, agent)
 
 
 def corpus_id(graph_id: str, agent: str) -> str:
-    return f"studio-{graph_id}-{agent}"
+    return f"studio-{graph_id}-{storage_name(graph_id, agent)}"
 
 
 def list_agents(graph_id: str) -> list[str]:
     base = MEMORY_DIR / graph_id
     if not base.is_dir():
         return []
-    return sorted(p.name for p in base.iterdir() if p.is_dir())
+    return display_names(graph_id, [p.name for p in base.iterdir() if p.is_dir()])
 
 
 def open_memory(graph_id: str, agent: str, create: bool = False):

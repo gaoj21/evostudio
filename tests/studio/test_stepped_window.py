@@ -9,7 +9,9 @@ reasoning has nothing to compare against.
 
 import pytest
 
-from backend.api import sources
+from credit_risk.studio import feed as sources
+
+
 def sample(news=(), filings=(), start="2024-01-01", end="2024-06-30"):
     return {
         "sample_id": "pos_1_2024-07-01",
@@ -118,67 +120,83 @@ class TestSteppingAWindow:
 
 
 class TestOrderingInABatch:
-    @staticmethod
-    def pairs(records):
-        return [({"index": i}, r) for i, r in enumerate(records)]
+    """Grouping is generic: the Input type names the trajectory field.
 
-    def test_steps_of_one_sample_stay_together(self):
+    These use a neutral test type ("account"/"day"); the credit-risk feed
+    declares its own ("sample_id"/"as_of") the same way."""
+
+    @staticmethod
+    def pairs(records, monkeypatch, sequence=None):
+        import sequenced_input
         from backend.api import batch
-        records = [{"sample_id": "a", "as_of": "2024-01-01"},
-                   {"sample_id": "a", "as_of": "2024-02-01"},
-                   {"sample_id": "b", "as_of": "2024-01-01"}]
-        groups = batch._grouped(self.pairs(records))
+        sequenced_input.install(monkeypatch, sequence=sequence or sequenced_input.SEQUENCE)
+        pairs = [({"index": i}, r) for i, r in enumerate(records)]
+        batch.assign_sequences(sequenced_input.graph(), pairs)
+        return pairs
+
+    def test_steps_of_one_sample_stay_together(self, monkeypatch):
+        from backend.api import batch
+        records = [{"account": "a", "day": "2024-01-01"},
+                   {"account": "a", "day": "2024-02-01"},
+                   {"account": "b", "day": "2024-01-01"}]
+        groups = batch._grouped(self.pairs(records, monkeypatch))
 
         # Run at the same time, a later step's judgement can land before an
         # earlier one's, and each run's memory is what the next one reads.
         assert sorted(len(g) for g in groups) == [1, 2]
 
-    def test_they_stay_in_order_within_the_group(self):
+    def test_they_stay_in_order_within_the_group(self, monkeypatch):
         from backend.api import batch
-        records = [{"sample_id": "a", "as_of": d}
+        records = [{"account": "a", "day": d}
                    for d in ("2024-01-01", "2024-02-01", "2024-03-01")]
-        [group] = batch._grouped(self.pairs(records))
-        assert [r["as_of"] for _item, r in group] == \
+        [group] = batch._grouped(self.pairs(records, monkeypatch))
+        assert [r["day"] for _item, r in group] == \
             ["2024-01-01", "2024-02-01", "2024-03-01"]
 
-    def test_different_samples_still_run_in_parallel(self):
+    def test_different_samples_still_run_in_parallel(self, monkeypatch):
         from backend.api import batch
-        records = [{"sample_id": s, "as_of": "2024-01-01"} for s in "abc"]
-        assert len(batch._grouped(self.pairs(records))) == 3
+        records = [{"account": s, "day": "2024-01-01"} for s in "abc"]
+        assert len(batch._grouped(self.pairs(records, monkeypatch))) == 3
 
-    def test_unstepped_records_are_not_grouped(self):
+    def test_no_declared_sequence_means_no_grouping(self):
         from backend.api import batch
 
-        # Independent records; serialising them would cost throughput for
-        # nothing.
-        records = [{"sample_id": "a"}, {"sample_id": "a"}, {"sample_id": "b"}]
-        assert len(batch._grouped(self.pairs(records))) == 3
+        # The old implicit sample_id + as_of rule is gone: without an Input
+        # that declares a sequence, same-named fields group nothing.
+        records = [{"sample_id": "a", "as_of": "1"}, {"sample_id": "a", "as_of": "2"}]
+        pairs = [({"index": i}, r) for i, r in enumerate(records)]
+        batch.assign_sequences({"id": "g", "tasks": [], "edges": []}, pairs)
+        assert len(batch._grouped(pairs)) == 2
 
-    def test_records_with_no_sample_id_are_left_alone(self):
+    def test_records_without_the_group_field_are_left_alone(self, monkeypatch):
         from backend.api import batch
         records = [{"city": "Lima"}, {"city": "Oslo"}]
-        assert len(batch._grouped(self.pairs(records))) == 2
+        assert len(batch._grouped(self.pairs(records, monkeypatch))) == 2
 
-    def test_nothing_is_dropped(self):
+    def test_nothing_is_dropped(self, monkeypatch):
         from backend.api import batch
-        records = [{"sample_id": "a", "as_of": "1"}, {"sample_id": "a", "as_of": "2"},
-                   {"sample_id": "b", "as_of": "1"}, {"city": "Lima"}]
-        groups = batch._grouped(self.pairs(records))
+        records = [{"account": "a", "day": "1"}, {"account": "a", "day": "2"},
+                   {"account": "b", "day": "1"}, {"city": "Lima"}]
+        groups = batch._grouped(self.pairs(records, monkeypatch))
         assert sum(len(g) for g in groups) == len(records)
 
 
 class TestThroughTheSource:
     def test_the_source_node_passes_the_step_through(self, monkeypatch):
+        from backend.api import sources as platform_sources
         captured = {}
         monkeypatch.setattr(sources, "credit_risk_records",
                             lambda **kw: captured.update(kw) or [])
-        sources.records_from_source_node(
+        platform_sources.records_from_source_node(
             {"source": {"type": "credit_risk", "n": 1, "step": "weekly"}})
         assert captured["step"] == "weekly"
 
     def test_it_is_offered_as_a_setting(self):
-        from backend.api.source_apis import SOURCE_TYPE_SCHEMAS
+        from backend.features import plugins
 
-        names = {c["name"] for c in SOURCE_TYPE_SCHEMAS["credit_risk"]["config"]}
+        schema = plugins.source_schemas()["credit_risk"]
+        names = {c["name"] for c in schema["config"]}
         assert "step" in names
-        assert "as_of" in SOURCE_TYPE_SCHEMAS["credit_risk"]["outputs"]
+        assert "as_of" in schema["outputs"]
+        # The plugin, not the platform, says what a trajectory is.
+        assert schema["sequence"] == {"group": "sample_id", "order": "as_of"}

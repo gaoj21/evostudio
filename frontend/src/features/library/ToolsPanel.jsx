@@ -78,7 +78,7 @@ export function SkillEditor({ initial, onClose, onSaved }) {
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="risk_scoring_rubric"
+            placeholder="writing_style_guide"
             disabled={!!initial}
             required
           />

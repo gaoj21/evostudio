@@ -10,6 +10,7 @@ export default function TaskDetail({ graphId, onBack, onEdit, onRun }) {
   const [planError,setPlanError]=useState('');
   const [revision,setRevision]=useState(0);
   const [selectedRun,setSelectedRun]=useState(null);
+  const [sequence,setSequence]=useState(null);
   const overviewRef=useRef(null);
   const overviewPosition=useRef(0);
   const returnRun=useRef(null);
@@ -42,10 +43,21 @@ export default function TaskDetail({ graphId, onBack, onEdit, onRun }) {
     returnRun.current=run.run_id;
     setSelectedRun(run);
   }
+  // The trajectory fields the workflow's Input declares, if any: a DataLoader
+  // says so itself, any other type through its schema.
+  useEffect(()=>{
+    setSequence(null);
+    const input=(graph?.tasks||[]).find(n=>n.kind==='source'&&n.enabled!==false);
+    if(!input?.source?.type)return undefined;
+    if(input.source.type==='dataloader'){if(input.source.group_by)setSequence({group:input.source.group_by,order:input.source.order_by||null});return undefined;}
+    let active=true;
+    api.listSourceTypes?.().then(r=>{const found=(r.source_types||[]).find(s=>s.type===input.source.type);if(active&&found?.sequence)setSequence(found.sequence);}).catch(()=>{});
+    return ()=>{active=false;};
+  },[graph]);
   const nodes=graph?.tasks||[];
   const tools=[...new Set(nodes.flatMap(n=>n.tool_names||[]))];
   const skills=[...new Set(nodes.flatMap(n=>n.skill_names||[]))];
-  if(selectedRun)return <RunResultPage graphId={graphId} sourceNames={(graph?.tasks || []).filter(node => node.kind === "source").map(node => node.name)} run={selectedRun} runs={runs} onSelectRun={setSelectedRun} taskName={graph?.name} onBack={()=>setSelectedRun(null)}/>;
+  if(selectedRun)return <RunResultPage graphId={graphId} sourceNames={(graph?.tasks || []).filter(node => node.kind === "source").map(node => node.name)} sequence={sequence} run={selectedRun} runs={runs} onSelectRun={setSelectedRun} taskName={graph?.name} onBack={()=>setSelectedRun(null)}/>;
   return <main ref={overviewRef} className="task-detail project-main">
     <button onClick={onBack}>← Tasks</button>
     {error&&<div role="alert" className="platform-error">{error} <button onClick={()=>setRevision(v=>v+1)}>Retry</button></div>}

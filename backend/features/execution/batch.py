@@ -87,13 +87,16 @@ def start_batch(graph: dict, records: list[dict], source: dict, gray_zone=None,
         "created_at": _utcnow(),
         "cancelled_items": 0,
     }
+    if record_chunks is not None:
+        # Marked before the first write: a stream interrupted in its first
+        # chunk must still read as unread, or resume finds nothing to do.
+        state.update(streaming=True, collection_complete=False)
     with _lock:
         _batches[batch_id] = state
     # Persisted before execution: a batch the process never finishes would
     # otherwise disappear, leaving the canvas polling an id nothing knows.
     _persist_batch(state)
     if record_chunks is not None:
-        state.update(streaming=True, collection_complete=False)
         from .stream_batch import execute_stream
         thread = threading.Thread(target=execute_stream, args=(batch_id,graph,record_chunks,workers),daemon=True)
     else:
@@ -136,6 +139,8 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
     left as they are. A fresh batch passes all of them; a resumed one only
     what did not finish."""
     state = _batches[batch_id]
+    with _lock:
+        state["sequencing"] = assign_sequences(graph, pairs)
 
     def work(item: dict, record: dict) -> None:
         with _lock:
@@ -174,28 +179,32 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
                 item["status"] = "failed"
                 item["error"] = str(e)
 
-    blocked_groups = {}
+    # A streamed batch runs one chunk at a time; a group blocked by a failure
+    # in an earlier chunk stays blocked in the chunks that follow.
+    carried = dict(state.get("blocked_groups") or {}) if state.get("streaming") else {}
+    blocked_groups = dict(carried)
 
     def run_group(group):
         """The steps of one sample, in order. A step that does not succeed
         stops the rest: the next step would read this one's memory, and
         a judgement made without it is not the judgement the week asks for."""
-        group_key = _group_key(group[0][1]) if group else None
+        group_key = _group_key(group[0][1], group[0][0]) if group else None
         blocked_by = blocked_groups.get(group_key)
         for item, record in group:
-            if blocked_by is not None and _group_key(record):
+            if blocked_by is not None and _group_key(record, item):
                 with _lock:
                     item["status"] = "blocked"
                     item["error"] = (f"Not run: the step before it ({blocked_by}) did not finish. "
                                      f"Resume runs them in order.")
                 continue
             work(item, record)
-            if _group_key(record) and item.get("status") != "success":
-                blocked_by = record.get("as_of") or (record.get("_dataloader") or {}).get("record_id") or "previous record"
+            if _group_key(record, item) and item.get("status") != "success":
+                blocked_by = f"record #{int(item.get('index', 0)) + 1}"
                 blocked_groups[group_key] = blocked_by
 
     def execute_chunks(selected):
         blocked_groups.clear()
+        blocked_groups.update(carried)
         size = state.get('batch_size') or len(selected) or 1
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for offset in range(0, len(selected), size):
@@ -222,6 +231,14 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
         execute_chunks(again)
     with _lock:
         state.pop("retry_note", None)
+        if state.get("streaming"):
+            # Taken from the outcome, not the retry bookkeeping: a group is
+            # blocked for later chunks if any of its records here did not succeed.
+            for item, record in pairs:
+                key = _group_key(record, item)
+                if key and key not in carried and item.get("status") != "success":
+                    carried[key] = f"record #{int(item.get('index', 0)) + 1}"
+            state["blocked_groups"] = carried
     if not finalize:
         _persist_batch(state)
         return
@@ -236,7 +253,8 @@ def _finish_batch(state, graph):
             # mean, and `scored`/`total` show how much of the set it covers.
             state["summary"] = evaluation.summarise(state["items"])
     from backend.features.evaluation.evaluator_tools import evaluate_runs
-    has_evaluator = any(t.get('kind') == 'evaluator' and t.get('enabled',True) and (t.get('evaluator') or {}).get('timing','run') == 'batch' for t in graph.get('tasks',[]))
+    from backend.features.evaluation.evaluator_tools import timing_of
+    has_evaluator = any(t.get('kind') == 'evaluator' and t.get('enabled',True) and timing_of(t.get('evaluator')) == 'batch' for t in graph.get('tasks',[]))
     runs = [(runner.get_run(item.get('run_id')) if item.get('run_id') else None)
             or {**item, 'nodes': []}
             for item in state['items']] if has_evaluator else []
@@ -294,7 +312,11 @@ def cancel_batch(batch_id: str) -> dict:
                      if i.get("status") == "running" and i.get("run_id")]
         snapshot = dict(state)
     for run_id in in_flight:
-        runner.cancel_run(run_id)
+        # One run settling as it is stopped must not leave the rest running.
+        try:
+            runner.cancel_run(run_id)
+        except Exception:
+            pass
     _persist_batch(snapshot)
     return {"cancelled": True, **counts}
 
@@ -302,14 +324,46 @@ def cancel_batch(batch_id: str) -> dict:
 RESUMABLE = ("cancelled", "interrupted", "completed_with_errors", "failed", "completed")
 
 
-def _group_key(record: dict) -> str | None:
-    """Stepped records of one sample share a key; anything else stands alone."""
+def assign_sequences(graph: dict, pairs: list) -> dict:
+    """Record on each item which records it must not overtake.
+
+    Two sources, neither tied to the data's field names: the trajectory
+    field the Input type declares (sources.input_sequence), and the key
+    memory needs (backend/features/memory/sequencing.py). Returns the memory
+    plan for the batch record."""
+    from backend.features.memory import sequencing
+    from backend.features.data.sources import input_sequence
+    memory = sequencing.plan(graph)
+    declared = input_sequence(graph)
+    # Grouping and memory are both ordering constraints. A group may span
+    # several entities, or the same entity may span groups. Conservatively
+    # serialize the batch rather than let either constraint override the other.
+    if memory['mode'] and (declared or any(((r or {}).get('_dataloader') or {}).get('group') is not None for _, r in pairs)):
+        memory = {"mode": "all", "field": None, "reason": "Combined DataLoader and memory dependencies require ordered execution"}
+    for item, record in pairs:
+        record = record or {}
+        if "trajectory" not in item and declared and record.get(declared["group"]) not in (None, ""):
+            item["trajectory"] = str(record[declared["group"]])
+        if memory["mode"] == "all" or "sequence" not in item:
+            item["sequence"] = sequencing.key(memory, record)
+    return memory
+
+
+def _group_key(record: dict, item: dict | None = None) -> str | None:
+    """Records that must run in order share a key; anything else stands alone.
+
+    An explicit sequence in the data comes first: a DataLoader group, or the
+    trajectory the Input type declares. Otherwise the key memory needs, if
+    any. Both are recorded on the item by assign_sequences."""
     record = record or {}
+    item = item or {}
+    if item.get("sequence") == "memory:all":
+        return "memory:all"
     if (record.get('_dataloader') or {}).get('group') is not None:
         return 'loader:' + str(record['_dataloader']['group'])
-    if record.get("sample_id") and record.get("as_of"):
-        return str(record["sample_id"])
-    return None
+    if item.get("trajectory") is not None:
+        return "input:" + str(item["trajectory"])
+    return item.get("sequence")
 
 
 def _with_blocked_after(pairs: list, chosen: list) -> list:
@@ -323,7 +377,7 @@ def _with_blocked_after(pairs: list, chosen: list) -> list:
     open_groups: dict[str, bool] = {}
     out = []
     for item, record in pairs:
-        key = _group_key(record)
+        key = _group_key(record, item)
         if id(item) in picked:
             out.append((item, record))
             if key:
@@ -361,10 +415,17 @@ def resume_batch(batch_id: str, graph: dict) -> dict:
             return {"resumed": False, "reason": "batch is still running"}
         if state.get("graph_id") and graph.get("id") and state["graph_id"] != graph.get("id"):
             return {"resumed": False, "reason": "batch belongs to another workflow"}
-        if state.get('streaming') and not state.get('collection_complete'):
-            return {'resumed':False,'reason':'Streaming input was interrupted. Start a new run with DataLoader offset/sample settings; unread records were not collected.'}
+        streaming = bool(state.get('streaming'))
+        unread = streaming and not state.get('collection_complete')
+        chunks = None
+        if unread:
+            from .loader_run import resume_chunks
+            try:
+                chunks = resume_chunks(graph, state)
+            except Exception as exc:
+                return {"resumed": False, "reason": str(exc)}
         todo = unfinished(state)
-        if not todo:
+        if not todo and chunks is None:
             return {"resumed": False, "reason": "nothing left to run"}
         kept = len(state.get("items") or []) - len(todo)
         # Finished steps that come after a step being run again: their
@@ -379,17 +440,23 @@ def resume_batch(batch_id: str, graph: dict) -> dict:
         state["cancelled_items"] = 0
         state.setdefault("resumed_at", []).append(_utcnow())
         state["summary"] = None
+        # Re-run in order, so the blocks a failure caused are decided again.
+        state["blocked_groups"] = {}
         _batches[batch_id] = state
         pairs = [(item, json.loads((BATCHES_DIR / item['input_file']).read_text()) if item.get('input_file') else item.get('inputs') or {}) for item in todo]
         workers = max(1, min(int(state.get("workers") or 2), MAX_WORKERS))
     _persist_batch(state)
-    thread = threading.Thread(
-        target=_execute_batch, args=(batch_id, graph, pairs, workers), daemon=True)
+    if streaming:
+        from .stream_batch import resume_stream
+        thread = threading.Thread(target=resume_stream, args=(batch_id, graph, pairs, chunks, workers), daemon=True)
+    else:
+        thread = threading.Thread(
+            target=_execute_batch, args=(batch_id, graph, pairs, workers), daemon=True)
     with _lock:
         _threads[batch_id] = thread
     thread.start()
     return {"resumed": True, "batch_id": batch_id, "remaining": len(todo), "kept": kept,
-            "rerun_after": rerun}
+            "rerun_after": rerun, **({"continues_reading": chunks is not None} if streaming else {})}
 
 
 def _cancel_counts(state: dict) -> dict:
@@ -407,15 +474,15 @@ def _cancel_counts(state: dict) -> dict:
 def _grouped(pairs) -> list[list]:
     """Records that must not overtake each other, kept together.
 
-    Stepping a window turns one sample into a sequence: each record carries the
-    news up to its own date, and each run's memory is what the next one reads.
-    Run them at the same time and a later step's judgement can land before an
-    earlier one's. Different samples are independent and still run in parallel.
+    A trajectory is a sequence: each record carries the evidence up to its
+    own point, and each run's memory is what the next one reads. Run them at
+    the same time and a later step's judgement can land before an earlier
+    one's. Different trajectories are independent and still run in parallel.
     """
     groups: dict[str, list] = {}
     loose: list[list] = []
     for item, record in pairs:
-        key = _group_key(record)
+        key = _group_key(record, item)
         if key:
             groups.setdefault(str(key), []).append((item, record))
         else:
@@ -459,11 +526,16 @@ def mark_interrupted() -> int:
                 data = json.load(f)
         except (json.JSONDecodeError, OSError):
             continue
-        if data.get("status") != "running":
+        if data.get("status") not in ("running", "cancelling"):
             continue
-        data["status"] = "interrupted"
+        # A stop that was requested but never wound down is a stop: the
+        # batch reads as cancelled, and can be resumed like any other.
+        stopping = data["status"] == "cancelling"
+        data["status"] = "cancelled" if stopping else "interrupted"
         for item in data.get("items") or []:
-            if item.get("status") in ("running", "pending"):
+            if stopping and item.get("status") == "pending":
+                item["status"] = "cancelled"
+            elif item.get("status") in ("running", "pending"):
                 item["status"] = "failed"
                 item["error"] = "Interrupted by a server restart."
         try:
@@ -543,8 +615,9 @@ def _node_progress(state: dict) -> dict:
     return progress
 
 
-def set_evaluation(batch_id: str, report: dict) -> dict | None:
-    """Attach a report to a batch, live or on disk, and persist it."""
+def set_evaluations(batch_id: str, reports: dict) -> dict | None:
+    """Keep evaluator reports computed later (on saved results) with the batch,
+    beside the ones its own run produced, and persist them."""
     with _lock:
         state = _batches.get(batch_id)
     if state is None:
@@ -552,10 +625,24 @@ def set_evaluation(batch_id: str, report: dict) -> dict | None:
         if state is None:
             return None
     with _lock:
-        state["evaluation"] = report
+        state["evaluations"] = {**(state.get("evaluations") or {}), **reports}
         snapshot = dict(state)
     _persist_batch(snapshot)
     return state
+
+
+def evaluation_headline(reports: dict | None) -> str | None:
+    """One line per evaluator for a history row: 'check · accuracy 0.92'."""
+    parts = []
+    for name, report in (reports or {}).items():
+        if report.get("status") != "success":
+            parts.append(f"{name} · failed")
+            continue
+        metric = (report.get("objective") or {}).get("metric")
+        value = (report.get("metrics") or {}).get(metric)
+        shown = "—" if value is None else (f"{value:.3g}" if isinstance(value, float) else str(value))
+        parts.append(f"{name} · {metric} {shown}")
+    return "; ".join(parts) or None
 
 
 def _digest(state: dict) -> dict:
@@ -581,7 +668,10 @@ def _digest(state: dict) -> dict:
         "total": state.get("total", len(items)),
         "counts": counts,
         # The one line an evaluation boils down to, for the history list.
-        "evaluation": (state.get("evaluation") or {}).get("headline"),
+        "evaluation": evaluation_headline(state.get("evaluations")),
+        # A stream that stopped before reading everything can still be resumed.
+        "streaming": bool(state.get("streaming")),
+        "unread": bool(state.get("streaming")) and not state.get("collection_complete"),
     }
 
 

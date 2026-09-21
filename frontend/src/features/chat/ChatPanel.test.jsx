@@ -12,6 +12,7 @@ vi.mock('../../api.js', () => ({
     stopChatJob: vi.fn(),
     chatJob: vi.fn(),
     runningChatJob: vi.fn(),
+    getRun: vi.fn(),
   },
 }));
 
@@ -368,4 +369,44 @@ it('force stops a turn and never applies its late canvas changes',async()=>{
  expect(onApply).not.toHaveBeenCalled();
  expect(screen.queryByText('Late changes')).not.toBeInTheDocument();
  expect(screen.getByRole('button',{name:'Send'})).toBeEnabled();
+});
+
+
+describe('a run started from chat', () => {
+  const seed = (runId) => localStorage.setItem('evoagentx-studio:chat:g1', JSON.stringify([
+    { id: 'u1', role: 'user', content: 'run it' },
+    { id: 'a1', role: 'assistant', content: 'ok', runStarted: runId }]));
+
+  it('stops polling a run the server no longer has and releases the session controls', async () => {
+    vi.useFakeTimers();
+    try {
+      seed('r-gone');
+      api.runningChatJob.mockResolvedValue({});
+      api.getRun.mockRejectedValue(Object.assign(new Error('HTTP 404'), { status: 404 }));
+      render(<ChatPanel graphId="g1" getGraph={() => GRAPH} onApply={vi.fn()} onRunRequest={vi.fn()} />);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(api.getRun).toHaveBeenCalledTimes(1);
+      expect(screen.getByLabelText('New session')).not.toBeDisabled();
+      expect(api.chatGraph).not.toHaveBeenCalled();     // nothing to diagnose
+    } finally {
+      vi.useRealTimers();
+      localStorage.clear();
+    }
+  });
+
+  it('stops polling on every settled state, not only a few', async () => {
+    vi.useFakeTimers();
+    try {
+      seed('r-left');
+      api.runningChatJob.mockResolvedValue({});
+      api.chatGraph.mockReturnValue(new Promise(() => {}));
+      api.getRun.mockResolvedValue({ run_id: 'r-left', status: 'abandoned' });
+      render(<ChatPanel graphId="g1" getGraph={() => GRAPH} onApply={vi.fn()} onRunRequest={vi.fn()} />);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(api.getRun).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      localStorage.clear();
+    }
+  });
 });

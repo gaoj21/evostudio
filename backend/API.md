@@ -44,9 +44,18 @@ execution). Unsourced inputs become workflow inputs (asked at run time).
 ## Endpoints
 
 - `GET /api/health` → `{"ok": true}`
-- `GET /api/features` → stable core features plus experimental integrations,
-  including runtime availability, missing-dependency reason and install extra.
-- `GET /api/palette` → `{"templates": [{type, label, description, defaults: {...task fields...}}]}`
+- `GET /api/features` → `{core, experimental, projects}`: stable core
+  features, experimental integrations (runtime availability,
+  missing-dependency reason, install extra), and the loaded project plugins
+  (`[{name, label, description, available, unavailable_reason}]`; a plugin
+  that failed to load is listed with `available: false`, see
+  [Project plugins](#project-plugins)).
+- `GET /api/palette` → `{"templates": [{type, label, description, group?,
+  defaults: {...task fields...}}], "sources": [...Input presets...]}`.
+  `templates` is the built-in node presets plus every plugin's `presets()`;
+  a plugin preset carries `group` (the palette section title, default the
+  plugin's `NAME`). `sources` has one `source_<type>` preset per entry of
+  `GET /api/sources`.
 - `GET /api/graphs` → `[{id, name, goal, updated_at}]`
 - `POST /api/graphs` `{name, goal}` → full graph (empty tasks)
 - `GET /api/graphs/{id}` → canvas graph JSON, plus computed
@@ -81,14 +90,13 @@ keeps node progress, the result drawer, review routing and artifacts working
 during an evaluation.
 
 - `GET /api/metrics` → `{"metrics": [{name, description, custom}]}`. The
-  built-ins are the optimizer's own (`exact_match`, `contains`, `numeric`,
-  `credit_risk`), so a workflow scores the same way whether it is evaluated or
-  optimized. A **custom metric** is any custom tool whose params are exactly
+  built-ins are the optimizer's own (`exact_match`, `contains`, `numeric`),
+  so a workflow scores the same way whether it is evaluated or optimized. A **custom metric** is any custom tool whose params are exactly
   `prediction` and `label`; it may return a number, a bool, or an object with a
   `score` key plus whatever else you want recorded per item.
 
-- `POST /api/graphs/{graph_id}/run-batch` accepts two more fields (multipart or
-  JSON): `metric` and `label_key`. With them the batch becomes an evaluation.
+- `POST /api/graphs/{graph_id}/run-batch` also reads two fields (multipart
+  form fields or JSON keys): `metric` and `label_key`. With them the batch becomes an evaluation.
 
   `label_key` names the field holding the expected answer. It is **removed from
   each record before the run**, so a node that happens to declare an input of
@@ -106,6 +114,13 @@ The batch document then carries `metric`, a per-item `score` / `score_detail` /
 A metric that raises marks that one item unscored with the reason and leaves
 the rest of the batch alone — the runs themselves succeeded and are worth
 keeping, and `unscored` reports how many did not get a number.
+
+Canvas Evaluator nodes (`/api/evaluators/*`, see
+`backend/features/evaluation/README.md`) are the main way to evaluate.
+`evaluator_tools.evaluate_runs` validates and runs each evaluator inside its
+own `try`: a misconfigured or failing evaluator reports
+`{"status": "failed", "error": ...}` in its own report and never fails the
+run or the other evaluators.
 
 ### Starting part-way through
 
@@ -155,27 +170,66 @@ imported with the workflow.
   concurrently — ThreadPoolExecutor, `workers` field 1-5, default 2 — each
   record is a normal run).
   Two body shapes:
-  - `multipart/form-data` with a `file` field: `.jsonl` (one JSON object per
-    line) or `.csv` (column names map to input names); optional form fields
-    `workers`, `review_zone`.
-  - JSON `{"source": "credit_risk"|"canvas", "split"?, "n"?, "seed"?, "workers"?}` —
-    `credit_risk` samples `projects/credit_risk/dataset/contemporary/samples.jsonl`
-    (`n: 0` runs the entire split in file order, no sampling);
-    `canvas` uses the graph's connected credit_risk source node config.
+  - `multipart/form-data` with a `file` field: `.json`, `.jsonl`, `.csv` or
+    `.tsv` (column names map to input names); optional form fields
+    `workers`, `review_zone`, `llm_batch_size`, `metric`, `label_key`.
+    Uploads go through the same parser as saved datasets
+    (`user_datasets.parse`): UTF-8, a header row of non-empty unique names,
+    TSV without quoting (a cell starting with `"` is data), and a row whose
+    column count differs from the header is a 422 naming the row.
+  - JSON `{"source": "canvas", "collection_id"?, "workers"?, "review_zone"?,
+    "llm_batch_size"?}` (plus `metric` / `label_key` for an evaluation) —
+    the records come from the graph's wired canvas Input. Local Inputs
+    (DataLoader, My dataset, plugin Input types) are read inline; an API
+    Input (GDELT, EDGAR, HTTP API, custom toolkit source) must be collected
+    first and passed as `collection_id`, otherwise 422. A Python DataLoader
+    starts a streamed batch (`loader_run.start`) without reading the dataset
+    in the request. Any other `source` value is a 422: upload a file for
+    other records.
   - Mapping: a record fills a workflow input when names match; a missing
     required input fails the whole request with HTTP 422 listing the
-    available record fields. Extra record fields are ignored.
+    available record fields. Extra record fields are ignored, except the
+    `group` / `order` fields the Input declares as its `sequence`, which are
+    kept so the batch can order trajectories.
+  - Ordering: records run in parallel unless something ties them together.
+    `batch._group_key` decides, in this order: a DataLoader group
+    (`_dataloader.group`), then the Input's declared trajectory
+    (`sources.input_sequence(graph)`; `batch.assign_sequences` stores the
+    group value on the item as `trajectory`), then the key the memory
+    configuration needs (`backend/features/memory/sequencing.py`, stored as
+    `sequence`). Records sharing a key run one at a time in batch order; when
+    one fails, the rest of its group is `blocked`. There is no implicit
+    grouping by field names.
   - Concurrent items of one graph share LTM stores; runner serializes all
     LTM open/search/add/save with per-store locks.
+- `POST /api/graphs/{id}/run-batch/preview` → the same body, nothing runs:
+  ```jsonc
+  {"total": 12,                 // runs the batch would start
+   "samples": 3,                // trajectories (= total without a declared sequence)
+   "sequence": {"group": "ticket_id", "order": "created_at"} | null,
+   "steps": 5, "steps_min": 3,  // longest / shortest trajectory
+   "dates": ["2026-01-02", "2026-03-30"] | null,   // first / last `order` value
+   "source": {...}, "workers": 2, "metric": null,
+   "nodes": [...], "skipped": [...], "node_count": 4, "node_executions": 48,
+   "memory_order": {...} | null,  // how memory ties records together
+   "fields": [...]}
+  ```
+  `samples` / `steps` / `dates` are computed from the wired Input's declared
+  `sequence`, not from assumed field names. An API Input that is not collected
+  yet returns `{"requires_collection": true, "source": {...}}`; a Python
+  DataLoader returns `{"total": null, "deferred": true, "record_limit", ...}`
+  because it is read while running.
 - `GET /api/batches/{batch_id}` →
   ```jsonc
   {
     "batch_id": "...", "graph_id": "...", "status": "running|completed",
-    "source": {"type": "upload", ...} | {"type": "credit_risk", ...}
-              | {"type": "canvas", "node": "feed", ...},
+    "source": {"type": "upload", "filename": "..."}
+              | {"type": "canvas", "node": "feed", "config": {...}, ...},
     "total": 3,
-    "items": [{"index": 0, "status": "pending|running|success|failed",
+    "items": [{"index": 0, "status": "pending|running|success|failed|blocked|cancelled",
                "run_id": "...", "inputs": {...},
+               "trajectory": "..." | absent,   // the Input's group value
+               "sequence": "..." | null,       // memory ordering key
                "output_summary": "...(≤500 chars)", "error": null}],
     // aggregate per-node status counts across item runs (pending items, or
     // items whose run state is unavailable, count all nodes as pending);
@@ -183,8 +237,9 @@ imported with the workflow.
     "node_progress": {"node_a": {"completed": 2, "running": 0, "failed": 1, "pending": 0}}
   }
   ```
-- `GET /api/sources/credit-risk` → `{id, label, splits: {train: N, ...},
-  fields: [...]}` (dataset availability for the batch dialog).
+- `GET /api/batches/{batch_id}/compare?baseline=<id>` labels each record by
+  its `trajectory` when it has one, otherwise by its first short text value
+  (or `field=value`).
 
 ### Memory (long-term)
 
@@ -205,69 +260,96 @@ never fail the run — they surface as `memory_error` on the run object.
   Without `q`, lists all entries (raw SQLite memory table); with `q`, runs a
   vector search (top-`n`).
 
-### Evolve (MIPRO prompt optimization)
+### Evolve (evaluation and prompt optimization)
 
-Optimizes node prompts with the framework's `WorkFlowMiproOptimizer`
-(canvas prompts become `MiproPromptTemplate` instructions; dspy 3.3.0
-compat shims from `projects/credit_risk/optimize_mipro.py` are applied in
-`evolve_api.py`). Zero-shot by default (`max_*_demos=0`). Artifacts per
-task at `backend/data/evolve/<task_id>/`: `dataset.jsonl` (resolved eval
-records), `best_program.json` (framework graph save), `result.json`.
+`backend/features/evaluation/evolve_api.py`. Returns 503 on every
+`/api/evolve*` route when the optimizer dependencies (`dspy`, `optuna`) are
+missing. Artifacts per task at `backend/data/evolve/<task_id>/`:
+`dataset.jsonl` (resolved records) and `result.json` (the task state below);
+a MIPRO task also writes `best_program.json` (framework graph save).
 
-- `GET /api/evolve/metrics` → `{"metrics": [{name, description}]}` —
-  built-ins: `exact_match`, `contains`, `numeric`, `credit_risk`
-  (risk_level rule over `label.type` positive/negative).
-- `POST /api/graphs/{id}/evolve` → `{"task_id"}`. Two body shapes:
-  - `multipart/form-data`: `file` = JSONL of `{"inputs": {...}, "label": ...}`
-    (flat records also accepted — all keys except `label`/`id` become inputs),
-    plus form fields `metric`, `n_train`, `n_dev`, `num_candidates`,
-    `max_steps`, `seed`.
-  - JSON `{"source": "credit_risk", "split"?, "n"?, "seed"?, "metric", ...}`
-    — samples with labels from `projects/credit_risk/dataset/contemporary/samples.jsonl`
-    (`label = {"type": "positive"|"negative", "event": ...}`).
-  - Every record's inputs must cover the graph's required workflow inputs
-    (HTTP 422 otherwise). Budget defaults: n_train = records-1, n_dev = 1,
-    num_candidates = 2, max_steps = 2 (keep small — each trial re-runs the
-    dev set through the LLM).
+- `GET /api/evolve/metrics` → `{"metrics": [{name, description, custom}]}` —
+  the built-ins `exact_match`, `contains`, `numeric`, plus every custom tool
+  whose params are exactly `prediction` and `label`. Same list as
+  `GET /api/metrics`. The default metric is `exact_match`.
+- `GET /api/evolve/presets` → `{"presets": [{name, label, blurb,
+  num_candidates, max_steps}]}` (`quick`, `standard`, `thorough`).
+- `POST /api/graphs/{id}/evolve` → `{"task_id"}`. Body shapes:
+  - JSON `{"source": "canvas", "evaluator": "<evaluator node>", "mode":
+    "evaluate"|"evolve_evaluate", "nodes"?: [...], "rounds"?: 1-10}` —
+    replays the canvas Input's records through the actual workflow and scores
+    them with that canvas Evaluator (a Python evaluator must have its
+    objective metric chosen). Records run with the same ordering as a batch
+    (`assign_sequences` / `_group_key`): trajectories run in order and a
+    failure blocks the rest of its trajectory. Mem0-backed long-term memory
+    is refused (candidates need isolated memory).
+  - JSON `{"source": "saved_batch", "batch_id"}` or `{"source":
+    "saved_run", "run_id"}`, plus `metric`? (default `exact_match`) or
+    `evaluator`?, `label_key`?, `mode`, `nodes`? — scores predictions that
+    already exist (no replay) and, for `evolve_evaluate`, proposes prompts
+    from them. The result's `source` is `{type, batch_id, run_id, origin,
+    matched_records, available_records}`; `origin` is the saved batch's own
+    `source`. There is no dataset or split field.
+  - `multipart/form-data`: `file` = labelled JSON/JSONL/CSV/TSV of
+    `{"inputs": {...}, "label": ...}` (flat records also accepted — all keys
+    except `label`/`id` become inputs), plus form fields `metric`, `mode`,
+    `preset`, `nodes`, `n_train`, `n_dev`, `num_candidates`, `max_steps`,
+    `seed`. Optimized with MIPRO (zero-shot: `max_*_demos` default 0).
+    Every record's inputs must cover the graph's required workflow inputs
+    (422 otherwise); optimization needs at least 2 records. Defaults: dev
+    share 30% (at least 1), the rest train; candidates/steps from `preset`
+    (default `quick`: 2 / 2).
+  - `POST /api/graphs/{id}/evolve/preview` `{"source": "saved_batch"|
+    "saved_run", ...}` → what a saved-result task would score, without
+    running it.
 - `GET /api/evolve?graph_id=...` → recent tasks (summary incl.
   `baseline_score` / `optimized_score`).
 - `GET /api/evolve/{task_id}` → full task:
   ```jsonc
   {
-    "task_id": "...", "graph_id": "...", "status": "running|done|failed",
-    "stage": "baseline|optimizing|evaluating optimized" | null,
-    "metric": "exact_match", "params": {...}, "error": null,
-    "baseline":  {"metrics": {"score": 0.5}, "records": {"ex1": {prediction, label, metrics}}},
+    "task_id": "...", "graph_id": "...",
+    "status": "running|done|failed|stopped|interrupted",
+    "stage": "..." | null, "stages": [{"stage", "at"}],
+    "metric": "exact_match" | "canvas:<evaluator>", "params": {...}, "error": null,
+    "source": {...},
+    "baseline":  {"metrics": {"score": 0.5}, "records": {...}},
     "optimized": {"metrics": {"score": 1.0}, "records": {...}},
     "diff": [{"name": "node_a", "before": "...", "after": "..."}],
     "optimized_graph": {...canvas graph with prompts replaced...}
   }
   ```
-- `POST /api/evolve/{task_id}/apply` → saves `optimized_graph` as a new
-  canvas graph named "<name> (evolved)"; 409 unless status is `done`.
+  `interrupted` is a task persisted as running that this process is not
+  running (the server restarted).
+- `POST /api/evolve/{task_id}/stop` → `{"stopping": true}`. The task stops at
+  its next record and the in-flight run is cancelled; it ends `stopped` and
+  nothing is applied. 404 for an unknown task, 409 when it is not running.
+- `POST /api/evolve/{task_id}/apply?mode=new|replace` → `new` (default) saves
+  `optimized_graph` as a new graph "<name> (evolved)"; `replace` copies only
+  the prompts into the current workflow after saving a backup "<name>
+  (before evolve)". 409 unless status is `done`.
 
-### Credit-risk presets & templates
+### Project plugins
 
-`registry.py` adapts `projects/credit_risk/agentic_pipeline/agents.py` into seven
-palette presets — the full flow: `cr_source_news` + `cr_source_8k` (step 1,
-entity/CIK extraction) → `cr_grounding` (step 2, uses the
-`ObligorMatchToolkit` tools against the internal obligor list) → `cr_detect`
-→ `cr_investigate` → `cr_reflect` → `cr_decide` (step 3). Taxonomy/rubric
-skill texts are inlined into the prompts (braces escaped); inputs use the
-credit_risk feed field names (`company`, `news_batch`, `filing_batch`,
-`window_end`). `cr_investigate` and `cr_decide` default
-`use_long_term_memory: true` — their per-node LTM stores play the risk
-profile and the alert repository (step 5). Note: framework graph validation
-treats only in-degree-0 nodes' inputs as workflow inputs, so `source_news`
-also declares `company`/`window_end` to expose them as workflow inputs.
+Task-specific presets, templates, toolkits and Input types are not part of the
+platform. They come from `projects/<project>/studio_plugin.py`, loaded by
+`backend/features/plugins.py` (`EAX_STUDIO_PROJECTS` overrides the search
+path). The contract is in [`projects/README.md`](../projects/README.md).
+What a plugin adds shows up in the ordinary endpoints: `GET /api/palette`
+(`presets()`, with `group`), `GET /api/templates` (`templates()`),
+`GET /api/tools` (`toolkits()`), `GET /api/sources` (`source_types()`), and
+`GET /api/features` → `projects`. A plugin that fails to load is reported
+there, not raised.
 
-The `ObligorMatchToolkit` (`obligor_tool.py`) wraps
-`projects/credit_risk/agentic_pipeline/obligors.py`'s `ObligorRegistry` (lazy-loaded
-from `projects/credit_risk/dataset/contemporary/candidates.csv`) as tools
-`match_company_name` and `match_cik`.
+- `GET /api/sources/{type}/info[?...]` → whatever the Input type's `info`
+  hook returns for the query parameters (for example available dataset
+  versions and splits). 404 when the type has no `info` hook; a
+  `SourceError` from the hook is a 422.
 
-The credit_risk feed (`sources.py`) also projects `filing_batch`: up to 5
-filings, each `form` + `items` + first 1500 chars, capped at 6000 chars.
+The credit-risk monitoring project (`projects/credit_risk/`) is one such
+plugin: the `credit_risk` Input type, the seven `CR …` preset nodes (palette
+group "Credit risk"), the "Credit Risk
+Monitoring" template with its review rule, and `ObligorMatchToolkit`. See
+[`projects/credit_risk/README.md`](../projects/credit_risk/README.md#in-studio).
 
 ### Canvas source nodes
 
@@ -299,38 +381,66 @@ error.
 }
 ```
 
-Source types (config schema + output names are served to the frontend via
-`GET /api/sources`; the Inspector form is schema-driven):
+Source types: `GET /api/sources` →
+`{"source_types": [{type, label, description, config: [...form fields],
+outputs: [...], local?, sequence?, has_info?, project?}]}`. The Inspector
+form is built from `config`. `local: true` means the Input reads local data
+and runs inline; without it the Input calls a remote API and a batch needs a
+collection first. `sequence: {group, order}` means records sharing `group`
+form an ordered trajectory (see Batch runs). `has_info: true` means
+`GET /api/sources/{type}/info` has details for the form. `project` names the
+plugin that supplied the type.
 
-- `credit_risk` — local dataset sampler (split / n / seed).
-- `gdelt_news` (`source_apis.py`) — GDELT doc API artlist (free, no key;
-  fair-use 5s spacing + 429/5xx backoff, adapted from
-  `projects/credit_risk/dataset/builders/build_r02_fetch_news.py`). Config: query*, days,
-  max_records. Outputs: company, news_batch, window_start, window_end,
-  n_articles.
-- `sec_edgar_8k` — EDGAR submissions + SGML full-text parse (UA header
-  mandatory; adapted from `build_r03_fetch_8k.py`). Config: cik*, count.
-  Outputs: cik, company, filing_batch, window_end.
+Built-in types (`backend/features/data/source_apis.py`):
+
+- `dataloader` (local) — files/folders or a Python Dataset, see
+  `docs/dataloaders-and-evaluators.md`.
+- `user_dataset` (local) — an uploaded CSV/TSV/JSON/JSONL dataset
+  (`dataset_id`, `n`). In reference mode the whole dataset becomes one field,
+  `reference_field` (default `reference`).
+- `gdelt_news` — GDELT doc API artlist (free, no key; fair-use 5s spacing).
+  Config: query*, days, start_date, end_date, batch_step, max_records.
+  Outputs: company, news_batch, as_of, window_start, window_end, n_articles.
+- `sec_edgar_8k` — EDGAR submissions + full-text parse (UA header
+  mandatory). Config: cik*, count. Outputs: cik, company, filing_batch,
+  as_of, window_end.
 - `http_api` — generic JSON API: url with `{placeholders}` filled from
   `vars` (a JSON object in the config), method GET/POST, params/headers/body
   as JSON text; header values of the form `$ENV_VAR` resolve from the
-  process environment; `extract` is a dot-path into the response JSON.
-  Outputs: api_response (≤8000 chars), status_code.
+  process environment; `extract` is a dot-path into the response JSON;
+  `batch_items: items` makes each element of the extracted array one record
+  when collected. Placeholders are URL-quoted only in the URL itself; in
+  `params` they are filled raw (the query string is encoded once, by
+  `urlencode`); inside a JSON `body` they are filled in string keys and
+  values, unquoted. Outputs: api_response (≤8000 chars), status_code.
+- `custom:<tool>` — a custom tool marked as a source; returns a record or a
+  list of records.
+- Plugin types — whatever `source_types()` of a project plugin declares
+  (always local).
 
 All HTTP calls use a 30s timeout and up to 5 attempts with backoff
-(5/15/30/60s) on 429/5xx; a persistent 429 raises a `SourceError` explaining
-the IP hit the API's fair-use cap. Source failures raise `SourceError`: the
-run is marked failed and the source node shows status `failed` with
-`{"error": ...}` as its output.
+(5/15/30/60s) on 429/5xx and network errors; any other HTTP status, a
+malformed URL or a bad argument fails at once without retrying. A persistent
+429 raises a `SourceError` explaining the IP hit the API's fair-use cap.
+Source failures raise `SourceError`: the run is marked failed and the source
+node shows status `failed` with `{"error": ...}` as its output.
 
+API Inputs are collected before a batch
+(`POST /api/graphs/{id}/source-collections`, see
+`docs/source-collection.md`). A collection is matched to the Input by a
+fingerprint of its source settings and those of its references; node
+position and description are not part of it, and collections saved under the
+older fingerprint are still accepted.
+
+- `POST /api/sources/probe` `{"source": {...config}}` → `{records, fields,
+  sample}`: runs the config once and reports the first record's fields.
 - Single run: the first record is merged into the run inputs (explicitly
   provided inputs win); the source node reports `completed` with the record
   (truncated) as its output. Missing/invalid config fails graph save with
   HTTP 422; local dataset problems fail the run request with HTTP 422.
 - Batch run: `POST /api/graphs/{id}/run-batch` with `{"source": "canvas"}`
-  samples n records using the canvas credit_risk source node's split/n/seed;
-  per-record inputs also include the source node's output fields so each
-  item gets its own record (API sources produce a single record).
+  runs every record the wired Input yields; per-record inputs also include
+  the source node's output fields so each item gets its own record.
 
 ### Watch (scheduled / live sources)
 
@@ -341,9 +451,15 @@ only. `watcher.py` runs one daemon thread per scheduled source node; each fire
 polls for NEW data (dedup state persisted to
 `backend/data/watch/<graph>_<node>.json`) and starts a normal background run per
 new record. Interval floor is 5 minutes (GDELT fair use);
-`EAX_WATCH_DEBUG=1` lowers it to 0.2 min for testing. Dedup keys:
-credit_risk → sample_id (seed advances per poll cycle), gdelt_news → article URL,
-sec_edgar_8k → accession number, http_api → response hash.
+`EAX_WATCH_DEBUG=1` lowers it to 0.2 min for testing. A `daily` time is
+recomputed on the local wall clock for each date
+(`scheduler.next_local_time`), so a daylight-saving change does not move it
+by an hour. Dedup keys: gdelt_news → article URL, sec_edgar_8k → accession
+number, http_api → response hash, plugin Input types → the field the type
+names as `watch_key` (a hash of the whole record when it names none).
+Each poll works on a copy of the seen set; records are marked seen only after
+the poll and every run start succeeded, so a fetch that fails halfway or a
+run that fails to start is polled again next time.
 
 - `POST /api/graphs/{id}/watch` → start watchers; 422 if the graph has no
   scheduled source node. `{"watching": true, "watchers": [...]}`
@@ -359,13 +475,20 @@ sec_edgar_8k → accession number, http_api → response hash.
   Watchers are in-memory only (no auto-restart on server reboot); seen/dedup
   state survives via the JSON files.
 
-- `GET /api/palette` → `templates` now includes the four `cr_*` presets.
-- `GET /api/templates` → `[{id, name, description}]`
-- `GET /api/templates/{id}` → `{id, name, description, graph: {...canvas graph...}}`
+### Templates
+
+Starter workflows come from project plugins (`templates()`); the platform has
+none of its own.
+
+- `GET /api/templates` → `{"templates": [{id, name, description}]}`
+- `GET /api/templates/{id}` → `{id, name, description, graph: {...canvas graph...}}`;
+  404 for an unknown id.
 
 ### Tools
 
-`tools_registry.py` catalogs the framework toolkits usable from canvas tasks
+`tools_registry.py` catalogs the framework toolkits usable from canvas tasks,
+plus the toolkits project plugins offer through `toolkits()` (a plugin entry
+with a built-in's name replaces it)
 (`task.tool_names` — toolkit names; resolved per run via
 `tool_names_to_tools`, fresh instances each run). Unknown names or missing
 credentials fail the request/run with a clear message; tool execution errors
@@ -384,7 +507,8 @@ inside a run surface in the node output / run error.
   Inspector attach-select and the draggable tool-node palette.)
 - Enabled (zero-config): FileToolkit, StorageToolkit, CMDToolkit,
   PythonInterpreterToolkit, ArxivToolkit, RequestToolkit,
-  WikipediaSearchToolkit, DDGSSearchToolkit, RSSToolkit.
+  WikipediaSearchToolkit, DDGSSearchToolkit, RSSToolkit, SkillToolkit,
+  DataEvaluationToolkit.
 - Listed but gated: GoogleSearchToolkit (GOOGLE_API_KEY +
   GOOGLE_SEARCH_ENGINE_ID), SerperAPIToolkit (SERPERAPI_KEY),
   ExaSearchToolkit (EXA_API_KEY). Omitted entirely: browser/playwright,
@@ -488,26 +612,48 @@ write artifacts.
 
 ### HITL review
 
-After a successful run, node outputs are scanned for a decision object
-(`{"action": "alert"|"suppress", "score": 0-100, ...}`). An alert with score
-in the gray zone (default `[35, 65]`; override per run/batch with
-`"review_zone": [lo, hi]` in the run / run-batch body), or any decision with
-`"review_required": true`, creates a pending review
+A workflow says which outputs a person should check with a review rule saved
+on the graph as `review` (`backend/features/execution/review.py`):
+
+```jsonc
+"review": {
+  "node": "decide",                 // node whose output is checked (default: any node)
+  "score_field": "score",           // numeric field compared to `range` (default "score" when a range is set)
+  "range": [35, 65],                // inclusive band that needs a person
+  "when": {"field": "action", "equals": "alert"},  // optional precondition for the band
+  "flag_field": "review_required",  // a true value always needs a person (default "review_required")
+  "show": ["action", "rationale"],  // fields shown to the reviewer (at most 12)
+  "approve_label": "alert",         // final_action on approve (default "approved")
+  "reject_label": "suppress"        // final_action on reject (default "rejected")
+}
+```
+
+The rule is validated when the graph is saved (bad rule → 422). After a
+successful run, each node's full output (not the clipped display copy) is
+parsed as JSON; the first object that matches creates a pending review
 (`backend/data/reviews/<id>.json`) and the run gets
 `review_status: "awaiting_review"` + `review_id` (batch items mirror
-`review_status`). No tkinter — pure web polling.
+`review_status`). An object matches when its `flag_field` is `true`, or when
+its `score_field` lies in the band and `when` (if any) holds. Without a rule,
+only an output carrying `review_required: true` is routed. A
+`"review_zone": [lo, hi]` in the run / run-batch body replaces the rule's
+`range` for that run or batch (and turns on band matching on `score` when the
+graph has no rule). No tkinter — pure web polling.
 
-- `GET /api/review?status=pending` →
+- `GET /api/review?status=pending` → newest first, at most 50:
   ```jsonc
   [{"review_id", "run_id", "graph_id", "status": "pending|approved|rejected",
-    "company", "topic", "severity", "score", "risk_level", "summary",
-    "decision": {...}, "zone": [lo, hi], "created_at",
-    "resolved_at", "resolution", "final_action", "note"}]
+    "node": "decide", "score": 50.0 | null,
+    "fields": {...the `show` fields...},   // or the output's first 12 scalar fields
+    "output": {...full matched output...},
+    "zone": [lo, hi] | null, "approve_label", "reject_label",
+    "created_at", "resolved_at", "resolution", "final_action", "note"}]
   ```
 - `POST /api/review/{review_id}` `{"decision": "approve"|"reject", "note"?}`
-  → updated review. approve ⇒ `final_action="alert"`, reject ⇒
-  `"suppress"`. The outcome is written back to the run JSON
-  (`review_status`/`final_action`/`review_note`) and the batch item.
+  → updated review. `final_action` is the rule's `approve_label` /
+  `reject_label`. The outcome is written back to the run JSON
+  (`review_status`/`final_action`/`review_note`) and the batch item. 422 for
+  an unknown decision or an already resolved review.
 
 ### Export as a standalone project
 

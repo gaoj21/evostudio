@@ -4,12 +4,12 @@
 
 ## 文件职责
 
-- `batch.py` — Batch run engine for EvoAgentX Studio.
-- `batch_compare.py` — Comparing two evaluations of the same workflow.
+- `batch.py` — Batch run engine. `assign_sequences` records on each item its `trajectory` (the group value of the Input's declared `sequence`) and its memory `sequence` key; `_group_key` picks DataLoader group → Input trajectory → memory key. There is no implicit grouping by `sample_id` / `as_of` or any other field name. Canvas Evolve reuses both functions.
+- `batch_compare.py` — Comparing two evaluations of the same workflow. Records are labelled generically: the trajectory when there is one, otherwise the first short text value (or `field=value`).
 - `batch_export.py` — Getting a batch's results out of the Studio.
-- `scheduler.py` — Running a workflow on a timer.
-- `watcher.py` — Watchers: scheduled / live input-source polling for EvoAgentX Studio.
-- `review.py` — HITL web review for EvoAgentX Studio.
+- `scheduler.py` — Running a workflow on a timer. `next_local_time` recomputes a daily time on the local wall clock for each date, so daylight-saving changes do not shift it.
+- `watcher.py` — Watchers: scheduled / live input-source polling. Plugin Input types are watchable and de-duplicated by their `watch_key` (a record hash without one). Records are marked seen only after the poll and every run start succeed. Daily times use `scheduler.next_local_time`.
+- `review.py` — HITL web review. The rule is `graph["review"]` (`node`, `score_field`, `range`, `when{field,equals}`, `flag_field`, `show`, `approve_label`, `reject_label`), validated on save by `validate_rule`. Without a rule only `review_required: true` routes; a batch/run `review_zone` replaces `range`. Reviews store `node`, `score`, `fields`, the full `output`; `final_action` is the rule's label. Full node outputs are read, not display copies.
 
 ## 修改边界
 
@@ -46,3 +46,15 @@
   their memory usage is separate from incremental input loading. Full exports
   also materialize their output. Legacy readers and Evolve replay retain their
   existing preparation path; use the Python DataLoader run path for streaming.
+
+## Streamed DataLoader runs
+
+`loader_run.py` starts a run over a Python Dataset without reading it in the
+request; `stream_batch.py` executes it chunk by chunk. Failures do not stop the
+stream: `batch._execute_batch` carries blocked groups across chunks
+(`state["blocked_groups"]`), and `resume_batch` re-runs unfinished records and
+then continues reading from `state["records_read"]` (`loader_run.resume_chunks`).
+Which records form an ordered group comes from the data (DataLoader group), the
+Input type's declared `sequence` (`sources.input_sequence`, e.g. a project
+plugin's Input), or the memory configuration
+(`backend/features/memory/sequencing.py`), never from assumed field names.

@@ -443,7 +443,7 @@ class TestDatingTheTimeline:
                 self.entry("2025-12-01", "suppress", "2026-09-06 23:41:24")]
 
     def tracked(self, **extra):
-        return task(memory={"match": "company", "retrieve": 5, **extra})
+        return task(memory={"match": "company", "retrieve": 5, "time_filter": False, **extra})
 
     def test_ordered_by_the_period_it_covers(self):
         block = memory_policy.history_for(
@@ -492,7 +492,7 @@ class TestValidatingWhatIsRecorded:
             {"name": "decide", "inputs": [{"name": "company"}],
              "outputs": [{"name": "decision"}], "use_long_term_memory": True,
              "memory": {"context": ["window_ends"]}}, self._siblings())
-        assert errors and "no node in this workflow produces" in errors[0]
+        assert errors == []  # optional content does not create execution dependencies
 
     def test_dating_by_something_the_entry_will_not_carry(self):
         # It would silently fall back to the write time, which is the thing
@@ -501,7 +501,7 @@ class TestValidatingWhatIsRecorded:
             {"name": "decide", "inputs": [{"name": "company"}],
              "outputs": [{"name": "decision"}], "use_long_term_memory": True,
              "memory": {"at": "window_end"}}, self._siblings())
-        assert errors and "neither takes nor records" in errors[0]
+        assert errors == []  # metadata binding does not require storing the field
 
     def test_recording_it_makes_dating_by_it_valid(self):
         assert memory_policy.validate(
@@ -630,9 +630,9 @@ class TestTheCutoffSurvivesTheRealWiring:
         bare = memory_policy.with_context(self.task, node_inputs, None)
 
         assert "as_of" not in bare
-        leaked = memory_policy.history_for(
-            [self.entry("2026-04-16", "suppress LATER")], self.task, bare)
-        assert "LATER" in leaked      # no cutoff is available, so nothing is held back
+        with pytest.raises(memory_policy.bindings.BindingError, match="dated by 'as_of', which this run did not provide"):
+            memory_policy.history_for(
+                [self.entry("2026-04-16", "suppress LATER")], self.task, bare)
 
     def test_the_write_side_resolves_context_the_same_way(self):
         # If the two disagreed, entries would be dated by one rule and
@@ -803,8 +803,12 @@ class TestAContextFieldCanReachIntoAnOutput:
                     "detect": {"name": "detect", "outputs": [{"name": "detection"}]},
                     "decide": {**self.task, "inputs": [{"name": "company"}], "outputs": []}}
         assert memory_policy.validate(siblings["decide"], siblings) == []
-        bad = {**self.task, "memory": {**self.task["memory"], "context": ["nothing.source"]}}
-        assert any("nothing" in e for e in memory_policy.validate(bad, siblings))
+        # The same node (with its inputs), only the context field is unknown.
+        # Optional context no longer invalidates the graph: it is skipped when
+        # recording and reported as a Memory note in the run.
+        bad = {**siblings["decide"],
+               "memory": {**self.task["memory"], "context": ["nothing.source"]}}
+        assert memory_policy.validate(bad, {**siblings, "decide": bad}) == []
 
 
 def test_read_only_can_keep_no_fields_and_never_selects_a_write():

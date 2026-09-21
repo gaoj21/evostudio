@@ -286,9 +286,9 @@ describe('fields from the rest of the workflow', () => {
     expect([...dated.options].map((o) => o.value)).toContain('as_of');
   });
 
-  it('warns that the write time orders nothing until one is picked', () => {
+  it('explains that business time is optional', () => {
     setup({}, WITH_SOURCE);
-    expect(screen.getByText(/written within the same minute/)).toBeInTheDocument();
+    expect(screen.getByText(/No time field is required/)).toBeInTheDocument();
   });
 });
 
@@ -334,11 +334,11 @@ describe('choosing which store a node keeps', () => {
   // recalls…") rather than a decision between two different things.
   it('offers a record per field, or a similarity search', () => {
     setup();
-    const options = [...screen.getByLabelText('Keeps').querySelectorAll('option')]
+    const options = [...screen.getByLabelText('Match field (optional)').querySelectorAll('option')]
       .map((o) => o.textContent);
 
-    expect(options[0]).toBe('Past runs, searched by similarity');
-    expect(options).toContain('A record per company');
+    expect(options[0]).toBe('No entity filter');
+    expect(options).toContain('company');
   });
 
   it('explains what a table is, once one is chosen', () => {
@@ -347,14 +347,13 @@ describe('choosing which store a node keeps', () => {
     setup({ memory: { match: 'company', at: 'as_of' } });
 
     const said = document.body.textContent;
-    expect(said).toContain('A table keyed by');
-    expect(said).toContain('one row per');
-    expect(said).toContain('either');
+    expect(said).toContain('Legacy mode: replaces the same entity and date');
+    expect(said).toContain('Entity ← company');
   });
 
   it('records the choice on the node', async () => {
     const { onUpdate, user } = setup();
-    await user.selectOptions(screen.getByLabelText('Keeps'), 'company');
+    await user.selectOptions(screen.getByLabelText('Match field (optional)'), 'company');
 
     expect(onUpdate).toHaveBeenCalledWith('judge',
       { memory: expect.objectContaining({ match: 'company' }) });
@@ -362,7 +361,7 @@ describe('choosing which store a node keeps', () => {
 
   it('explains the corpus when no subject is tracked', () => {
     setup();
-    expect(screen.getByText(/what resembles this/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Retrieval method')).toHaveValue('recall');
   });
 });
 
@@ -411,4 +410,24 @@ it('allows read-only memory without a write-field warning', () => {
   setup({ memory: { write_enabled: false, inputs: [], outputs: [] } });
   expect(screen.queryByText(/Nothing is selected/)).not.toBeInTheDocument();
   expect(screen.getByRole('checkbox', { name: 'Write memory after the run' })).not.toBeChecked();
+});
+
+
+it('offers upstream time without requiring Also record and leaves content unchanged', async () => {
+  const { user, onUpdate } = setup({ memory: { version: 2, kind: 'table', inputs: [], outputs: ['verdict'], time_filter: false } },
+    memorySiblings([{ id: 'loader', data: { kind: 'source', outputs: [{ name: 'as_of' }] } }]));
+  await user.selectOptions(screen.getByLabelText('Dated by'), 'nodes.loader.outputs.as_of');
+  expect(onUpdate).toHaveBeenLastCalledWith('judge', { memory: expect.objectContaining({ at: 'nodes.loader.outputs.as_of', inputs: [], context: [], time_filter: false }) });
+});
+
+it('does not switch storage when matching is changed', async () => {
+  const { user, onUpdate } = setup({ memory: { version: 2, kind: 'table', write_mode: 'append' } });
+  await user.selectOptions(screen.getByLabelText('Match field (optional)'), 'company');
+  expect(onUpdate).toHaveBeenLastCalledWith('judge', { memory: expect.objectContaining({ kind: 'table', write_mode: 'append', match: 'company' }) });
+});
+
+it('makes stale recorded fields removable', async () => {
+  const { user, onUpdate } = setup({ memory: { context: ['window_end'] } });
+  await user.click(screen.getByRole('checkbox', { name: /window_end.*unavailable/ }));
+  expect(onUpdate).toHaveBeenLastCalledWith('judge', { memory: expect.objectContaining({ context: [] }) });
 });

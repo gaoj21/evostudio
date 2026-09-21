@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import SchedulePanel, { untilText } from './SchedulePanel.jsx';
 
 vi.mock('../../api.js', () => ({
-  api: { getSchedule: vi.fn(), setSchedule: vi.fn(), clearSchedule: vi.fn() },
+  api: { getSchedule: vi.fn(), setSchedule: vi.fn(), clearSchedule: vi.fn(), resumeSchedule: vi.fn() },
 }));
 
 const { api } = await import('../../api.js');
@@ -64,7 +64,7 @@ describe('SchedulePanel', () => {
 
   it('fills the form in from the existing schedule', async () => {
     setup(DAILY);
-    await waitFor(() => expect(screen.getByLabelText(/Time/)).toHaveValue('09:00'));
+    await waitFor(() => expect(screen.getByLabelText('Time')).toHaveValue('09:00'));
     expect(screen.getByDisplayValue('daily-report')).toBeInTheDocument();
     expect(screen.getByDisplayValue(/"city": "Lima"/)).toBeInTheDocument();
   });
@@ -72,7 +72,7 @@ describe('SchedulePanel', () => {
   it('sets a daily schedule', async () => {
     const user = setup();
     await screen.findByRole('button', { name: 'Schedule it' });
-    fireEvent.change(screen.getByLabelText(/Time/), { target: { value: '07:30' } });
+    fireEvent.change(screen.getByLabelText('Time'), { target: { value: '07:30' } });
     await user.click(screen.getByRole('button', { name: 'Schedule it' }));
 
     await waitFor(() => expect(api.setSchedule).toHaveBeenCalledWith('probe',
@@ -134,4 +134,39 @@ describe('SchedulePanel', () => {
     render(<SchedulePanel open={false} graphId="probe" onClose={vi.fn()} />);
     expect(api.getSchedule).not.toHaveBeenCalled();
   });
+});
+
+
+it('does not carry one workflow schedule into another that has none', async () => {
+  api.getSchedule.mockImplementation(async (id) => id === 'A'
+    ? { ...DAILY, graph_id: 'A', mode: 'interval', interval_minutes: 15, inputs: { secret: 'A-only' }, session: 'a-sess' }
+    : { graph_id: 'B', scheduled: false });
+  const { rerender } = render(<SchedulePanel open graphId="A" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByLabelText(/Inputs/).value).toContain('A-only'));
+  rerender(<SchedulePanel open={false} graphId="A" onClose={vi.fn()} />);
+  rerender(<SchedulePanel open graphId="B" onClose={vi.fn()} />);
+  await waitFor(() => expect(api.getSchedule).toHaveBeenCalledWith('B'));
+  await waitFor(() => expect(screen.getByLabelText(/Inputs/).value).toBe('{}'));
+  expect(screen.getByLabelText(/Session/).value).toBe('');
+});
+
+
+it('resumes the existing experiment with the selected catch-up strategy', async () => {
+  api.resumeSchedule.mockResolvedValue({ ...DAILY, experiment_id: 'same-experiment' });
+  const user = setup({ ...DAILY, running: false, needs_resume: true, experiment_id: 'same-experiment' });
+  await screen.findByRole('button', { name: 'Resume experiment' });
+  await user.selectOptions(screen.getByLabelText('Resume strategy'), 'latest');
+  await user.click(screen.getByRole('button', { name: 'Resume experiment' }));
+  expect(api.resumeSchedule).toHaveBeenCalledWith('probe', 'latest');
+  expect(api.setSchedule).not.toHaveBeenCalled();
+});
+
+it('configures a weekly Monday schedule and recovery policy', async () => {
+  const user = setup();
+  await screen.findByRole('button', { name: 'Schedule it' });
+  await user.selectOptions(screen.getByLabelText('How often'), 'weekly');
+  await user.selectOptions(screen.getByLabelText('Day'), '0');
+  await user.selectOptions(screen.getByLabelText('After downtime'), 'all');
+  await user.click(screen.getByRole('button', { name: 'Schedule it' }));
+  expect(api.setSchedule).toHaveBeenCalledWith('probe', expect.objectContaining({ mode: 'weekly', weekday: 0, recovery_policy: 'all' }));
 });

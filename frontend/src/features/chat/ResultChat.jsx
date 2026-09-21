@@ -21,7 +21,7 @@ export default function ResultChat({ graphId, run }) {
   useEffect(() => { setInput(''); setError(''); }, [sessions.activeId]);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, [graphId]);
   useEffect(() => { bottom.current?.scrollIntoView?.({ block: 'nearest' }); }, [messages, busy]);
-  function useSelected(scope = context.scope) {
+  function selectScope(scope = context.scope) {
     sessions.updateContext({ scope: scope === 'batch' && !run.batch_id ? 'current' : scope, run_id: run.run_id, batch_id: run.batch_id });
     setError('');
   }
@@ -50,11 +50,11 @@ export default function ResultChat({ graphId, run }) {
   return <aside className="result-chat">
     <ChatSessions manager={sessions} busy={busy} />
     <div className="result-chat-context">
-      <label>Data scope<select disabled={busy} value={context.scope} onChange={e => useSelected(e.target.value)}>
+      <label>Data scope<select disabled={busy} value={context.scope} onChange={e => selectScope(e.target.value)}>
         <option value="current">Selected record</option><option value="batch" disabled={!run.batch_id && context.scope !== 'batch'}>Batch</option><option value="all">All task runs</option>
       </select></label>
       <small>{context.scope === 'all' ? 'All saved results for this task' : `${context.scope === 'batch' ? 'Batch' : 'Record'} · ${context.scope === 'batch' ? context.batch_id : context.run_id}`}</small>
-      {differentRecord && <button disabled={busy} onClick={() => useSelected()}>Use selected record</button>}
+      {differentRecord && <button disabled={busy} onClick={() => selectScope()}>Use selected record</button>}
     </div>
     <div className="result-chat-messages" aria-live="polite">
       {!messages.length && <div className="chat-welcome"><h3>Explore your results</h3><p>Ask a question, compare records, or calculate a metric.</p></div>}

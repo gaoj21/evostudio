@@ -64,13 +64,23 @@ def field_types(item):
     return result
 
 
+def _mentions(config, dataset_id):
+    """A source config uses the dataset directly or through a wrapper
+    (a DataLoader's source_config, or any other nested adapter config)."""
+    if isinstance(config, dict):
+        return config.get('dataset_id') == dataset_id or any(_mentions(v, dataset_id) for v in config.values())
+    if isinstance(config, list):
+        return any(_mentions(v, dataset_id) for v in config)
+    return False
+
+
 def references(dataset_id):
     from backend.api import graphs
     uses = []
     for path in graphs.GRAPHS_DIR.glob('*.json'):
         graph = json.loads(path.read_text(encoding='utf-8'))
         for node in graph.get('tasks', []):
-            if (node.get('source') or {}).get('dataset_id') == dataset_id:
+            if _mentions(node.get('source') or {}, dataset_id):
                 uses.append({'graph_id': graph['id'], 'graph_name': graph.get('name', graph['id']), 'node': node['name']})
     return uses
 
@@ -100,7 +110,10 @@ def parse(filename, content):
         if ext in ("csv", "tsv"):
             # Third-party tool imports may reset this process-global setting.
             csv.field_size_limit(sys.maxsize)
-            reader = csv.DictReader(io.StringIO(text), delimiter="\t" if ext == "tsv" else ",")
+            # TSV has no quoting: a cell starting with '"' is data, not the
+            # start of a quoted field that swallows the rows after it.
+            reader = (csv.DictReader(io.StringIO(text), delimiter="\t", quoting=csv.QUOTE_NONE)
+                      if ext == "tsv" else csv.DictReader(io.StringIO(text)))
             headers = reader.fieldnames or []
             if not headers or any(not h.strip() for h in headers) or len(headers) != len(set(headers)):
                 raise SourceError("Use a header row with non-empty, unique column names.")
@@ -189,7 +202,7 @@ def records(config):
         mapped.append(out)
     mode = config.get("input_mode", "records")
     if mode == "reference":
-        field = config.get("reference_field", "obligor_list")
+        field = config.get("reference_field") or "reference"
         if not isinstance(field, str) or not field.strip():
             raise SourceError("Give the shared reference a non-empty output name.")
         return [{field: mapped}]

@@ -57,6 +57,11 @@ def _reaches_work(tasks, edges, name: str) -> bool:
     return any(_does_work(t) and t.get("name") not in parked for t in kept)
 
 
+def _yields_trajectories(type_) -> bool:
+    from backend.features import plugins
+    return bool((plugins.source_schemas().get(type_) or {}).get("sequence"))
+
+
 def _source_of(tasks, edges) -> dict | None:
     """The wired canvas source, described by its own configuration.
 
@@ -78,8 +83,9 @@ def _source_of(tasks, edges) -> dict | None:
         return {
             "node": task.get("name"),
             "type": config.get("type"),
-            # n=0 means "the whole split", whose size a plan does not know.
-            "cardinality": None if config.get("dataset", "contemporary") != "contemporary" else n if n > 0 else None,
+            # n=0 means "all records", whose number a plan does not know; nor
+            # does it for an Input whose n counts trajectories, not records.
+            "cardinality": None if _yields_trajectories(config.get("type")) else n if n > 0 else None,
             "single_policy": SINGLE_POLICY,
         }
     return None

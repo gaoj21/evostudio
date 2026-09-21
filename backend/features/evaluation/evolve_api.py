@@ -2,8 +2,7 @@
 
 Runs WorkFlowMiproOptimizer on a canvas graph in a background thread:
 canvas tasks become MiproPromptTemplate-backed framework tasks, a small
-Benchmark is built from an uploaded JSONL dataset or the credit_risk feed,
-and artifacts (optimized graph, before/after metrics, prompt diff) are
+Benchmark is built from an uploaded labelled JSON/JSONL/CSV file, and artifacts (optimized graph, before/after metrics, prompt diff) are
 persisted to backend/data/evolve/<task_id>/.
 """
 
@@ -37,7 +36,7 @@ ENV_PATH = _REPO_ROOT / ".env"
 # reported "missing optimizer package" for a package that was installed.
 import numpy  # noqa: E402,F401
 
-# --- dspy 3.3.0 compatibility shims (copied from projects/credit_risk/optimize_mipro.py)
+# --- dspy 3.3.0 compatibility shims
 # evoagentx's MiproOptimizer was written against an older dspy; bridge the
 # changed call signatures without forking the optimizer.
 import dspy.teleprompt.mipro_optimizer_v2 as _dspy_mipro  # noqa: E402
@@ -175,6 +174,7 @@ _MiproLMWrapper.copy = _patched_lm_copy
 from backend.api.evaluation import (  # noqa: E402
     METRICS,
     _score,
+    available_metrics,
 )
 
 def build_benchmark(path: str, input_keys: list[str], metric: str,
@@ -275,6 +275,16 @@ def resolve_params(raw: dict, n_records: int, llm_nodes: list[str]) -> dict:
 _tasks: dict[str, dict] = {}
 _lock = threading.Lock()
 
+
+class EvolveStopped(BaseException):
+    """Raised inside a task the user stopped. A BaseException on purpose: the
+    framework evaluator catches Exception per example and would carry on."""
+
+
+def check_stop(state: dict) -> None:
+    if state.get("stop_requested"):
+        raise EvolveStopped()
+
 _MAX_TEXT = 4000
 
 
@@ -329,6 +339,7 @@ def start_evolve(graph: dict, records: list[dict], metric: str, params: dict) ->
 
 
 def _stage(state: dict, name: str) -> None:
+    check_stop(state)
     state["stage"] = name
     state.setdefault("stages", []).append({"stage": name, "at": _utcnow()})
     _persist(state)
@@ -384,8 +395,8 @@ def _execute_evolve(task_id: str, graph_doc: dict, metric: str, params: dict, ta
             tasks.append(ft)
         graph = SequentialWorkFlowGraph(goal=graph_doc.get("goal", ""), tasks=tasks)
 
-        # The same tools a run would have: a node that matches obligors with
-        # a toolkit cannot be evaluated without it.
+        # The same tools a run would have: a node that calls a toolkit cannot
+        # be evaluated without it.
         from backend.api import tools_registry, workspace as workspace_mod
         tools = tools_registry.resolve_tools(
             sorted({n for t in ordered for n in (t.get("tool_names") or [])}),
@@ -412,10 +423,14 @@ def _execute_evolve(task_id: str, graph_doc: dict, metric: str, params: dict, ta
             n_train=int(params.get("n_train", 1)),
             n_dev=int(params.get("n_dev") or 1),
         )
+        def collate(example):
+            check_stop(state)          # every example: Stop takes effect within one
+            return example["inputs"]
+
         evaluator = Evaluator(
             llm=llm,
             agent_manager=agent_manager,
-            collate_func=lambda ex: ex["inputs"],
+            collate_func=collate,
             num_workers=1,
         )
 
@@ -480,10 +495,14 @@ def _execute_evolve(task_id: str, graph_doc: dict, metric: str, params: dict, ta
                 t["prompt"] = instructions[t["name"]]
         state["optimized_graph"] = optimized_graph
         state["status"] = "done"
+    except EvolveStopped:
+        state["status"] = "stopped"
+        state["error"] = None
     except Exception:
         state["status"] = "failed"
         state["error"] = traceback.format_exc()
     finally:
+        state.pop("current_run", None)
         state["stage"] = None
         state["finished_at"] = _utcnow()
         try:
@@ -541,10 +560,19 @@ def get_task(task_id: str) -> dict | None:
     if path.is_file():
         try:
             with open(path, encoding="utf-8") as f:
-                return json.load(f)
+                return _orphaned(json.load(f))
         except (json.JSONDecodeError, OSError):
             return None
     return None
+
+
+def _orphaned(state: dict) -> dict:
+    """A task saved as running that this process is not running was cut off
+    by a restart; say so instead of showing it as running forever."""
+    if state.get("status") == "running":
+        state = {**state, "status": "interrupted", "stage": None,
+                 "error": "The server restarted while this task was running. Start it again."}
+    return state
 
 
 def list_tasks(graph_id: str | None = None) -> list[dict]:
@@ -553,7 +581,7 @@ def list_tasks(graph_id: str | None = None) -> list[dict]:
         for path in EVOLVE_DIR.glob("*/result.json"):
             try:
                 with open(path, encoding="utf-8") as f:
-                    by_id[path.parent.name] = json.load(f)
+                    by_id[path.parent.name] = _orphaned(json.load(f))
             except (json.JSONDecodeError, OSError):
                 continue
     with _lock:
@@ -575,7 +603,7 @@ router = APIRouter(prefix="/api")
 
 @router.get("/evolve/metrics")
 def list_metrics():
-    return {"metrics": [{"name": k, "description": v} for k, v in METRICS.items()]}
+    return {"metrics": available_metrics()}
 
 
 @router.get("/evolve/presets")
@@ -621,10 +649,9 @@ async def preview_saved_evaluation(graph_id: str, request: Request):
                     'scoring': {'scored': None, 'unscored': None, 'total': len(records)},
                     'note': 'Canvas evaluator will score saved outputs. Preview does not execute evaluator tools.'}
         metric = body.get('metric') or saved.default_metric(selection)
-        if metric not in METRICS:
+        if not any(m['name'] == metric for m in available_metrics()):
             raise sources.SourceError('Choose an available metric.')
-        eligible = sum(r.get('status') == 'success' and r.get('label') is not None
-                       and (metric != 'credit_risk' or isinstance(r['label'], dict) and r['label'].get('type') in ('positive', 'negative')) for r in records)
+        eligible = sum(r.get('status') == 'success' and r.get('label') is not None for r in records)
         return {**selection, 'suggested_metric': saved.default_metric(selection),
                 'scoring': {'scored': eligible, 'unscored': len(records) - eligible, 'total': len(records)}}
     except sources.SourceError as e:
@@ -633,9 +660,12 @@ async def preview_saved_evaluation(graph_id: str, request: Request):
 
 @router.post("/graphs/{graph_id}/evolve")
 async def start_evolve_task(graph_id: str, request: Request):
-    """Start a MIPRO optimization task. Body is either a multipart dataset
-    upload (file = JSONL of {"inputs": {...}, "label": ...}) plus form fields,
-    or JSON {"source": "credit_risk", "split"?, "n"?, "seed"?, "metric", ...}."""
+    """Start an evaluation or optimization task.
+
+    Body is either a multipart labelled-file upload (records of
+    {"inputs": {...}, "label": ...}) plus form fields, optimized with MIPRO;
+    or JSON {"source": "canvas"|"saved_batch"|"saved_run", ...}, scored by a
+    canvas evaluator or a metric."""
     graph = graph_store.load_graph(graph_id)
     if graph is None:
         raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found")
@@ -676,7 +706,7 @@ async def start_evolve_task(graph_id: str, request: Request):
                     from backend.features.evaluation.canvas_evolution import select
                     select(graph, body['evaluator'])
                     metric = 'canvas:' + body['evaluator']
-                elif metric not in METRICS:
+                elif not any(m["name"] == metric for m in available_metrics()):
                     raise sources.SourceError("Choose an available metric.")
                 mode = body.get("mode", "evaluate")
                 if mode not in ("evaluate", "evolve_evaluate"):
@@ -689,29 +719,13 @@ async def start_evolve_task(graph_id: str, request: Request):
                     raise sources.SourceError("Choose at least one prompt to improve.")
                 params = {"mode": mode, "source": source, "nodes": chosen, "n_dev": len(records), "n_train": 0, "evaluator": body.get("evaluator")}
                 return {"task_id": start_evolve(graph, records, metric, params)}
-            if body.get("source") != "credit_risk":
-                raise sources.SourceError("JSON body must be {\"source\": \"credit_risk\", ...}")
-            records = sources.credit_risk_records(
-                split=body.get("split") or None,
-                n=int(body["n"]) if body.get("n") is not None else 5,
-                seed=int(body.get("seed") or 42),
-                with_labels=True,
-                **({"dataset": body["dataset"]} if body.get("dataset") else {}),
-            )
-            params = body
-            source = {
-                "type": "credit_risk",
-                "dataset": body.get("dataset", "contemporary"),
-                "split": body.get("split"),
-                "n": int(body["n"]) if body.get("n") is not None else 5,
-                "seed": int(body.get("seed") or 42),
-            }
-
-        # The credit-risk feed scores as credit risk unless told otherwise.
-        metric = params.get("metric") or ("credit_risk" if source["type"] == "credit_risk" else "exact_match")
-        if metric not in METRICS:
             raise sources.SourceError(
-                f"Unknown metric '{metric}'. Available: {sorted(METRICS)}"
+                "Choose the data: the canvas Input with an evaluator, saved results, or an uploaded labelled file.")
+
+        metric = params.get("metric") or "exact_match"
+        if not any(m["name"] == metric for m in available_metrics()):
+            raise sources.SourceError(
+                f"Unknown metric '{metric}'. Available: {sorted(m['name'] for m in available_metrics())}"
             )
         if params.get("mode") != "evaluate" and len(records) < 2:
             raise sources.SourceError("An optimization needs at least 2 records: one to learn from, one to judge by.")
@@ -724,6 +738,30 @@ async def start_evolve_task(graph_id: str, request: Request):
 
     task_id = start_evolve(graph, records, metric, params)
     return {"task_id": task_id}
+
+
+@router.post("/evolve/{task_id}/stop")
+def stop_evolve_task(task_id: str):
+    """Stop a running task at its next record; the in-flight run, if any, is
+    cancelled. Nothing it produced is applied."""
+    with _lock:
+        state = _tasks.get(task_id)
+    if state is None:
+        if get_task(task_id) is None:
+            raise HTTPException(status_code=404, detail=f"Evolve task '{task_id}' not found")
+        raise HTTPException(status_code=409, detail="This task is not running.")
+    if state.get("status") != "running":
+        raise HTTPException(status_code=409, detail="This task is not running.")
+    state["stop_requested"] = True
+    run_id = state.get("current_run")
+    if run_id:
+        from backend.api import runner
+        try:
+            runner.cancel_run(run_id)
+        except Exception:
+            pass
+    _persist(state)
+    return {"stopping": True}
 
 
 @router.post("/evolve/{task_id}/apply")

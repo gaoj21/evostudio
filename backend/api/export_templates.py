@@ -20,23 +20,43 @@ def _toolkit_of(tool_name: str | None) -> str | None:
     return target["name"] if kind == "custom" else target
 
 
+def _is_factory_tool(tool_name: str | None) -> bool:
+    from . import custom_tools
+
+    found = custom_tools.find(tool_name) if tool_name else None
+    return bool(found and found[0].get("factory"))
+
+
 def _workflow_py(goal, llm_tasks, tool_nodes, edges, skills, project, local_modules,
-                 plan_nodes=None) -> str:
-    """The runnable heart of the export: tasks as data, execution as code."""
+                 plan_nodes=None, disabled=()) -> str:
+    """The runnable heart of the export: tasks as data, execution as code.
+
+    `disabled` are the nodes switched off on the canvas. They are written out
+    with `enabled: False` rather than dropped: the edges still name them, and
+    a project imported back must describe the canvas it came from.
+    """
+    off_llm = [t for t in disabled if t.get("kind") != "tool"]
+    off_tools = [t for t in disabled if t.get("kind") == "tool"]
     framework_tasks = [
-        {k: t[k] for k in ("name", "description", "inputs", "outputs", "prompt",
-                           "system_prompt", "parse_mode", "tool_names", "skill_names",
-                           "use_long_term_memory", "memory")
-         if k in t and t[k] not in (None, [], "", False)}
-        for t in llm_tasks
+        {**{k: t[k] for k in ("name", "description", "inputs", "outputs", "prompt",
+                              "system_prompt", "parse_mode", "tool_names", "skill_names",
+                              "use_long_term_memory", "memory")
+            if k in t and t[k] not in (None, [], "", False)},
+         **({"enabled": False} if t.get("enabled") is False else {})}
+        for t in list(llm_tasks) + off_llm
     ]
     # A tool node names a tool, and a tool lives in a toolkit. Which one is
     # known here and nowhere else: resolving it inside the exported project
     # would mean shipping the whole registry to look it up again.
     tool_specs = []
-    for t in tool_nodes:
+    for t in list(tool_nodes) + off_tools:
         spec = {k: t[k] for k in ("name", "tool", "inputs", "outputs") if k in t}
         spec["toolkit"] = _toolkit_of(t.get("tool"))
+        if _is_factory_tool(t.get("tool")):
+            # A class-based tool returns its outputs by name already.
+            spec["factory"] = True
+        if t.get("enabled") is False:
+            spec["enabled"] = False
         tool_specs.append(spec)
     # Built outside the f-string: doubled braces inside an interpolated
     # expression are a set literal, not an escape.
@@ -171,6 +191,79 @@ def load_skills(tasks):
 # and refuses a second one, so building the toolkits twice in one process --
 # two runs, a batch -- would otherwise raise "Found duplicate module".
 _TOOL_CLASSES = {{}}
+# Custom toolkit modules, executed once per process.
+_MODULES = {{}}
+
+
+class _in_folder:
+    """Run inside an uploaded folder, as Studio does: its code reads the files
+    beside it by relative path."""
+
+    def __init__(self, folder):
+        self.folder, self.previous = folder, None
+
+    def __enter__(self):
+        if self.folder is not None:
+            self.previous = os.getcwd()
+            os.chdir(self.folder)
+
+    def __exit__(self, *exc):
+        if self.previous is not None:
+            os.chdir(self.previous)
+
+
+def load_custom_module(name, spec):
+    """A custom toolkit's code, executed the way Studio executes it.
+
+    Pasted code is tools/<name>.py. An uploaded folder is tools/<name>/: its
+    entry file is the API, and the folder goes on sys.path because its modules
+    import each other.
+    """
+    if name in _MODULES:
+        return _MODULES[name]
+    package = spec.get("package")
+    folder = None
+    if package:
+        folder = HERE / "tools" / name
+        code_path = folder / (package.get("entry") or "tools.py")
+        if str(folder) not in sys.path:
+            sys.path.insert(0, str(folder))
+    else:
+        code_path = HERE / "tools" / f"{{name}}.py"
+    if not code_path.is_file():
+        raise SystemExit(f"Toolkit '{{name}}': {{code_path.relative_to(HERE)}} is missing")
+    code = code_path.read_text(encoding="utf-8")
+    ns = {{"__file__": str(code_path)}}
+    with _in_folder(folder):
+        exec(compile(code, str(code_path), "exec"), ns)
+    _MODULES[name] = (ns, code, folder)
+    return _MODULES[name]
+
+
+def custom_callable(name, spec, tool):
+    """The plain function behind one custom tool.
+
+    A class-based tool (`build_tool`) is built from the toolkit's saved
+    configuration and given its inputs as one dict, exactly as in Studio.
+    """
+    ns, code, folder = load_custom_module(name, spec)
+    if tool.get("factory") or spec.get("factory"):
+        import python_tool
+
+        config = spec.get("config") or {{}}
+
+        def call(**kwargs):
+            with _in_folder(folder):
+                return python_tool.execute(ns, code, config, kwargs)
+        return call
+    fn = ns.get(tool["name"])
+    if not callable(fn):
+        raise SystemExit(f"Toolkit '{{name}}' does not define {{tool['name']}}(...)")
+
+    def call(**kwargs):
+        with _in_folder(folder):
+            return fn(**kwargs)
+    return call
 
 
 def build_toolkits(names):
@@ -186,29 +279,27 @@ def build_toolkits(names):
         spec_path = HERE / "tools" / f"{{name}}.json"
         if spec_path.is_file():
             spec = json.loads(spec_path.read_text(encoding="utf-8"))
-            code = (HERE / "tools" / f"{{name}}.py").read_text(encoding="utf-8")
-            ns = {{}}
-            exec(compile(code, str(spec_path.with_suffix(".py")), "exec"), ns)
             # A toolkit is a module: every tool it declared is one of the
-            # public functions in it.
+            # public functions in it (or its build_tool, for a class-based one).
             built = []
             for tool in spec.get("tools") or []:
-                key = json.dumps(tool, sort_keys=True, default=str)
+                key = json.dumps([name, tool], sort_keys=True, default=str)
                 if key in _TOOL_CLASSES:
                     built.append(_TOOL_CLASSES[key]())
                     continue
-                fn = ns.get(tool["name"])
-                if not callable(fn):
-                    raise SystemExit(
-                        f"tools/{{name}}.py does not define {{tool['name']}}(...)"
-                    )
+                fn = custom_callable(name, spec, tool)
                 params = tool.get("params") or []
+                # Optional parameters last, defaulting to "not given" so the
+                # tool's own default applies.
+                ordered = sorted(params, key=lambda p: not p.get("required", True))
                 sig = ", ".join(f"{{p['name']}}: {{py_types[p['type']].__name__}}"
-                                for p in params)
+                                + ("" if p.get("required", True) else " = _MISSING")
+                                for p in ordered)
                 call_kwargs = ", ".join(f"'{{p['name']}}': {{p['name']}}" for p in params)
                 src = (f"def __call__(self{{', ' if sig else ''}}{{sig}}):\\n"
-                       f"    return _fn(**{{{{{{call_kwargs}}}}}})\\n")
-                cns = {{"_fn": fn}}
+                       f"    return _fn(**{{{{k: v for k, v in {{{{{{call_kwargs}}}}}}.items() "
+                       f"if v is not _MISSING}}}})\\n")
+                cns = {{"_fn": fn, "_MISSING": object()}}
                 exec(compile(src, "<tool>", "exec"), cns)
                 # The class name only has to be unique in that registry; the
                 # tool's own `name` is what the framework and the model use.
@@ -221,7 +312,7 @@ def build_toolkits(names):
                     "inputs": {{p["name"]: {{"type": p["type"],
                                           "description": p.get("description", "")}}
                                for p in params}},
-                    "required": [p["name"] for p in params],
+                    "required": [p["name"] for p in params if p.get("required", True)],
                     "__call__": cns["__call__"],
                 }})
                 _TOOL_CLASSES[key] = cls
@@ -256,6 +347,8 @@ def call_tool_node(node, args):
     if tool is None:
         raise SystemExit(f"Toolkit '{{toolkit.name}}' has no tool '{{node['tool']}}'")
     result = tool(**args)
+    if node.get("factory"):
+        return result
     names = [o.get("name") for o in (node.get("outputs") or []) if o.get("name")]
     if len(names) <= 1:
         return {{(names[0] if names else "result"): result}}
@@ -271,12 +364,18 @@ def call_tool_node(node, args):
 MEMORY_DIR = HERE / "memory_store"
 
 
+def _memory_name(name):
+    task = next((t for t in TASKS if t.get("name") == name), {{}})
+    return (task.get("memory") or {{}}).get("store_id") or name
+
+
 def _table_store():
     """The vendored table store, pointed at this project rather than at the
     Studio checkout it was copied from."""
     import table_store
 
     table_store.TABLES_DIR = HERE / "memory_tables"
+    table_store.storage_name = lambda graph_id, node: _memory_name(node)
     return table_store
 
 
@@ -307,7 +406,7 @@ def prepare_ltm(tasks):
             from memory import open_memory
 
             memories[name] = open_memory(
-                MEMORY_DIR / name, f"{{PROJECT}}-{{name}}", create=True
+                MEMORY_DIR / _memory_name(name), f"{{PROJECT}}-{{_memory_name(name)}}", create=True
             )
         except Exception as exc:
             print(f"[memory] {{name}}: {{exc}} — continuing without it")
@@ -330,7 +429,7 @@ def prepare_ltm(tasks):
                 from memory import open_memory
 
                 opened = open_memory(
-                    MEMORY_DIR / other, f"{{PROJECT}}-{{other}}", create=False
+                    MEMORY_DIR / _memory_name(other), f"{{PROJECT}}-{{_memory_name(other)}}", create=False
                 )
                 if opened is not None:
                     memories[other] = opened
@@ -352,13 +451,13 @@ def agent_for_node(manager, node):
 def list_memory_entries(node):
     """Every entry in one node's store, for the by-subject recall.
 
-    Not a search: two runs about the same obligor are about the same obligor
+    Not a search: two runs about the same customer are about the same customer
     whether or not their text is alike.
     """
     from memory import list_entries
 
     try:
-        return list_entries(MEMORY_DIR / node)
+        return list_entries(MEMORY_DIR / _memory_name(node))
     except Exception:
         return []
 
@@ -458,10 +557,17 @@ def save_ltm(memories, graph, workflow, succeeded=True):
         if memory is None and not keeps_table(task):
             continue
         try:
+            # What this node was handed and what it produced, as the run
+            # recorded them: a flat lookup by field name loses an input fed
+            # under another name and lets a same-named output overwrite.
+            io = getattr(workflow, "node_io", {{}}).get(node.name)
+            if io is not None:
+                node_inputs, node_outputs = io["inputs"], io["outputs"]
+            else:
+                node_inputs = {{p.name: data[p.name] for p in (node.inputs or []) if p.name in data}}
+                node_outputs = {{p.name: data[p.name] for p in (node.outputs or []) if p.name in data}}
             payload = memory_policy.select(
-                task,
-                {{p.name: data[p.name] for p in (node.inputs or []) if p.name in data}},
-                {{p.name: data[p.name] for p in (node.outputs or []) if p.name in data}},
+                task, node_inputs, node_outputs,
                 succeeded=succeeded,
                 run_data=data,
             )
@@ -483,9 +589,11 @@ def save_ltm(memories, graph, workflow, succeeded=True):
             if row is not None:
                 import datetime
 
-                _table_store().upsert(
+                _table_store().write(
                     GRAPH_ID, node.name, row["subject"], row["at"], row["payload"],
-                    datetime.datetime.now(datetime.timezone.utc).isoformat())
+                    datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    mode=memory_policy.policy(task)["write_mode"], key=row.get("key"),
+                    execution_id=getattr(workflow, "execution_id", None))
                 continue
             # Missing table key means there is no row to write; it does not
             # turn a table node into a vector-memory node.
@@ -494,7 +602,7 @@ def save_ltm(memories, graph, workflow, succeeded=True):
                 continue
 
             # A node that tracks a subject keeps one entry per subject — that
-            # obligor's whole history — rather than one per run.
+            # subject's whole history — rather than one per run.
             subject = memory_policy.subject_of(task, payload)
             if subject is None:
                 memory.add([as_message(payload)])
@@ -530,6 +638,7 @@ class _Env:
 
     def __init__(self):
         self.data = {{}}
+        self.node_io = {{}}
         self.environment = self
 
     def get_all_execution_data(self):
@@ -588,7 +697,9 @@ def run(inputs):
     from evoagentx.workflow.workflow_graph import SequentialWorkFlowGraph
 
     llm = load_llm()
-    tasks = load_skills(TASKS)
+    # A node switched off on the canvas stays in TASKS (so the project still
+    # describes the whole canvas) but takes no part in a run.
+    tasks = load_skills([t for t in TASKS if t.get("enabled", True)])
     by_name = {{t["name"]: t for t in tasks}}
     tool_specs = {{t["name"]: t for t in TOOL_NODES}}
     memories = prepare_ltm(tasks)
@@ -597,6 +708,7 @@ def run(inputs):
     agents, framework_nodes = {{}}, []
     for task in tasks:
         plain = {{k: v for k, v in task.items() if k not in ("use_long_term_memory", "memory")}}
+        plain.pop("enabled", None)
         one = SequentialWorkFlowGraph(goal=GOAL, tasks=[plain])
         manager.add_agents_from_workflow(one, llm_config=llm.config,
                                          tools=build_toolkits(tool_names) or None)
@@ -604,10 +716,11 @@ def run(inputs):
         framework_nodes.append(node)
         agents[node.name] = agent_for_node(manager, node)
     graph = _Nodes(framework_nodes)
-    attach_ltm(manager, graph, tasks, memories, run_data=inputs)
-
     env = _Env()
+    import uuid
+    env.execution_id = uuid.uuid4().hex
     env.data.update(inputs)
+    attach_ltm(manager, graph, tasks, memories, run_data=env.data)
     values = {{}}
     consumed = {{b.get("node") for n in PLAN for b in n["input_bindings"].values()}}
 
@@ -616,13 +729,18 @@ def run(inputs):
             name = node["name"]
             if node["kind"] == "tool":
                 spec = tool_specs[name]
-                out = call_tool_node(spec, _gather(spec, node["input_bindings"], values, inputs))
+                args = _gather(spec, node["input_bindings"], values, inputs)
+                out = call_tool_node(spec, args)
             else:
                 task = by_name[name]
                 args = _gather(task, node["input_bindings"], values, inputs)
                 out = await _run_llm(agents[name], task, {{k: _as_text(v) for k, v in args.items()}})
             values[name] = out
+            env.node_io[name] = {{"inputs": dict(args), "outputs": dict(out)}}
             env.data.update(out)
+            for side, fields in (("inputs", args), ("outputs", out)):
+                for field, value in fields.items():
+                    env.data[f"nodes.{{name}}.{{side}}.{{field}}"] = value
             print(f"[node] {{name}} -> {{', '.join(out) or 'nothing'}}")
 
     ok = True

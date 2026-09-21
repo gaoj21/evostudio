@@ -51,7 +51,7 @@ def test_saved_route_does_not_load_dataset_or_start_workflow(monkeypatch):
     monkeypatch.setattr(graphs, 'validate_graph', lambda _: ([{'name': 'a'}], []))
     records = [{'id': '0', 'inputs': {}, 'prediction': 'yes', 'label': 'yes', 'status': 'success'}]
     monkeypatch.setattr(saved, 'resolve', lambda *a: (records, {'type': 'saved_run', 'run_id': 'r'}))
-    monkeypatch.setattr(sources, 'credit_risk_records', Mock(side_effect=AssertionError('No dataset replay')))
+    monkeypatch.setattr(sources, 'records_from_source_node', Mock(side_effect=AssertionError('No dataset replay')))
     launch = Mock(return_value='task')
     monkeypatch.setattr(evolve_api, 'start_evolve', launch)
     response = TestClient(app.app).post('/api/graphs/g/evolve', json={'source': 'saved_run', 'run_id': 'r', 'mode': 'evolve_evaluate', 'metric': 'exact_match', 'nodes': ['a']})
@@ -73,23 +73,21 @@ def test_historical_evaluation_ignores_current_graph_validation_and_stale_nodes(
     assert launch.call_args.args[3]['nodes'] == []
 
 
-def test_saved_split_filters_existing_records_without_replay(tmp_path, monkeypatch):
-    from backend.api import datasets
-    (tmp_path / 'partitions.jsonl').write_text('\n'.join(json.dumps(r) for r in [
-        {'case_id':'devcase','partition':'dev'}, {'case_id':'testcase','partition':'test'}, {'case_id':'missing','partition':'test'}]))
-    monkeypatch.setattr(datasets, 'release', lambda _: tmp_path)
-    original = {'graph_id':'g','status':'succeeded','source':{'dataset':'release'}, 'items':[
-        {'run_id':'a','status':'success','inputs':{'sample_id':'devcase'}},
-        {'run_id':'b','status':'success','inputs':{'sample_id':'testcase'}},
-        {'run_id':'c','status':'failed','inputs':{'sample_id':'testcase'}}]}
+def test_saved_results_take_no_dataset_or_split(monkeypatch):
+    """Saved results are evaluated as they were saved: the platform knows no
+    project's dataset partitions, so a dataset/split in the body filters
+    nothing (and is not an error)."""
+    original = {'graph_id':'g','status':'succeeded','source':{'type':'test_ledger'}, 'items':[
+        {'run_id':'a','status':'success','inputs':{'account':'x'}},
+        {'run_id':'b','status':'success','inputs':{'account':'y'}},
+        {'run_id':'c','status':'failed','inputs':{'account':'y'}}]}
     monkeypatch.setattr(batch, 'get_batch', lambda _: original)
     monkeypatch.setattr(runner, 'get_run', lambda _: {'result':'stored','nodes':[]})
-    records, selection = saved.resolve('g', {'source':'saved_batch','batch_id':'b','split':'test'})
-    assert [r['run_id'] for r in records] == ['b','c']
-    assert selection['matched_records'] == 2 and selection['matched_cases'] == 1
-    assert selection['missing_cases'] == 1
+    monkeypatch.setattr(sources, 'records_from_source_node', Mock(side_effect=AssertionError('No replay')))
+    for body in ({}, {'split':'test'}, {'dataset':'release','split':'train'}):
+        records, selection = saved.resolve('g', {'source':'saved_batch','batch_id':'b', **body})
+        assert [r['run_id'] for r in records] == ['a','b','c']
+        assert selection['matched_records'] == selection['available_records'] == 3
+        assert 'matched_cases' not in selection and 'split' not in selection
+        assert selection['origin'] == {'type':'test_ledger'}
     assert len(original['items']) == 3
-    records, selection = saved.resolve('g', {'source':'saved_batch','batch_id':'b','dataset':'release','split':'dev'})
-    assert [r['run_id'] for r in records] == ['a']
-    with pytest.raises(sources.SourceError, match='Choose dev'):
-        saved.resolve('g', {'source':'saved_batch','batch_id':'b','split':'train'})

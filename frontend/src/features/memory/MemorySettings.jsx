@@ -22,6 +22,7 @@ const ALL = null;
 export function memorySiblings(nodes) {
   return (nodes || []).map((n) => ({
     name: n.id,
+    bindings: ['inputs', 'outputs'].flatMap(side => (n.data?.[side] || []).filter(f => f.name).map(f => `nodes.${n.id}.${side}.${f.name}`)),
     remembers: (!n.data?.kind || n.data.kind === 'task')
       && !!n.data?.use_long_term_memory,
     fields: [...(n.data?.inputs || []), ...(n.data?.outputs || [])]
@@ -74,7 +75,7 @@ export function summarise(policy, outputs, inputs) {
   if (!kept.length) return 'nothing selected';
   // Which of the two it is matters more than what is in it: one is an exact
   // record, the other a similarity search, and they fail in different ways.
-  const where = (policy.kind || (policy.match ? 'table' : 'recall')) === 'table' ? `a table per ${policy.match}` : 'a searchable corpus';
+  const where = (policy.kind || (policy.match ? 'table' : 'recall')) === 'table' ? (policy.match ? `a table per ${policy.match}` : 'structured records') : 'a searchable corpus';
   return `keeps ${kept.join(' + ')} in ${where}`;
 }
 
@@ -175,7 +176,11 @@ export default function MemorySettings({ node, onUpdate, siblings = [], graphId 
   const runFields = [...new Set((siblings || []).flatMap((s) => s.fields))];
   // Only a node that keeps a memory has one to be read from.
   const remembering = (siblings || []).filter((s) => s.remembers !== false);
-  const datable = [...new Set([...policy.context, ...inputs, ...outputs])];
+  const datable = [...new Set([...inputs, ...outputs, ...runFields, ...policy.context,
+    ...siblings.flatMap(s => s.bindings || []), policy.at, policy.match, raw.key].filter(Boolean))];
+  const kind = raw.kind || (raw.version === 2 || policy.match ? 'table' : 'recall');
+  const writeMode = raw.write_mode || (raw.version === 2 ? 'append' : 'upsert');
+  const timeFilter = raw.time_filter ?? (raw.version === 2 ? false : !!policy.at);
 
   const readsFrom = policy.read_from === ALL ? [node.id] : policy.read_from;
   const readableFields = [...new Set(
@@ -194,7 +199,7 @@ export default function MemorySettings({ node, onUpdate, siblings = [], graphId 
         <input
           type="checkbox"
           checked={enabled}
-          onChange={(e) => onUpdate(node.id, { use_long_term_memory: e.target.checked })}
+          onChange={(e) => onUpdate(node.id, { use_long_term_memory: e.target.checked, ...((!d.memory || Object.keys(d.memory).length === 0) && e.target.checked ? { memory: { version: 2, store_id: crypto.randomUUID(), kind: 'table', write_mode: 'append', time_filter: false } } : {}) })}
         />
         Long-term memory
       </label>
@@ -207,8 +212,8 @@ export default function MemorySettings({ node, onUpdate, siblings = [], graphId 
       ) : (
         <div className="memory-settings">
           <label>Memory backend<select aria-label="Memory backend" value={raw.provider || 'legacy'}
-            onChange={e => patch({ provider: e.target.value, ...(e.target.value === 'mem0' ? { kind: 'recall', match: '', at: '', read_from: null, read: null } : {}) })}>
-            <option value="legacy">Existing node memory</option><option value="mem0">Mem0 shared space</option>
+            onChange={e => patch({ provider: e.target.value })}>
+            <option value="legacy">Local memory</option><option value="mem0" disabled={!!(policy.match || policy.at || raw.key || raw.time_filter)}>Mem0 shared space (semantic recall)</option>
           </select></label>
           {raw.provider === 'mem0' && <>
             <Mem0SpacePicker key={graphId} graphId={graphId} value={raw.space_id || ''} onChange={space_id => patch({ space_id })} />
@@ -221,6 +226,7 @@ export default function MemorySettings({ node, onUpdate, siblings = [], graphId 
           <div className="muted small">{policy.write_enabled ? summarise({ ...policy, kind: raw.kind }, outputs, inputs) : (policy.read_enabled ? 'Read-only: this node does not write memory.' : 'Reading and writing are both disabled.')}</div>
           <div className="muted small">Current-run results travel through workflow inputs. Memory is saved after the run finishes.</div>
 
+          <div className="memory-group-head">Write · content</div>
           <FieldList
             label="Outputs"
             declared={outputs}
@@ -250,10 +256,9 @@ export default function MemorySettings({ node, onUpdate, siblings = [], graphId 
           <div className="memory-group">
             <div className="memory-group-head">Also record</div>
             <div className="muted small">
-              Fields from the run this node does not itself take — the period it
-              covers, an id — so an entry says what it is about.
+              Optional fields from the run. Available values are recorded; missing values are skipped with a note. Time and entity bindings are configured separately.
             </div>
-            {runFields.filter((f) => !inputs.includes(f) && !outputs.includes(f))
+            {[...new Set([...runFields, ...policy.context.filter(f => !f.includes('.'))])].filter((f) => !inputs.includes(f) && !outputs.includes(f))
               .map((name) => (
                 <label key={name} className="memory-field">
                   <input
@@ -263,10 +268,9 @@ export default function MemorySettings({ node, onUpdate, siblings = [], graphId 
                       context: policy.context.includes(name)
                         ? policy.context.filter((c) => c !== name)
                         : [...policy.context, name],
-                      ...(policy.at === name ? { at: '' } : {}),
                     })}
                   />
-                  {name}
+                  {name}{!runFields.includes(name) && <span className="chat-error"> — unavailable; uncheck to remove</span>}
                 </label>
               ))}
             {/* A key inside a JSON answer — `detection.source` — is not a
@@ -291,53 +295,52 @@ export default function MemorySettings({ node, onUpdate, siblings = [], graphId 
           </div>
 
           {raw.provider !== 'mem0' && <>
+          <div className="memory-group-head">Storage and matching</div>
+          <label>Retrieval method<select aria-label="Retrieval method" value={kind}
+            onChange={e => patch({ kind: e.target.value, ...(e.target.value === 'table' ? { version: 2, write_mode: 'append' } : {}) })}>
+            <option value="table">Structured records · recent or exact match</option>
+            <option value="recall" disabled={raw.version === 2 && !!policy.match}>Semantic similarity</option>
+          </select></label>
+          <div className="memory-row">
+            <label htmlFor={`mem-match-${node.id}`}>Match field (optional)</label>
+            <select id={`mem-match-${node.id}`} value={policy.match} disabled={raw.version === 2 && kind === 'recall'}
+              onChange={e => patch({ match: e.target.value })}>
+              <option value="">No entity filter</option>
+              {datable.map(name => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </div>
+          <p className="muted small">Bindings are resolved independently of stored content. Use a nodes.… reference when several nodes produce the same field.</p>
+          {kind === 'table' && <>
+            <label>Write mode<select aria-label="Write mode" value={writeMode}
+              onChange={e => patch({ version: 2, write_mode: e.target.value })}>
+              <option value="append">Append records (retry-safe)</option>
+              <option value="upsert">Update by unique key</option>
+            </select></label>
+            {writeMode === 'upsert' && raw.version !== 2 && <p className="chat-note">Legacy mode: replaces the same entity and date. Choose Append records to retain multiple events on the same day.</p>}
+            {writeMode === 'upsert' && raw.version === 2 && <label>Unique key<select aria-label="Unique key" value={raw.key || ''} onChange={e => patch({ key: e.target.value })}>
+              <option value="">Select a unique key</option>
+              {datable.map(name => <option key={name} value={name}>{name}</option>)}
+            </select></label>}
+          </>}
+          <div className="memory-group-head">Time (optional)</div>
           <div className="memory-row">
             <label htmlFor={`mem-at-${node.id}`}>Dated by</label>
-            <select
-              id={`mem-at-${node.id}`}
-              value={policy.at}
-              onChange={(e) => patch({ at: e.target.value })}
-            >
-              <option value="">When the run happened</option>
-              {datable.map((name) => (
-                <option key={name} value={name}>{name}</option>
-              ))}
+            <select id={`mem-at-${node.id}`} value={policy.at}
+              onChange={e => patch({ at: e.target.value, ...(!e.target.value ? { time_filter: false } : {}) })}>
+              <option value="">No business time</option>
+              {datable.map(name => <option key={name} value={name}>{name}</option>)}
             </select>
           </div>
-          {!policy.at && (
-            <div className="muted small">
-              Every record of one batch is written within the same minute, so
-              that orders a timeline by nothing. Pick the field that says what
-              period the entry covers.
-            </div>
-          )}
-
-          <div className="memory-row">
-            <label htmlFor={`mem-match-${node.id}`}>Keeps</label>
-            <select
-              id={`mem-match-${node.id}`}
-              value={policy.match}
-              onChange={(e) => patch({ match: e.target.value, kind: e.target.value ? 'table' : 'recall' })}
-            >
-              <option value="">Past runs, searched by similarity</option>
-              {inputs.map((name) => (
-                <option key={name} value={name}>{`A record per ${name}`}</option>
-              ))}
-            </select>
-          </div>
-          <div className="muted small">
-            {policy.match
-              ? (<>
-                  A table keyed by <span className="tool-option-name">{policy.match}</span>:
-                  one row per {policy.at
-                    ? <><span className="tool-option-name">{policy.at}</span></>
-                    : 'run'}, read back in time order. Exact, so a row is either
-                  there or it is not.
-                </>)
-              : 'A searchable corpus of past runs. Answers "what resembles this", '
-                + 'which is not the same as "what happened to this one before".'}
-          </div>
-
+          <label><input type="checkbox" checked={timeFilter} disabled={!policy.at}
+            onChange={e => patch({ time_filter: e.target.checked })} />Only read memories before the bound time</label>
+          <p className="muted small">No time field is required. Write time is recorded automatically. If time filtering is enabled and the bound value is missing, retrieval is skipped with a Memory error; it never reads unrestricted history.</p>
+          {(policy.at || policy.match || raw.key) && <div className="chat-note" aria-label="Memory bindings">
+            {policy.match && <div>Entity ← {policy.match}</div>}
+            {policy.at && <div>Business time ← {policy.at}</div>}
+            {raw.key && writeMode === 'upsert' && <div>Unique key ← {raw.key}</div>}
+            <div>Values resolve when their source node has finished. A current node output can date a write, but cannot supply a pre-execution read cutoff.</div>
+          </div>}
+          <div className="memory-group-head">Read · sources and content</div>
           <div className="memory-group">
             <div className="memory-group-head">Reads from</div>
             {(remembering.length ? remembering : [{ name: node.id, fields: [] }]).map((sib) => (
@@ -411,7 +414,7 @@ export default function MemorySettings({ node, onUpdate, siblings = [], graphId 
               />
             </label>
             <span className="muted small">
-              {policy.match ? 'earlier records for this subject' : 'similar past runs'}
+              {kind === 'table' ? (policy.match ? 'matching records' : 'recent records') : 'similar past runs'}
               {policy.retrieve === 0 ? ' — none' : ''}
             </span>
           </div>

@@ -26,7 +26,10 @@ def parse_json_records(text, max_records=0):
         value = documents[0]
         if isinstance(value, list):
             records = value
-        elif isinstance(value, dict) and isinstance(value.get('records'), list):
+        elif isinstance(value, dict) and list(value) == ['records'] and isinstance(value['records'], list):
+            # Only a lone {"records": [...]} document is a container (several
+            # JSONL documents never are); a record that merely has a
+            # "records" field besides its other fields stays one record.
             records = value['records']
         else:
             records = [value]

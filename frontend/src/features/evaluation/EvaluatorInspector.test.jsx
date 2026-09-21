@@ -1,7 +1,7 @@
 import React from 'react';
-import {render,screen,waitFor} from '@testing-library/react';
+import {render,screen,waitFor,within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import {it,expect,vi,beforeEach} from 'vitest';
+import {describe,it,expect,vi,beforeEach} from 'vitest';
 import EvaluatorInspector from './EvaluatorInspector.jsx';
 import {api} from '../../api.js';
 import {graphToFlow,flowToGraph} from '../canvas/convert.js';
@@ -41,4 +41,15 @@ it('uploads Python, generates parameters and previews saved results without muta
  expect(api.previewEvaluatorCode).toHaveBeenCalledWith('test',expect.objectContaining({batch_id:'saved-batch',evaluator:'quality'}));
  await waitFor(()=>expect(update).toHaveBeenLastCalledWith('quality',expect.objectContaining({evaluator:expect.objectContaining({code,metric:'accuracy'})})));
  expect(JSON.stringify(graph)).toBe(initial);
+});
+
+
+describe('evaluator settings that match what the backend does', () => {
+  it('shows the default timing the backend uses and offers a time limit', async () => {
+    const { container } = render(<EvaluatorInspector node={{ id: 'check', data: { evaluator: { type: 'python', code: 'def evaluate(records):\n    return {"metrics": {"score": 1}}' } } }}
+      onUpdate={vi.fn()} onRename={vi.fn()} getGraph={() => ({ id: 'g', tasks: [], edges: [] })} />);
+    const view = within(container);
+    expect(view.getByLabelText('Run evaluation')).toHaveValue('run');
+    expect(view.getByLabelText(/time limit/i)).toHaveValue(120);
+  });
 });

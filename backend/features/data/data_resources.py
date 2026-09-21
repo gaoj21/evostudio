@@ -45,6 +45,32 @@ def safe_name(name):
     return path.as_posix()
 
 
+def create_from_records(records, name, graph_id='', origin=None):
+    """Store collected records as an immutable resource: one records.jsonl.
+
+    The same kind of resource an upload makes, so any DataLoader (a PyTorch
+    Dataset included) can read it, and every later run reads the same bytes
+    rather than fetching again.
+    """
+    resource_id = uuid.uuid4().hex
+    temporary = directory() / ('.upload-' + resource_id)
+    (temporary / 'files').mkdir(parents=True)
+    try:
+        body = ''.join(json.dumps(r, ensure_ascii=False, allow_nan=False) + '\n' for r in records).encode('utf-8')
+        (temporary / 'files' / 'records.jsonl').write_bytes(body)
+        entries = [{'path': 'records.jsonl', 'bytes': len(body), 'sha256': hashlib.sha256(body).hexdigest()}]
+        item = {'id': resource_id, 'name': str(name)[:120], 'files': entries, 'size_bytes': len(body),
+                'graph_id': str(graph_id or ''), 'records': len(records),
+                'version': hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest(),
+                **({'origin': origin} if origin else {})}
+        (temporary / 'manifest.json').write_text(json.dumps(item, ensure_ascii=False))
+        temporary.rename(path_for(resource_id))
+        return public(item)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+
+
 def public(item):
     return {**item, 'root': str((path_for(item['id']) / 'files').resolve())}
 

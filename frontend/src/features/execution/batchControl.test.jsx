@@ -108,3 +108,18 @@ describe('what a resume would run', () => {
     expect(resumeLabel({ status: 'succeeded', total: 5, counts: { success: 5 } })).toBeNull();
   });
 });
+
+
+describe('a stream that stopped before reading everything', () => {
+  it('can be resumed even when every record read so far finished', () => {
+    expect(resumeLabel({ status: 'cancelled', streaming: true, unread: true, total: 4, counts: { success: 4 } }))
+      .toBe('Resume (keep reading)');
+  });
+  it('says it will run what is left and then keep reading', () => {
+    expect(resumeLabel({ status: 'failed', streaming: true, unread: true, total: 4, counts: { success: 3, failed: 1 } }))
+      .toBe('Resume (1 left, then keep reading)');
+  });
+  it('offers nothing once the stream was read to the end and everything succeeded', () => {
+    expect(resumeLabel({ status: 'succeeded', streaming: true, unread: false, total: 4, counts: { success: 4 } })).toBeNull();
+  });
+});

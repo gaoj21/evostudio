@@ -61,7 +61,7 @@ class TestWhatItAccepts:
 
     def test_an_unknown_frequency(self, sched):
         with pytest.raises(sched.ScheduleError) as raised:
-            sched.validate({"mode": "weekly"})
+            sched.validate({"mode": "yearly"})
         assert "daily" in str(raised.value)
 
     def test_a_time_that_is_not_a_time(self, sched):
@@ -111,12 +111,12 @@ class TestSettingOne:
         assert out["fires"] == 7
         assert out["mode"] == "interval"
 
-    def test_pausing_leaves_it_in_place_with_no_next_fire(self, sched):
+    def test_pausing_preserves_the_due_cursor(self, sched):
         sched.set_schedule({"id": "g1"}, {"mode": "daily"})
         out = sched.set_schedule({"id": "g1"}, {"mode": "daily", "enabled": False})
 
         assert out["scheduled"] is True and out["enabled"] is False
-        assert out["next_fire"] is None
+        assert out["next_fire"] is not None
 
     def test_removing_it(self, sched):
         sched.set_schedule({"id": "g1"}, {"mode": "daily"})

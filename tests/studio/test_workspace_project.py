@@ -159,7 +159,8 @@ class TestItMatchesTheExport:
         files, _vendor = export_api.project_files(graph)
 
         on_disk = [f for f in listing(workspace, "probe")
-                   if not f.startswith("vendor/") and f != workspace.VENDOR_STAMP]
+                   if not f.startswith("vendor/")
+                   and f not in (workspace.VENDOR_STAMP, workspace.GENERATED_MANIFEST)]
         files = {k: v for k, v in files.items() if not k.startswith("vendor/")}
         assert set(on_disk) == set(files)
         root = workspace.workspace_root("probe")

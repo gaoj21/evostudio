@@ -8,9 +8,39 @@ sys.path.insert(0, str(root.parent))
 sys.path.insert(0, str(root))
 
 
+def _exit_with_parent(directory):
+    """Stop when the process that started this worker is gone.
+
+    Workers run in their own session so Stop can kill them as a group; that
+    also means a server restart or crash would leave them running, and a
+    streaming Dataset worker waits indefinitely for its next batch to be
+    taken. Reparenting (the parent pid changes) or the vanished working
+    directory both mean nobody will ever read the result.
+    """
+    import os
+    import threading
+    import time
+    # The launcher passes its own pid: reading getppid() here would race a
+    # parent that already exited before this process got going.
+    parent = int(os.environ.get('STUDIO_WORKER_PARENT') or os.getppid())
+
+    def gone():
+        return os.getppid() != parent or not directory.exists()
+    if gone():
+        os._exit(3)
+
+    def watch():
+        while True:
+            time.sleep(1)
+            if gone():
+                os._exit(3)
+    threading.Thread(target=watch, daemon=True).start()
+
+
 def main():
     kind, directory = sys.argv[1:]
     directory = Path(directory)
+    _exit_with_parent(directory)
     payload = json.loads((directory / 'input.json').read_text())
     try:
         if kind == 'model':
@@ -18,26 +48,27 @@ def main():
             value = chat(None, payload['messages'])
         elif kind == 'collect':
             from backend.api import sources
-            from backend.api.source_apis import collect_gdelt_records, fetch_http_api
+            from backend.features.data.source_apis import collect_records
             config = payload['source']
             def emit(record):
                 with (directory / 'records.jsonl').open('a') as stream:
                     stream.write(json.dumps(record, ensure_ascii=False) + '\n')
-            if config['type'] == 'gdelt_news':
-                value = collect_gdelt_records(config, lambda done, total: (directory / 'stage.txt').write_text(json.dumps({'completed': done, 'total': total})), on_record=emit)
-            elif config['type'] == 'http_api' and config.get('batch_items') == 'items':
-                value = fetch_http_api(config, split_records=True)
-            else:
+            def progress(done, total):
+                (directory / 'stage.txt').write_text(json.dumps({'completed': done, 'total': total}))
+            if config['type'] == 'dataloader':
+                # A DataLoader over an API source: its reader collects the
+                # range (collect_records), then its preprocessing applies.
                 value = sources.records_from_source_node(payload)
-            if config['type'] != 'gdelt_news':
                 for record in value:
                     emit(record)
+            else:
+                value = collect_records(config, progress, on_record=emit)
         elif kind == 'preprocess':
             from backend.api.custom_tools import run_custom_tool
             value = run_custom_tool(payload['name'], payload['arguments'])
         elif kind == 'evaluate_python':
-            from backend.features.evaluation.python_evaluator import execute
-            value = execute(payload)
+            from backend.features.evaluation.python_evaluator import execute_with_logs
+            value = execute_with_logs(payload)
         elif kind == 'dataset_stream':
             import time
             from backend.features.data.torch_loader import execute_python
@@ -63,7 +94,8 @@ def main():
             raise ValueError('Unknown assistant worker')
         result = {'value': value}
     except Exception as exc:
-        result = {'error': f'{type(exc).__name__}: {exc}'}
+        # Errors raised by the user's own code already say where and why.
+        result = {'error': str(exc) if getattr(exc, 'user_code', False) else f'{type(exc).__name__}: {exc}'}
     (directory / 'result.json').write_text(json.dumps(result, ensure_ascii=False, default=str))
 
 

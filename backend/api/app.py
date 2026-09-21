@@ -33,7 +33,7 @@ from . import run_plan
 from . import runner
 from . import scheduler
 from . import skills_api
-from . import sources, source_collection
+from . import sources, source_collection, source_apis
 from . import tools_registry
 from . import watcher
 from . import workspace
@@ -203,7 +203,7 @@ def list_features():
 @app.get("/api/palette")
 def palette():
     return {
-        "templates": PALETTE["templates"] + registry.credit_risk_presets(),
+        "templates": PALETTE["templates"] + registry.node_presets(),
         "sources": registry.source_presets(),
     }
 
@@ -267,12 +267,19 @@ def save_graph(graph_id: str, body: dict = Body(...)):
         "goal": body.get("goal", ""),
         "tasks": body.get("tasks", []),
         "edges": body.get("edges", []),
+        # Without it an already-migrated canvas is migrated again for the
+        # check, and control-only edges come back as data edges.
+        "flow_version": body.get("flow_version", 0),
     }
     try:
         ordered, workflow_inputs = graph_store.validate_graph(candidate)
         saved = graph_store.save_graph(graph_id, body)
     except graph_store.GraphValidationError as e:
         raise HTTPException(status_code=422, detail=e.errors)
+    if saved["id"] != graph_id:
+        # A rename through the ordinary save: the schedule is filed under the
+        # id, so it follows, as it does for POST /rename.
+        scheduler.rename(graph_id, saved["id"])
     # The canvas is the source; the workspace is what it compiles to. Keeping
     # them in step on save is what makes the workspace the project rather than
     # a folder that happens to collect run output.
@@ -496,14 +503,15 @@ def _graph_tool_names(graph: dict) -> list[str]:
 
 
 def _validate_source_nodes(graph: dict) -> None:
-    """Probe local (credit_risk) source nodes; API sources are validated
-    statically at save time and fail visibly at run time instead.
+    """Probe local Input nodes (files, datasets, project Input types); API
+    sources are validated statically at save time and fail visibly at run
+    time instead.
     Unconnected source nodes are skipped (the runner ignores them)."""
     wired = {e.get("source") for e in (graph.get("edges") or [])}
     for node in sources.find_source_nodes(graph):
         if node.get("name") not in wired:
             continue
-        if (node.get("source") or {}).get("type") in {"credit_risk", "user_dataset", "dataloader"}:
+        if source_apis.is_local((node.get("source") or {}).get("type")):
             if (node.get('source') or {}).get('type') == 'dataloader':
                 from backend.features.data.dataloaders import validate
                 validate(node['source'])
@@ -546,6 +554,16 @@ def put_schedule(graph_id: str, body: dict = Body(...)):
         return scheduler.set_schedule(graph, body)
     except scheduler.ScheduleError as e:
         raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.post("/api/graphs/{graph_id}/schedule/resume")
+def resume_schedule(graph_id: str, body: dict = Body(...)):
+    if not graph_store.graph_exists(graph_id):
+        raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found")
+    try:
+        return scheduler.resume(graph_id, body.get('recovery_policy'))
+    except scheduler.ScheduleError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @app.delete("/api/graphs/{graph_id}/schedule")
@@ -593,10 +611,16 @@ def abandon_run(run_id: str):
     return outcome
 
 
-@app.get("/api/sources/credit-risk")
-def credit_risk_source(dataset: str | None = None):
+@app.get("/api/sources/{source_type}/info")
+def source_info(source_type: str, request: Request):
+    """Details a project Input type offers its forms (dataset versions,
+    splits, counts). Query parameters are passed to the type's own hook."""
+    from backend.features import plugins
+    plugin = plugins.source_type(source_type)
+    if plugin is None or not plugin.get("info"):
+        raise HTTPException(404, f"Input type '{source_type}' has no details to show")
     try:
-        return sources.credit_risk_info(dataset)
+        return plugin["info"](dict(request.query_params))
     except sources.SourceError as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -639,20 +663,13 @@ def list_tools():
     return {"tools": tools_registry.list_tools()}
 
 
-def _credit_risk_label(record: dict) -> dict:
-    try:
-        sample = json.loads(record.get("sample_json") or "{}")
-    except ValueError:
-        sample = {}
-    return {"type": sample.get("type"), "event": (sample.get("label") or {}).get("event"),
-            "event_date": (sample.get("label") or {}).get("event_date")}
 
 
 async def _batch_payload(graph_id: str, request: Request):
     """Work out what a batch would run, without running it.
 
-    Body is either a multipart file upload (JSONL/CSV) or JSON
-    {"source": "credit_risk", "split": ..., "n": ..., "seed": ...}.
+    Body is either a multipart file upload (JSON/JSONL/CSV/TSV) or JSON
+    {"source": "canvas", "collection_id"?: ...} for the canvas Input.
     Shared by the batch endpoint and its preview so the count shown before
     you start is produced by the same code that then does the work.
     """
@@ -695,37 +712,20 @@ async def _batch_payload(graph_id: str, request: Request):
                 config = node["source"]
                 if body.get("collection_id"):
                     records, source = source_collection.records_for(graph, node, body["collection_id"])
-                elif config.get("type") not in {"credit_risk", "user_dataset", "dataloader"}:
+                elif not source_apis.is_local(config.get("type")):
                     raise sources.SourceError("Collect this API source before starting the batch.")
+                elif config.get("type") == "dataloader" and dataloaders.api_backed(config):
+                    # Fetching a whole API range here would hold this request
+                    # for minutes; collection does it in a stoppable worker.
+                    raise sources.SourceError("This Input reads an API source. Collect it before starting the batch.")
                 else:
                     from starlette.concurrency import run_in_threadpool
                     records = await run_in_threadpool(input_composition.load_primary, graph, node) if config.get('type') == 'dataloader' else await run_in_threadpool(sources.records_from_source_node, node)
-                    source = {"type": "canvas", "node": node.get("name"),
-                              "dataset": config.get("dataset", "contemporary") if config.get("type") != "dataloader" else None, "config": config,
-                              **({"dataset_id": config["dataset_id"], "config": config} if config.get("type") == "user_dataset" else {}),
-                              "split": config.get("split"), "n": config.get("n", 1),
-                              "seed": int(config.get("seed") or 42),
-                              "step": config.get("step") or "none"}
-            elif source_name == "credit_risk":
-                n_raw = body.get("n")
-                n_val = int(n_raw) if n_raw is not None else 5  # n=0: entire split
-                records = sources.credit_risk_records(
-                    split=body.get("split") or None,
-                    n=n_val,
-                    seed=int(body.get("seed") or 42),
-                    step=body.get("step"),
-                    **({"dataset": body["dataset"]} if body.get("dataset") else {}),
-                )
-                source = {
-                    "type": "credit_risk",
-                    "dataset": body.get("dataset", "contemporary"),
-                    "split": body.get("split"),
-                    "n": n_val,
-                    "seed": int(body.get("seed") or 42),
-                }
+                    source = {"type": "canvas", "node": node.get("name"), "config": config,
+                              **({"dataset_id": config["dataset_id"]} if config.get("type") == "user_dataset" else {})}
             else:
                 raise sources.SourceError(
-                    "JSON body must be {\"source\": \"canvas\"|\"credit_risk\", ...}"
+                    "JSON body must be {\"source\": \"canvas\", ...}; upload a file for other records."
                 )
             review_zone = body.get("review_zone")
             workers = int(body.get("workers") or 2)
@@ -754,21 +754,16 @@ async def _batch_payload(graph_id: str, request: Request):
                 continue
             for out in node.get("outputs") or []:
                 mapping_inputs.append({"name": out["name"], "required": False})
-        if source.get('collection_id'):
-            mapping_inputs.extend({'name': key, 'required': False} for key in ('sample_id', 'as_of'))
+        # The trajectory fields an Input declares survive the mapping, so
+        # the batch can keep each trajectory in order.
+        mapping_inputs.extend(source_collection.sequence_inputs(graph))
         # Preprocess the raw records: doing it before the mapping is what lets a
         # preprocessor rename or derive the very fields the mapping needs.
         records = preprocess.apply(graph, records)
         # An evaluation is a batch with a metric: pull the expected answers out
         # before mapping, so the label never reaches the workflow as an input.
         labels = None
-        if metric and source.get('dataset', 'contemporary') != 'contemporary' and not label_key:
-            raise sources.SourceError('This dataset stores outcomes separately. Run without automatic scoring, or provide explicitly labelled evaluation records; daily risk labels are not inferred.')
-        if metric and not label_key and all(r.get("sample_json") for r in records[:5]) and records:
-            # The credit-risk feed carries its truth in every record; nobody
-            # should have to name the field.
-            labels = [_credit_risk_label(r) for r in records]
-        elif metric:
+        if metric:
             records, labels = evaluation.split_labels(records, label_key)
         mapped = sources.map_to_workflow_inputs(records, mapping_inputs)
         if source.get('collection_id'):
@@ -808,6 +803,16 @@ async def run_batch(graph_id: str, request: Request):
     return {"batch_id": batch_id, "total": len(mapped)}
 
 
+def _memory_order(graph, mapped):
+    from backend.features.memory import sequencing
+    sequence = sequencing.plan(graph)
+    if not sequence.get("mode"):
+        return None
+    keys = [sequencing.key(sequence, r) for r in mapped]
+    return {**sequence, "sequences": len({k for k in keys if k}),
+            "unordered": sum(1 for k in keys if not k)}
+
+
 @app.post("/api/graphs/{graph_id}/run-batch/preview")
 async def preview_batch(graph_id: str, request: Request):
     """How many runs this batch would be, before you commit to it.
@@ -826,6 +831,10 @@ async def preview_batch(graph_id: str, request: Request):
                 node = source_collection.node_for(graph)
             except sources.SourceError as exc:
                 raise HTTPException(422, str(exc)) from exc
+            if node['source'].get('type') == 'dataloader' and dataloaders.api_backed(node['source']):
+                wrapped = node['source'].get('source_config') or {}
+                return {"requires_collection": True, "source": {"node": node["name"],
+                        **{key: wrapped.get(key) for key in ('type', 'query', 'days', 'start_date', 'end_date', 'batch_step')}}}
             if node['source'].get('type') == 'dataloader':
                 config = node['source']
                 from backend.features.data.dataloaders import validate
@@ -836,7 +845,7 @@ async def preview_batch(graph_id: str, request: Request):
                         'source':{'type':'canvas','node':node['name'],'config':config},
                         'fields':[f['name'] for f in node.get('outputs', [])],
                         'nodes':plan['nodes'], 'skipped':plan['skipped'], 'node_count':len(plan['nodes'])}
-            if node["source"].get("type") not in {"credit_risk", "user_dataset", "dataloader"}:
+            if not source_apis.is_local(node["source"].get("type")):
                 config = node["source"]
                 return {"requires_collection": True, "source": {"node": node["name"],
                         **{key: config.get(key) for key in ('type', 'query', 'days', 'start_date', 'end_date', 'batch_step')}}}
@@ -849,20 +858,24 @@ async def preview_batch(graph_id: str, request: Request):
     # executions that is, from the same plan the run uses.
     plan = _plan_or_422(graph, None, "batch")
     node_count = len(plan["nodes"])
-    # A stepped record carries the sample it came from; without stepping every
-    # record is its own sample and the two counts agree.
+    # An Input that declares trajectories (a group field and an order field)
+    # turns one subject into several records; say how many subjects and how
+    # far they reach. Without one every record is its own trajectory.
+    declared = sources.input_sequence(graph) or {}
+    group, order = declared.get("group"), declared.get("order")
     by_sample: dict[str, set[str]] = {}
     for r in records:
-        if r.get("sample_id") and r.get("as_of"):
-            by_sample.setdefault(str(r["sample_id"]), set()).add(str(r["as_of"]))
-    # Dates are per sample, and two companies rarely share one: counting them
-    # across the whole batch would say "18 dates" for 3 samples of 6.
+        if group and r.get(group) not in (None, ""):
+            by_sample.setdefault(str(r[group]), set()).add(str(r.get(order, "")) if order else str(len(by_sample)))
+    # Positions are per trajectory: counting them across the whole batch
+    # would say "18 dates" for 3 trajectories of 6.
     per_sample = [len(v) for v in by_sample.values()]
-    dates = sorted({d for v in by_sample.values() for d in v})
+    dates = sorted({d for v in by_sample.values() for d in v if d}) if order else []
     return {
         "total": len(mapped),
         "samples": len(by_sample) or len(mapped),
         "dates": [dates[0], dates[-1]] if dates else None,
+        "sequence": declared or None,
         "steps": max(per_sample) if per_sample else 1,
         "steps_min": min(per_sample) if per_sample else 1,
         "source": source,
@@ -872,6 +885,9 @@ async def preview_batch(graph_id: str, request: Request):
         "skipped": plan["skipped"],
         "node_count": node_count,
         "node_executions": len(mapped) * node_count,
+        # How memory makes records depend on each other, so the dialog can
+        # say why a batch runs in order rather than all at once.
+        "memory_order": _memory_order(graph, mapped),
         "fields": sorted({k for r in mapped[:50] for k in r}),
     }
 
@@ -940,60 +956,6 @@ def cancel_batch(batch_id: str):
     if not outcome.get("cancelled") and outcome.get("reason") == "no such batch":
         raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found")
     return outcome
-
-
-@app.post("/api/batches/{batch_id}/evaluate")
-def evaluate_batch(batch_id: str, body: dict | None = Body(default=None)):
-    """Score a batch from what it holds. Credit-risk batches need nothing
-    else (the truth came with the records); any other batch names a metric
-    and the field holding the expected answer."""
-    from . import evaluation_report
-    batch = batch_store.get_batch(batch_id)
-    if batch is None:
-        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found")
-    body = body or {}
-
-    def result_of(item):
-        run = runner.get_run(item.get("run_id") or "") if item.get("run_id") else None
-        return (run or {}).get("result")
-
-    try:
-        if body.get("metric"):
-            report = evaluation_report.metric_report(
-                batch, result_of, body["metric"], body.get("label_key") or "")
-        elif evaluation_report.is_credit_risk(batch):
-            def text_of(item):
-                run = runner.get_run(item.get("run_id") or "") if item.get("run_id") else None
-                return " ".join(json.dumps(n.get("output") or {}, ensure_ascii=False)
-                                for n in (run or {}).get("nodes") or []
-                                if n.get("name") in ("detect", "investigate", "reflect", "decide"))
-            # The versioned releases keep outcomes out of the records; the
-            # batch remembers which release it ran on, and the truth is
-            # looked up there by case id.
-            from . import datasets
-            labels = datasets.evaluation_labels((batch.get("source") or {}).get("dataset") or "")
-            report = evaluation_report.credit_risk_report(batch, result_of, text_of, labels.get)
-        else:
-            raise HTTPException(status_code=422, detail=(
-                "These records carry no ground truth of their own; choose a metric "
-                "and the field holding the expected answer."))
-    except evaluation.EvaluationError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    report["batch_id"] = batch_id
-    report["evaluated_at"] = datetime.now(timezone.utc).isoformat()
-    report["batch_status"] = batch.get("status")
-    batch_store.set_evaluation(batch_id, report)
-    return report
-
-
-@app.get("/api/batches/{batch_id}/evaluation")
-def get_batch_evaluation(batch_id: str):
-    batch = batch_store.get_batch(batch_id)
-    if batch is None:
-        raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found")
-    from . import evaluation_report
-    return {"evaluation": batch.get("evaluation"),
-            "credit_risk": evaluation_report.is_credit_risk(batch)}
 
 
 @app.post("/api/batches/{batch_id}/resume")

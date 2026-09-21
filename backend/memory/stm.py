@@ -5,6 +5,8 @@ optional JSON persistence — deliberately simple.
 """
 
 import json
+import os
+import tempfile
 import threading
 from pathlib import Path
 
@@ -52,5 +54,17 @@ class ShortTermMemory:
         if not self._persist_to:
             return
         self._persist_to.parent.mkdir(parents=True, exist_ok=True)
-        with open(self._persist_to, "w", encoding="utf-8") as f:
-            json.dump(self._sessions, f, ensure_ascii=False, default=str)
+        # Written beside the file and swapped in whole: rewriting it in place
+        # lets a concurrent reader see it empty or half-written.
+        fd, tmp = tempfile.mkstemp(prefix=f".{self._persist_to.name}.",
+                                   suffix=".tmp", dir=str(self._persist_to.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(self._sessions, f, ensure_ascii=False, default=str)
+            os.replace(tmp, self._persist_to)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise

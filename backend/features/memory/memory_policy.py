@@ -14,8 +14,9 @@ a short conclusion.
 import asyncio
 import json
 
-# Whole-entry budget. Memories are retrieved into a prompt, several at a time,
-# so one of them cannot be allowed to fill the context on its own.
+from . import bindings
+
+# Whole-entry budget for content injected into a prompt.
 DEFAULT_LIMIT = 4000
 DEFAULT_RETRIEVE = 3
 MAX_RETRIEVE = 10
@@ -54,6 +55,10 @@ def policy(task: dict) -> dict:
         retrieve = DEFAULT_RETRIEVE
     when = raw.get("when") or "success"
     return {
+        "version": raw.get("version", 1),
+        "write_mode": raw.get("write_mode", "append" if raw.get("version") == 2 else "upsert"),
+        "time_filter": raw.get("time_filter", bool(raw.get("at")) if raw.get("version") != 2 else False),
+        "key": (raw.get("key") or "") if raw.get("write_mode") == "upsert" else "",
         "write_enabled": raw.get("write_enabled", True) is not False,
         "read_enabled": raw.get("read_enabled", True) is not False,
         "outputs": _names(raw.get("outputs")),
@@ -69,7 +74,7 @@ def policy(task: dict) -> dict:
         # before"; this answers "what did we just do".
         "session_recall": _bounded(raw.get("session_recall"), DEFAULT_SESSION_RECALL),
         # A field whose value identifies the thing being reasoned about — the
-        # obligor, the ticker, the customer. When set, recall also returns
+        # customer, the ticker, the device. When set, recall also returns
         # *that thing's* own past, in time order, which similarity search does
         # not reliably find: asking it about Sleep Number returns whatever is
         # semantically nearest, which may be three other companies.
@@ -96,6 +101,8 @@ def policy(task: dict) -> dict:
 
 
 def _kind(raw: dict) -> str:
+    if raw.get("version") == 2 and raw.get("provider") != "mem0":
+        return raw.get("kind") or "table"
     if raw.get("provider") == "mem0":
         return "recall"
     wanted = (raw.get("kind") or "").strip()
@@ -146,7 +153,11 @@ def validate(task: dict, siblings: dict | None = None) -> list[str]:
         return [f"Task '{task.get('name')}': memory settings must be an object."]
 
     name = task.get("name")
-    for flag in ("read_enabled", "write_enabled"):
+    if raw.get('store_id') is not None:
+        value = raw['store_id']
+        if not isinstance(value, str) or not value.strip() or value in ('.', '..') or any(c in value for c in ('/', '\\', '\x00')):
+            errors.append(f"Task '{name}': invalid Memory store ID.")
+    for flag in ("read_enabled", "write_enabled", "time_filter"):
         if flag in raw and not isinstance(raw[flag], bool):
             errors.append(f"Task '{name}': memory '{flag}' must be true or false.")
     for side in ("outputs", "inputs"):
@@ -173,27 +184,29 @@ def validate(task: dict, siblings: dict | None = None) -> list[str]:
     # `context` and `at` may name anything the run produces, not just what this
     # node consumes — that is the point of them.
     if siblings is not None:
-        produced = {f for t in siblings.values()
-                    for side in ("inputs", "outputs")
-                    for f in _declared(t, side)}
-        wanted_context = _names(raw.get("context")) or []
-        # `detection.source` names a key inside the `detection` field; the
-        # field is what has to exist here — the key is read at run time.
-        unknown = [c for c in wanted_context if c.split(".")[0] not in produced]
-        if unknown:
-            errors.append(
-                f"Task '{name}': memory records {unknown}, which no node in "
-                "this workflow produces."
-            )
-        dated_by = (raw.get("at") or "").strip()
-        if dated_by:
-            available = set(wanted_context) | set(_declared(task, "inputs")) \
-                | set(_declared(task, "outputs"))
-            if dated_by not in available:
-                errors.append(
-                    f"Task '{name}': memory is dated by {dated_by!r}, which it "
-                    "neither takes nor records. Add it to the recorded fields."
-                )
+        # Additional context is optional content, not a workflow dependency.
+        # Stale fields are visible in the inspector and reported when absent.
+        # An unqualified field no node produces is a field of the data: it
+        # becomes an optional workflow input (bindings.binding_inputs). Only
+        # a qualified reference to a node field that does not exist is wrong.
+        for label, reference in (("time", raw.get("at")), ("match", raw.get("match")),
+                                 ("unique key", raw.get("key"))):
+            if (reference and str(reference).startswith("nodes.")
+                    and not bindings.declared(reference, task, siblings)):
+                errors.append(f"Task '{name}': memory {label} binding '{reference}' names a node field that does not exist. Choose an available field.")
+    if raw.get("kind") not in (None, "table", "recall"):
+        errors.append(f"Task '{name}': invalid memory retrieval method.")
+    if raw.get("write_mode") not in (None, "append", "upsert"):
+        errors.append(f"Task '{name}': invalid memory write mode.")
+    if raw.get("version") == 2:
+        if raw.get("kind") == "recall" and raw.get("match"):
+            errors.append(f"Task '{name}': exact matching requires structured records; semantic recall does not guarantee an exact match.")
+        if raw.get("write_mode") == "upsert" and not raw.get("key"):
+            errors.append(f"Task '{name}': updating memory requires an explicit unique key binding.")
+        if raw.get("time_filter") and not raw.get("at"):
+            errors.append(f"Task '{name}': time filtering requires a time binding.")
+    if raw.get("provider") == "mem0" and any(raw.get(k) for k in ("match", "at", "key", "time_filter")):
+        errors.append(f"Task '{name}': this Mem0 adapter supports semantic recall, not exact keys or time filtering. Clear those bindings explicitly before switching backend.")
 
     readable = _names(raw.get("read_from"))
     if readable is not None and siblings is not None:
@@ -283,10 +296,13 @@ def with_context(task: dict, inputs: dict, run_data: dict | None) -> dict:
     every time-based decision silently falls back to "no date".
     """
     resolved = dict(inputs or {})
-    for name in policy(task)["context"]:
+    settings = policy(task)
+    for name in dict.fromkeys([*settings["context"], settings["at"], settings["match"], settings["key"]]):
+        if not name:
+            continue
         if name in resolved:
             continue
-        value = lookup(run_data or {}, name)
+        value = bindings.resolve({**(run_data or {}), **resolved}, name)
         if value is not None:
             resolved[name] = value
     return resolved
@@ -300,6 +316,9 @@ def lookup(data: dict, name: str):
     A dotted name reaches in: the first segment is the field, the rest walk
     the parsed JSON. Absent at any step means absent — never a guess.
     """
+    for key in sorted(data, key=len, reverse=True):
+        if name.startswith(key + "."):
+            return bindings.resolve({"value": data[key]}, "value" + name[len(key):])
     head, _, rest = name.partition(".")
     if head not in data:
         return None
@@ -336,13 +355,15 @@ def select(task: dict, node_inputs: dict, node_outputs: dict, *,
     if settings["when"] == "success" and not succeeded:
         return None
 
+    original_inputs = set(node_inputs or {})
     node_inputs = with_context(task, node_inputs, run_data)
+    content_inputs = {k: v for k, v in node_inputs.items() if k in original_inputs or k in settings["context"]}
     if settings["inputs"] is not None:
         settings = {**settings,
                     "inputs": list(settings["inputs"]) + [
                         n for n in settings["context"] if n in node_inputs]}
 
-    kept_inputs = _pick(node_inputs or {}, settings["inputs"])
+    kept_inputs = _pick(content_inputs, settings["inputs"])
     kept_outputs = _pick(node_outputs or {}, settings["outputs"])
     if not kept_inputs and not kept_outputs:
         return None
@@ -351,7 +372,30 @@ def select(task: dict, node_inputs: dict, node_outputs: dict, *,
     fields.update({f"out.{k}": v for k, v in kept_outputs.items()})
     trimmed = _fit(fields, settings["limit"])
 
-    payload = {"task": task.get("name"), "inputs": {}, "outputs": {}}
+    metadata = {}
+    unbound = []
+    available = {**node_inputs, **(node_outputs or {})}
+    for label, reference in (("subject", settings["match"]), ("event_time", settings["at"]), ("key", settings["key"])):
+        if reference:
+            value = available.get(reference)
+            if value is None:
+                value = bindings.resolve({**(run_data or {}), **available}, reference)
+            if value is None or value == "":
+                if label == "key":
+                    # An update needs to know which record it updates.
+                    raise bindings.BindingError(f"Memory '{task.get('name')}' cannot update: unique key '{reference}' is missing in this run.")
+                # The record is still worth keeping; it is just not linked to
+                # an entity or a date, so exact and time-filtered reads skip it.
+                unbound.append({"label": label, "reference": reference})
+                continue
+            if label == "event_time":
+                normalized = bindings.timestamp(value)
+                metadata[label] = normalized if settings["version"] == 2 else str(value)
+            else:
+                metadata[label] = str(value)
+    payload = {"task": task.get("name"), "inputs": {}, "outputs": {}, "metadata": metadata}
+    if unbound:
+        payload["unbound"] = unbound
     for key, text in trimmed.items():
         side, _, field = key.partition(".")
         payload["inputs" if side == "in" else "outputs"][field] = text
@@ -454,7 +498,7 @@ MAX_TIMELINE = 500
 
 
 def subject_of(task: dict, payload: dict) -> str | None:
-    """What this entry is about — the obligor, the ticker, the customer.
+    """What this entry is about — the customer, the ticker, the device.
 
     None when the node tracks no subject, and then memory stays one entry per
     run, which is all a node with nothing to accumulate against needs.
@@ -462,6 +506,8 @@ def subject_of(task: dict, payload: dict) -> str | None:
     field = policy(task)["match"]
     if not field:
         return None
+    if "subject" in payload.get("metadata", {}):
+        return payload["metadata"]["subject"]
     if isinstance(payload.get("subject"), dict):
         value = payload["subject"].get(field)
     else:
@@ -488,7 +534,7 @@ def points_of(payload: dict, dated_by: str | None = None, seen=None) -> list[dic
         return [{**p, "seen": str(p.get("at") or p.get("seen") or written)}
                 for p in timeline if isinstance(p, dict)]
     sides = {**(payload.get("inputs") or {}), **(payload.get("outputs") or {})}
-    when = str(sides.get(dated_by) or "") if dated_by else ""
+    when = payload.get("metadata", {}).get("event_time") or (str(sides.get(dated_by) or "") if dated_by else "")
     return [{"at": when,
              "seen": when or written,
              "inputs": payload.get("inputs") or {},
@@ -505,7 +551,7 @@ def as_timeline(task: dict, payload: dict) -> dict:
         "subject": {settings["match"]: subject_of(task, payload)},
         "dated_by": dated_by,
         "timeline": [{
-            "at": str(sides.get(dated_by) or "") if dated_by else "",
+            "at": payload.get("metadata", {}).get("event_time") or (str(sides.get(dated_by) or "") if dated_by else ""),
             "inputs": payload.get("inputs") or {},
             "outputs": payload.get("outputs") or {},
         }],
@@ -539,7 +585,7 @@ def history_for(entries: list[dict], task: dict, inputs: dict) -> str:
 
     Not a search. Two runs about the same company are about the same company
     whether or not their text is alike, and a monitoring pipeline asking "have
-    we flagged this obligor before" needs the answer to be exact.
+    we flagged this customer before" needs the answer to be exact.
     """
     settings = policy(task)
     field = settings["match"]
@@ -554,7 +600,7 @@ def history_for(entries: list[dict], task: dict, inputs: dict) -> str:
     # recalled has to predate it: walking a window month by month is only
     # worth doing if December cannot see May. Blank when the node is not
     # dated at all, and then there is nothing to be earlier than.
-    cutoff = str((inputs or {}).get(dated_by) or "") if dated_by else ""
+    cutoff = read_cutoff(task, inputs)
     dated: dict[str, dict] = {}
     loose: list[dict] = []
     for entry in entries or []:
@@ -597,7 +643,7 @@ def table_block(rows: list[dict], task: dict, wanted: str, cutoff: str) -> str:
     """Rows from the node's table, as the prompt sees them.
 
     Deliberately plain: the subject, then one line per date. A model reading
-    "what did we conclude about this obligor, and when" should not have to
+    "what did we conclude about this customer, and when" should not have to
     parse a wall of escaped JSON to find out.
     """
     settings = policy(task)
@@ -613,8 +659,23 @@ def table_block(rows: list[dict], task: dict, wanted: str, cutoff: str) -> str:
         return ""
     field = settings["match"]
     upto = f" before {cutoff}" if cutoff else ""
-    return (f"\n\nWhat this pipeline has recorded for {field} = {wanted!r}"
+    label = f"for {field} = {wanted!r}" if field else "across recent entries"
+    return (f"\n\nWhat this pipeline has recorded {label}"
             f"{upto}, oldest first:\n" + "\n".join(lines))
+
+
+def read_cutoff(task, inputs):
+    settings = policy(task)
+    if not settings["time_filter"]:
+        return ""
+    field = settings["at"]
+    value = (inputs or {}).get(field)
+    if not field or value is None or value == "":
+        raise bindings.BindingError(
+            f"Memory for '{task.get('name')}' is dated by '{field}', which this run did not provide, so "
+            f"reading was skipped rather than risk returning later records. Provide '{field}' "
+            f"with the run, or turn off 'Only read memories before the bound time'.")
+    return bindings.timestamp(value)
 
 
 def table_read(store, graph_id: str, task: dict, inputs: dict):
@@ -626,13 +687,15 @@ def table_read(store, graph_id: str, task: dict, inputs: dict):
     """
     settings = policy(task)
     field = settings["match"]
-    if settings["kind"] != "table" or not field or not settings["retrieve"]:
+    if settings["kind"] != "table" or not settings["retrieve"]:
         return None
-    wanted = (inputs or {}).get(field)
-    if wanted in (None, ""):
-        return None
-    dated_by = settings["at"]
-    cutoff = str((inputs or {}).get(dated_by) or "") if dated_by else ""
+    wanted = (inputs or {}).get(field) if field else None
+    if field and wanted in (None, ""):
+        raise bindings.BindingError(f"Memory match binding '{field}' is missing; lookup skipped.")
+    cutoff = read_cutoff(task, inputs)
+    if not field:
+        rows = store.latest(graph_id, task.get("name"), settings["retrieve"], cutoff)
+        return {"rows": rows, "subject": "", "cutoff": cutoff}
     rows = store.before(graph_id, task.get("name"), str(wanted),
                         cutoff, settings["retrieve"])
     return {"rows": rows, "subject": str(wanted), "cutoff": cutoff}
@@ -644,15 +707,19 @@ def table_write(task: dict, payload: dict):
     if settings["kind"] != "table":
         return None
     subject = subject_of(task, payload)
-    if subject is None:
-        return None
+    if subject is None and settings["match"]:
+        # Appending needs no identity, so the record is kept unlinked; the
+        # legacy entity-and-date update cannot tell which row it would replace.
+        if settings["write_mode"] != "append" and not payload.get("metadata", {}).get("key"):
+            return None
+    subject = subject or ""
     sides = {**(payload.get("inputs") or {}), **(payload.get("outputs") or {})}
     dated_by = settings["at"]
     return {
         "subject": subject,
-        "at": str(sides.get(dated_by) or "") if dated_by else "",
-        "payload": {"inputs": payload.get("inputs") or {},
-                    "outputs": payload.get("outputs") or {}},
+        "at": payload.get("metadata", {}).get("event_time") or (str(sides.get(dated_by) or "") if dated_by else ""),
+        "key": payload.get("metadata", {}).get("key"),
+        "payload": payload,
     }
 
 
@@ -675,6 +742,7 @@ async def recall_async(stores, task: dict, inputs: dict, history=None,
     # The node is dated by a field it does not consume, so the run's own data
     # has to supply it — otherwise the cutoff below is always blank.
     inputs = with_context(task, inputs, run_data)
+    read_cutoff(task, inputs)  # Missing configured dates must never allow an unfiltered query.
     blocks = []
 
     # A table node reads its table and nothing else. The two kinds are
@@ -704,7 +772,7 @@ async def recall_async(stores, task: dict, inputs: dict, history=None,
         wanted = [task.get("name")]
     query = query_for(task, inputs)
     dated_by = settings["at"]
-    cutoff = str((inputs or {}).get(dated_by) or "") if dated_by else ""
+    cutoff = read_cutoff(task, inputs)
 
     lines = []
     for name in wanted:
@@ -714,14 +782,14 @@ async def recall_async(stores, task: dict, inputs: dict, history=None,
         for message, _score in await _search(memory, query, settings["retrieve"]):
             # Similarity search reaches the whole store, so on a dated run it
             # will happily return next quarter's conclusion about this very
-            # obligor. Held to the same cutoff as the history block.
+            # subject. Held to the same cutoff as the history block.
             if cutoff:
                 payload = _unwrap(message.content)
                 if not isinstance(payload, dict):
                     continue
                 sides = {**(payload.get("inputs") or {}),
                          **(payload.get("outputs") or {})}
-                if not _earlier(str(sides.get(settings["at"]) or ""), cutoff):
+                if not _earlier(payload.get("metadata", {}).get("event_time") or str(sides.get(settings["at"]) or ""), cutoff):
                     continue
             text = render(message.content, keep=settings["read"])
             if not text:
@@ -746,7 +814,7 @@ def _earlier(when: str, cutoff: str) -> bool:
     rather than inclusive so re-running one date does not feed on its own
     previous answer.
     """
-    return bool(when) and when < cutoff
+    return bool(when) and bindings.timestamp(when) < bindings.timestamp(cutoff)
 
 
 def _unwrap(content):

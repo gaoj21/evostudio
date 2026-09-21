@@ -20,9 +20,10 @@ function Progress({ task }) {
   );
 }
 
-export function TaskDetail({ task, onApplied }) {
+export function TaskDetail({ task, onApplied, onStopped }) {
   const [applying, setApplying] = useState(null);
   const [applyError, setApplyError] = useState(null);
+  const [stopping, setStopping] = useState(false);
   const [showUnchanged, setShowUnchanged] = useState(false);
   const [showExamples, setShowExamples] = useState(false);
   const evaluationOnly = task.params?.mode === 'evaluate';
@@ -42,38 +43,52 @@ export function TaskDetail({ task, onApplied }) {
     }
   };
 
+  // Stops at the next record; nothing it produced is applied.
+  const stop = async () => {
+    setStopping(true);
+    setApplyError(null);
+    try {
+      await api.stopEvolve(task.task_id);
+      onStopped?.(task.task_id);
+    } catch (err) {
+      setApplyError(err?.body?.detail || err.message);
+      setStopping(false);
+    }
+  };
+
   const diffs = task.diff || [];
   const changed = diffs.filter((d) => d.changed);
   const p = task.params || {};
-  const trajectory = task.baseline?.report;
+  const source = task.source || p.source;
+  // Every score the metric returned beside the headline one, as it came.
+  const { score: _score, ...otherMetrics } = task.baseline?.metrics || {};
   return (
     <div className="evolve-detail">
       <div className="muted small">
         {evaluationOnly || ['saved_batch', 'saved_run', 'canvas'].includes((task.source || p.source)?.type) ? `${task.task_id} · ${evaluationOnly ? 'Evaluation only' : (task.source || p.source)?.type === 'canvas' ? 'Canvas candidate replay' : 'Prompt proposals'} · ${p.n_dev} records · metric ${task.metric}` : <>{task.task_id} · {p.preset || 'custom'} · {p.num_candidates} candidates × {p.max_steps} rounds ·
         {' '}{p.n_train} teach / {p.n_dev} judge · metric {task.metric}</>}
-        {(task.source || p.source)?.dataset && ` · Dataset ${(task.source || p.source).dataset} / ${(task.source || p.source).split || 'all'}`}
         {task.elapsed_seconds != null && ` · ${elapsed(task)}`}
       </div>
       {['saved_batch', 'saved_run'].includes((task.source || p.source)?.type) && <p className="muted small">Saved results · {(task.source || p.source)?.batch_id || (task.source || p.source)?.run_id} · no workflow replay</p>}
-      {(task.source || p.source)?.matched_records != null && <p className="muted small">{(task.source || p.source).matched_records} matched records · {(task.source || p.source).matched_cases} trajectories · {(task.source || p.source).missing_cases || 0} dataset trajectories without saved results</p>}
+      {source?.matched_records != null && <p className="muted small">{source.matched_records} matched records</p>}
       {task.validation_status === 'not_run' && <p role="status">Prompt suggestions are not validated. No workflow was rerun; there is no after score. {task.evidence_records} saved traces were used.</p>}
       {task.baseline?.metrics?.unscored > 0 && <p className="muted small">{task.baseline.metrics.unscored} records have no usable score. Missing labels are not treated as negative outcomes.</p>}
-      {trajectory && <section aria-label="Trajectory evaluation summary">
-        <h4>Evaluation completed · {trajectory.companies?.length || 0} trajectories</h4>
-        <div className="evolve-scores">
-          <div className="evolve-score"><div className="muted small">Verified event cases detected</div><div className="evolve-score-value">{trajectory.all.detected} / {trajectory.all.positives}</div></div>
-          <div className="evolve-score"><div className="muted small">Mean lead time (detected cases)</div><div className="evolve-score-value">{trajectory.all.mean_lead_days ?? '—'} days</div></div>
-        </div>
-        <p className="muted small">{trajectory.failed_steps || 0} unsuccessful steps. Daily accuracy requires reviewed daily labels; it is not inferred from eventual events.</p>
-      </section>}
-      {task.baseline?.report && <details><summary>Trajectory evaluation report</summary><JsonView value={task.baseline.report} startOpen={false} /></details>}
+      {task.baseline?.report && <details><summary>Evaluation report</summary><JsonView value={task.baseline.report} startOpen={false} /></details>}
+      {Object.keys(otherMetrics).length > 0 && <details><summary>Metrics</summary><JsonView value={otherMetrics} startOpen={false} /></details>}
       <EvaluatorReports reports={task.baseline?.evaluations} />
       {task.optimized?.evaluations && <><h4>Selected candidate evaluation</h4><EvaluatorReports reports={task.optimized.evaluations}/></>}
       <Progress task={task} />
+      {task.status === 'running' && <div className="evolve-apply">
+        <button type="button" onClick={stop} disabled={stopping || task.stop_requested}>{stopping || task.stop_requested ? 'Stopping…' : 'Stop'}</button>
+        <span className="muted small">Stops at the next record; nothing is applied.</span>
+      </div>}
+      {task.status === 'stopped' && <p className="muted small" role="status">Stopped before it finished; nothing was applied.</p>}
+      {task.status === 'interrupted' && <p className="muted small" role="status">Interrupted: the server restarted while this task was running. Start it again to get a result.</p>}
+      {task.status !== 'done' && applyError && <div className="muted small batch-error">{String(applyError)}</div>}
       {task.error && <pre className="json-view batch-output batch-error">{task.error}</pre>}
       {task.status === 'done' && (
         <>
-          {(!trajectory || baseline != null) && <div className="evolve-scores">
+          {(baseline != null || !task.baseline?.report) && <div className="evolve-scores">
             <div className="evolve-score">
               <div className="muted small">{evaluationOnly ? 'Score' : 'Before'}</div>
               <div className="evolve-score-value">{fmt(baseline)}</div>

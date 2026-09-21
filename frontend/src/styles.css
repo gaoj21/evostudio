@@ -3092,7 +3092,7 @@ button.run-badge:hover:not(:disabled) {
 }
 
 /* Table memory as a list: a full-width, left-aligned heading row per
-   company; its dated states beneath, indented, each on one line until
+   subject; its dated states beneath, indented, each on one line until
    opened. The global button rule centres its content — not here. */
 .memory-controls button { font-size: 12px; }
 
@@ -3178,13 +3178,13 @@ button.run-badge:hover:not(:disabled) {
   margin-top: 6px;
 }
 
-/* Within a dated row, one cell per node: investigate's and decide's
-   state of the same company on the same date, one under the other. */
+/* Within a dated row, one cell per node: each node's state of the same
+   subject on the same date, one under the other. */
 .memory-cell { margin-top: 5px; padding-left: 2px; }
 .memory-cell-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .memory-cell-node { font-weight: 600; flex: none; min-width: 80px; }
 
-/* Evaluation tab: two tallies, then one row per company with its steps as
+/* Evaluation tab: two tallies, then one row per subject with its steps as
    coloured chips (level) whose border says how far from the expected band. */
 .eval-tab { gap: 10px; }
 .eval-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

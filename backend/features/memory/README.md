@@ -12,7 +12,12 @@
 - `memory_resources.py` — Shared identity and access rules for canvas and chat Memory resources.
 - `memory_store.py` — Studio layout over the memory layer (memory/ltm.py).
 - `stm_store.py` — Short-term memory for EvoAgentX Studio: what happened earlier in a session.
-- `table_store.py` — Table memory: one row per subject per date.
+- `table_store.py` — Structured memory records (append or keyed upsert), time-aware reads.
+- `bindings.py` — Resolve entity/time/key bindings; fields no node produces become optional workflow inputs.
+- `identity.py` — Stable local store identity across Agent renames.
+- `sequencing.py` — Which batch records must run in order because of memory.
+
+设计说明见 `docs/architecture/memory-bindings.md`。memory 不依赖任何业务字段名（company、as_of、window_*）；实体、时间、唯一键都是按字段名配置的可选绑定。
 
 ## 修改边界
 

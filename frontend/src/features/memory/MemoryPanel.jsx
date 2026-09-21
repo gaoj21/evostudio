@@ -7,8 +7,8 @@ import { unfold } from '../../jsonView.js';
 /**
  * What the runs wrote to memory, per store.
  *
- * A table store (one row per company per date) reads as a timeline: pick
- * the node, optionally a company, and see its states in order. A corpus
+ * A table store (one row per subject per date) reads as a timeline: pick
+ * the node, optionally a subject, and see its states in order. A corpus
  * (vector store) is searched. Nothing here refreshes on its own — a batch
  * writes as it goes — so there is a Refresh button and the list reloads
  * whenever the tab is opened.
@@ -58,9 +58,9 @@ export default function MemoryPanel({ graphId }) {
       .then((res) => {
         const list = res.stores || (res.agents || []).map((a) => ({ node: a, kind: 'recall', subjects: [] }));
         setStores(list);
-        // Two or more tables open together by default: what investigate
-        // kept and what decide kept about the same company on the same
-        // date belong side by side, not behind a dropdown.
+        // Two or more tables open together by default: what two nodes kept
+        // about the same subject on the same date belong side by side, not
+        // behind a dropdown.
         const tables = list.filter((s) => s.kind === 'table');
         setStore((current) => {
           if (current === ALL && tables.length > 1) return ALL;

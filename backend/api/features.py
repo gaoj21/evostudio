@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from importlib.util import find_spec
 
+from backend.features import plugins
+
 CORE_FEATURES = (
     "graphs",
     "runs",
@@ -19,11 +21,6 @@ EXPERIMENTAL_FEATURES = {
         "description": "MIPRO prompt optimization",
         "extra": "optimizers",
         "dependencies": ("dspy", "optuna"),
-    },
-    "credit_risk": {
-        "description": "Repository-local credit-risk presets and data sources",
-        "extra": None,
-        "dependencies": ("credit_risk",),
     },
 }
 
@@ -52,4 +49,6 @@ def catalog(overrides: dict[str, tuple[bool, str | None]] | None = None) -> dict
             for name in CORE_FEATURES
         ],
         "experimental": experimental,
+        # Task-specific code Studio loaded from project folders.
+        "projects": plugins.catalog(),
     }

@@ -17,9 +17,18 @@
 | 数据来源、采集、清洗、数据集读取 | `backend/features/data/` | Feed 配置在 canvas，运行选择在 execution |
 | Tools、Skills、Library | `backend/features/library/` | `frontend/src/features/library/` |
 | Projects、任务文件、工作区 | `backend/features/workspace/` | `frontend/src/features/workspace/` |
+| 任务专用的 Input、预设、模板、工具（项目插件） | `projects/<p>/studio_plugin.py`，加载器 `backend/features/plugins.py` | 不改；经 palette、`/api/sources` 等通用接口显示 |
 
 `projects/credit_risk` 是项目资料、数据和领域代码，不是平台通用能力所在目录。冻结的数据集不应跟着代码重构改变。
 `backend/evoagentx` 是框架源码，暂时保留原目录；通常不要为页面功能去修改它。
+
+## 项目插件
+
+Studio 是通用平台。只对某个任务有意义的代码（领域数据集 Input、预设节点、模板、审核规则、查询工具、评测代码）放在 `projects/<p>/`，通过 `projects/<p>/studio_plugin.py` 接入；加载器是 `backend/features/plugins.py`。契约（`presets()`、`templates()`、`toolkits()`、`source_types()` 及 `records` / `info` / `sequence` / `watch_key` 钩子）见 [projects/README.md](projects/README.md)，完整示例是 `projects/credit_risk/studio_plugin.py`。
+
+- 任务专用代码不得写进 `backend/features/`、`backend/api/` 或 `frontend/src/` 的通用组件；平台代码和默认值不得依赖任务字段名（不按 company、as_of、sample_id 等名称分组、排序或推断含义；需要时由 Input 类型或用户配置声明）。
+- 平台需要新能力时，先在 `plugins.py` 中以不含任务名的方式扩展契约，再由插件使用。
+- 插件加载失败不影响平台，只在 `GET /api/features` 的 `projects` 中显示原因。`EAX_STUDIO_PROJECTS` 可替换插件搜索路径；测试中改完环境变量后调用 `plugins.reload()`。
 
 ## DataLoader 与 Evaluator
 

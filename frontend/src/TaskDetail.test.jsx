@@ -74,8 +74,8 @@ it('retries failed result loading within the detail page',async()=>{
 });
 it('browses multiple records, filters batches and exposes step outputs',async()=>{
  api.listResultRuns.mockResolvedValue([
-  {run_id:'r1',status:'success',batch_id:'b1',nodes:[{name:'feed',output:{company:'Alpha'}}]},
-  {run_id:'r2',status:'success',batch_id:'b1',nodes:[{name:'feed',output:{company:'Beta'}}]},
+  {run_id:'r1',status:'success',batch_id:'b1',nodes:[{name:'reader',kind:'source',output:{customer:'Alpha',long:'x'.repeat(200)}}]},
+  {run_id:'r2',status:'success',batch_id:'b1',nodes:[{name:'reader',kind:'source',output:{customer:'Beta'}}]},
   {run_id:'r3',status:'failed',batch_id:null},
  ]);
  api.getRun.mockImplementation(async id=>({run_id:id,status:'success',result:`Output ${id}`,inputs:{input:'Source data'},nodes:[{name:'analyze',status:'completed',output:'Analysis details'}]}));
@@ -92,6 +92,18 @@ it('browses multiple records, filters batches and exposes step outputs',async()=
  expect(screen.getByText('Analysis details')).toBeVisible();
  fireEvent.change(screen.getByLabelText('Search run records'),{target:{value:'missing'}});
  expect(screen.getByText('No matching records.')).toBeInTheDocument();
+});
+it('names runs by the trajectory fields the Input type declares',async()=>{
+ api.getGraph.mockResolvedValue({id:'g',name:'T',tasks:[{name:'reader',kind:'source',source:{type:'project_feed'}}]});
+ api.listSourceTypes=vi.fn().mockResolvedValue({source_types:[{type:'project_feed',sequence:{group:'ticket',order:'day'}}]});
+ api.listResultRuns.mockResolvedValue([
+  {run_id:'r1',status:'success',nodes:[{name:'reader',output:{body:'first text',ticket:'T-1',day:'2026-01-02'}}]},
+ ]);
+ api.getRun.mockResolvedValue({run_id:'r1',status:'success',result:'Done'});
+ render(<TaskDetail graphId="g"/>);
+ fireEvent.click(await screen.findByText('View result →'));
+ expect(await screen.findByRole('button',{name:/T-1 · 2026-01-02/})).toBeInTheDocument();
+ delete api.listSourceTypes;
 });
 it('collapses input data as a whole and provides a keyboard-accessible resize separator',async()=>{
  api.listResultRuns.mockResolvedValue([{run_id:'r',status:'success'}]);

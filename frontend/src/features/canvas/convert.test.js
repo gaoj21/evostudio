@@ -87,8 +87,8 @@ describe('round trip', () => {
       ...graph,
       tasks: [
         { name: 'feed', kind: 'source', description: 'a feed',
-          source: { type: 'credit_risk', split: 'dev', n: 2, seed: 7 },
-          outputs: [{ name: 'company', type: 'str', description: 'c', required: true }],
+          source: { type: 'project_feed', split: 'dev', n: 2, seed: 7 },
+          outputs: [{ name: 'subject', type: 'str', description: 'c', required: true }],
           save_output: true, x: 0, y: 0 },
         { name: 'wc', kind: 'tool', description: 'count', tool: 'word_count',
           inputs: [{ name: 'text', type: 'str', description: 't', required: true }],
@@ -103,6 +103,14 @@ describe('round trip', () => {
                              nodes, []);
     expect(back.tasks[0].source).toEqual(mixed.tasks[0].source);
     expect(back.tasks[1].tool).toBe('word_count');
+  });
+
+  it('never invents an Input type for a source saved without one', () => {
+    const { nodes } = graphToFlow({ ...graph, tasks: [{ name: 'input', kind: 'source' }] });
+    expect(nodes[0].data.source).toEqual({});
+    const back = flowToGraph({ id: 'g1', name: 'Graph' }, [{ ...nodes[0], data: { ...nodes[0].data, source: undefined } }], []);
+    expect(back.tasks[0].source).toEqual({});
+    expect(JSON.stringify(back)).not.toMatch(/credit_risk/);
   });
 
   it('fills in defaults for a task saved without them', () => {

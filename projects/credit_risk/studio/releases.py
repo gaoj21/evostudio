@@ -1,10 +1,13 @@
-"""Discover versioned credit-risk data and keep evaluation outcomes out of inputs."""
+"""Versioned credit-risk releases: discovery, labels, and dated observations.
+
+Outcomes stay out of workflow inputs: `label_for` is read only by evaluators.
+"""
 import json
 import random
 from collections import Counter
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[3] / 'projects' / 'credit_risk' / 'dataset' / 'expansion' / 'releases'
+ROOT = Path(__file__).resolve().parents[1] / 'dataset' / 'expansion' / 'releases'
 
 
 def rows(path):
@@ -31,7 +34,7 @@ def catalog():
 
 
 def release(dataset):
-    from backend.api.sources import SourceError
+    from .feed import SourceError
     if not isinstance(dataset, str) or dataset not in {item['id'] for item in catalog()}:
         raise SourceError('Unknown dataset version. Choose an available dataset.')
     return ROOT / dataset
@@ -49,7 +52,7 @@ def label_for(outcome, case):
 
 
 def records(dataset, split=None, n=5, seed=42, with_labels=False, step=None):
-    from backend.api.sources import SourceError, CREDIT_RISK_FIELDS, _sample_to_record
+    from .feed import SourceError, CREDIT_RISK_FIELDS, _sample_to_record
     path = release(dataset)
     partitions = {r['case_id']: r['partition'] for r in rows(path / 'partitions.jsonl')}
     if split and split not in set(partitions.values()):
@@ -90,7 +93,7 @@ def walk_window(observations, step=None, window=None):
     """Group new evidence into observation periods without dropping or looking ahead."""
     from bisect import bisect_left
     from datetime import date, timedelta
-    from backend.api.sources import SourceError
+    from .feed import SourceError
     step = step or 'daily'
     if step not in ('none', 'daily', 'weekly', 'monthly'):
         raise SourceError('Choose none, daily, weekly or monthly for Walk each window.')
@@ -128,52 +131,3 @@ def walk_window(observations, step=None, window=None):
             'filings': [d for sample in samples for d in sample.get('filings', [])]}, ensure_ascii=False)
         result.append(merged)
     return result
-
-
-# Registrant-level insolvency events a reviewer verified. Broader than
-# label_for (which feeds the optimizer's credit_risk metric and keeps to
-# the three unambiguous kinds): for judging a monitoring run, a verified
-# assignment for the benefit of creditors or a CCAA filing is a positive
-# outcome too. Subsidiary-only events, refinancings, upgrades and
-# emergences are not.
-INSOLVENCY_EVENTS = {
-    'chapter_11', 'chapter_7', 'involuntary_chapter_7_order_for_relief',
-    'assignment_for_benefit_of_creditors', 'canadian_bankruptcy_assignment',
-    'ccaa_restructuring', 'receivership_order', 'irish_winding_up_petition',
-}
-
-
-def evaluation_label(outcome, case):
-    """What a monitoring run can be judged against for this case.
-
-    {"type": "positive", ...} for a verified registrant-level insolvency
-    after the window; {"type": "unverified", "reason": ...} for everything
-    else. Never a negative: no case in these releases has a verified
-    "nothing happened" review, and an unverified one must not be scored
-    as if it had.
-    """
-    event = outcome.get('reviewed_event') or {}
-    status = outcome.get('outcome_review_status')
-    kind = outcome.get('event_type')
-    scope = str(event.get('scope') or '')
-    if status != 'event_verified':
-        return {'type': 'unverified', 'reason': status or 'no outcome review'}
-    if kind not in INSOLVENCY_EVENTS:
-        return {'type': 'unverified', 'reason': f'verified event is {kind}, not an insolvency'}
-    if not scope.startswith('registrant'):
-        return {'type': 'unverified', 'reason': f'event scope is {scope or "unknown"}, not the registrant'}
-    if not event.get('event_date') or event['event_date'] <= case['window']['end']:
-        return {'type': 'unverified', 'reason': 'event falls inside the observation window'}
-    return {'type': 'positive', 'event': kind, 'event_date': event['event_date'],
-            'scope': scope, 'case_id': case['case_id']}
-
-
-def evaluation_labels(dataset):
-    """case_id -> evaluation_label, for one release; {} for an unknown one."""
-    try:
-        path = release(dataset)
-    except Exception:
-        return {}
-    cases = {r['case_id']: r for r in rows(path / 'cases.jsonl')}
-    return {r['case_id']: evaluation_label(r, cases[r['case_id']])
-            for r in rows(path / 'outcomes.jsonl') if r['case_id'] in cases}

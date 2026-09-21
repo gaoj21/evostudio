@@ -26,8 +26,13 @@ def chunks(config, cancelled=lambda: False):
     with tempfile.TemporaryDirectory(prefix='dataset-stream-') as directory:
         root=Path(directory);(root/'input.json').write_text(json.dumps(payload))
         with (root/'stderr.log').open('wb') as log:
-            process=subprocess.Popen([sys.executable,chat_worker.__file__,'dataset_stream',directory],stdout=subprocess.DEVNULL,stderr=log,start_new_session=True)
-        deadline=time.monotonic()+120
+            # The worker exits by itself if this process disappears (restart,
+            # crash): it would otherwise wait for its next batch forever.
+            process=subprocess.Popen([sys.executable,chat_worker.__file__,'dataset_stream',directory],stdout=subprocess.DEVNULL,stderr=log,start_new_session=True,
+                                     env={**os.environ,'STUDIO_WORKER_PARENT':str(os.getpid())})
+        # The DataLoader's own "time allowed per batch", as in a full read.
+        allowed=dataloaders.batch_timeout(config)
+        deadline=time.monotonic()+allowed
         try:
             while True:
                 if cancelled(): return
@@ -36,7 +41,7 @@ def chunks(config, cancelled=lambda: False):
                     rows=dataloaders._object_rows(json.loads(chunk.read_text()))
                     yield rows
                     chunk.unlink(missing_ok=True)
-                    deadline=time.monotonic()+120
+                    deadline=time.monotonic()+allowed
                     continue
                 if process.poll() is not None:
                     result=root/'result.json'
@@ -44,7 +49,7 @@ def chunks(config, cancelled=lambda: False):
                     outcome=json.loads(result.read_text())
                     if 'error' in outcome: raise SourceError(outcome['error'])
                     return
-                if time.monotonic()>deadline: raise SourceError('Dataset did not produce a batch within 120 seconds. Keep loading lazy.')
+                if time.monotonic()>deadline: raise SourceError(f'Dataset did not produce a batch within {allowed} seconds. Keep loading lazy, or raise the time allowed per batch.')
                 time.sleep(.05)
         finally:
             if process.poll() is None:

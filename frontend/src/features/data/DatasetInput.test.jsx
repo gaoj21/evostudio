@@ -50,14 +50,14 @@ it('shows upload errors without clearing the existing selection', async () => {
   expect(change).not.toHaveBeenCalled();
 });
 
-it('switches an obligor dataset to a shared list output and preserves column mapping', async () => {
+it('switches a dataset to a shared list output named reference by default and preserves column mapping', async () => {
   const change = vi.fn(); render(<Harness onChange={change} />);
   await screen.findByText('Customers · 2 records');
   fireEvent.change(screen.getByLabelText('My datasets'), {target:{value:'abc'}});
   await screen.findByLabelText('Input role');
   fireEvent.change(screen.getByLabelText('Input role'), {target:{value:'reference'}});
-  expect(change).toHaveBeenLastCalledWith(expect.objectContaining({input_mode:'reference', reference_field:'obligor_list'}),
-    [expect.objectContaining({name:'obligor_list', type:'list'})]);
+  expect(change).toHaveBeenLastCalledWith(expect.objectContaining({input_mode:'reference', reference_field:'reference'}),
+    [expect.objectContaining({name:'reference', type:'list'})]);
   fireEvent.change(screen.getByLabelText('Reference output name'), {target:{value:'customers'}});
   expect(change).toHaveBeenLastCalledWith(expect.objectContaining({reference_field:'customers'}),
     [expect.objectContaining({name:'customers', type:'list'})]);

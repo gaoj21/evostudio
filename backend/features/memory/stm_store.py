@@ -59,14 +59,18 @@ def recent(graph_id: str, session: str, n: int) -> list[dict]:
     """The last `n` entries of a session, oldest first."""
     if not session or n <= 0:
         return []
-    return open_store(graph_id).get(session, n)
+    # Under the writers' lock: a log read while it is being rewritten is a
+    # log that looks empty.
+    with _lock:
+        return open_store(graph_id).get(session, n)
 
 
 def sessions(graph_id: str) -> list[str]:
     """Every session this workflow has a short-term log for."""
     if not _path(graph_id).is_file():
         return []
-    return open_store(graph_id).sessions()
+    with _lock:
+        return open_store(graph_id).sessions()
 
 
 def clear(graph_id: str, session: str | None = None) -> None:

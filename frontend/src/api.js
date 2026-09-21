@@ -105,11 +105,9 @@ export const api = {
     Object.entries(params).forEach(([k, v]) => formData.append(k, v));
     return req(`/api/graphs/${encodeURIComponent(id)}/run-batch`, { method: 'POST', formData });
   },
-  runBatchSource: (id, params) =>
-    req(`/api/graphs/${encodeURIComponent(id)}/run-batch`, { method: 'POST', body: { source: 'credit_risk', ...params } }),
   runBatchCanvas: (id, params = {}) =>
     req(`/api/graphs/${encodeURIComponent(id)}/run-batch`, { method: 'POST', body: { source: 'canvas', ...params } }),
-  // Same three shapes as run-batch, but nothing is started: it answers how
+  // Same shapes as run-batch, but nothing is started: it answers how
   // many runs you would get, so stepping cannot multiply a batch unseen.
   previewBatchUpload: (id, file, params = {}) => {
     const formData = new FormData();
@@ -117,8 +115,6 @@ export const api = {
     Object.entries(params).forEach(([k, v]) => formData.append(k, v));
     return req(`/api/graphs/${encodeURIComponent(id)}/run-batch/preview`, { method: 'POST', formData });
   },
-  previewBatchSource: (id, params) =>
-    req(`/api/graphs/${encodeURIComponent(id)}/run-batch/preview`, { method: 'POST', body: { source: 'credit_risk', ...params } }),
   previewBatchCanvas: (id, params = {}) =>
     req(`/api/graphs/${encodeURIComponent(id)}/run-batch/preview`, { method: 'POST', body: { source: 'canvas', ...params } }),
   collectSource: (id, body = {}) => req(`/api/graphs/${encodeURIComponent(id)}/source-collections`, { method: 'POST', body }),
@@ -136,12 +132,6 @@ export const api = {
       + `?baseline=${encodeURIComponent(baselineId)}`),
   cancelBatch: (batchId) =>
     req(`/api/batches/${encodeURIComponent(batchId)}/cancel`, { method: 'POST' }),
-  // Score a batch from what it holds. Credit-risk batches need no body; any
-  // other batch sends {metric, label_key}.
-  evaluateBatch: (batchId, body) =>
-    req(`/api/batches/${encodeURIComponent(batchId)}/evaluate`, { method: 'POST', body: body || {} }),
-  getBatchEvaluation: (batchId) =>
-    req(`/api/batches/${encodeURIComponent(batchId)}/evaluation`),
   // Run the records of a stopped batch that did not finish; the rest are
   // kept as they are.
   resumeBatch: (batchId) =>
@@ -151,7 +141,11 @@ export const api = {
     req(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' }),
   abandonRun: (runId) =>
     req(`/api/runs/${encodeURIComponent(runId)}/abandon`, { method: 'POST' }),
-  creditRiskSource: (dataset) => req(`/api/sources/credit-risk${dataset ? `?dataset=${encodeURIComponent(dataset)}` : ''}`),
+  // Details an Input type offers its form (only types with has_info).
+  sourceInfo: (type, params = {}) => {
+    const query = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
+    return req(`/api/sources/${encodeURIComponent(type)}/info${query ? `?${query}` : ''}`);
+  },
   // Snapshot memory to a timestamped backup, then empty it. Per workflow
   // when an id is given; refused (409) while anything is running.
   resetMemory: (graphId) =>
@@ -170,8 +164,7 @@ export const api = {
   },
   previewEvolveResults: (id, params) => req(`/api/graphs/${encodeURIComponent(id)}/evolve/preview`, { method: 'POST', body: params }),
   startEvolveResults: (id, params) => req(`/api/graphs/${encodeURIComponent(id)}/evolve`, { method: 'POST', body: params }),
-  startEvolveSource: (id, params) =>
-    req(`/api/graphs/${encodeURIComponent(id)}/evolve`, { method: 'POST', body: { source: 'credit_risk', ...params } }),
+  stopEvolve: (taskId) => req(`/api/evolve/${encodeURIComponent(taskId)}/stop`, { method: 'POST' }),
   evolvePresets: () => req('/api/evolve/presets'),
   // mode 'new' saves the optimized prompts as a new workflow; 'replace'
   // writes them into the optimized one after saving a copy of it.
@@ -225,6 +218,7 @@ export const api = {
   // Deliberate and separate from upload: pip runs only when asked.
   installCustomToolRequirements: (name) =>
     req(`/api/tools/custom/${encodeURIComponent(name)}/install`, { method: 'POST' }),
+  resumeSchedule: (id, recovery_policy) => req(`/api/graphs/${encodeURIComponent(id)}/schedule/resume`, { method: 'POST', body: { recovery_policy } }),
   getSchedule: (id) => req(`/api/graphs/${encodeURIComponent(id)}/schedule`),
   setSchedule: (id, schedule) =>
     req(`/api/graphs/${encodeURIComponent(id)}/schedule`, { method: 'PUT', body: schedule }),

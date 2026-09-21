@@ -88,7 +88,10 @@ def test_class_factory_interface_and_real_worker():
     schema = interface(CLASS_CODE)
     assert schema['entrypoint'] == 'build_evaluator'
     assert [f['name'] for f in schema['inputs']] == ['threshold']
-    result = chat_control.worker('evaluate_python', {'code': CLASS_CODE, 'records': [{'value': .2}, {'value': .8}], 'config': {'threshold': .7, 'label_records': [{'id': 1}]}}, timeout=20)
+    output = chat_control.worker('evaluate_python', {'code': CLASS_CODE, 'records': [{'value': .2}, {'value': .8}], 'config': {'threshold': .7, 'label_records': [{'id': 1}]}}, timeout=20)
+    # The worker returns the report together with what the code printed.
+    assert output['studio_evaluator_output'] and output['logs'] == ''
+    result = output['report']
     assert result == {'metrics': {'accuracy': .5}, 'details': [{'id': 1}]}
 
 

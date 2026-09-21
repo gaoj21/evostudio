@@ -217,8 +217,8 @@ class TestWhatReachesThePrompt:
         assert block.index("v1") < block.index("v3")
 
     def test_a_run_that_names_no_subject_asks_nothing(self, store):
-        assert memory_policy.table_read(store, "g1", self.task, {"as_of": "2026-01-01"}) \
-            is None
+        with pytest.raises(memory_policy.bindings.BindingError, match="match binding 'company' is missing"):
+            memory_policy.table_read(store, "g1", self.task, {"as_of": "2026-01-01"})
 
     def test_a_recall_node_is_not_routed_to_a_table(self, store):
         plain = {"name": "summarise", "memory": {"retrieve": 3}}

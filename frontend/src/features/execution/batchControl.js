@@ -60,7 +60,15 @@ export function unfinishedCount(batch) {
   return Math.max(0, total - (counts.success || 0));
 }
 
+// A streamed batch that stopped before its Dataset was fully read: Resume
+// runs what did not finish, then continues reading where it stopped.
+function unread(batch) {
+  if (!batch || batch.status === 'running' || batch.status === 'cancelling') return false;
+  return batch.unread ?? (!!batch.streaming && !batch.collection_complete);
+}
+
 export function resumeLabel(batch) {
   const n = unfinishedCount(batch);
+  if (unread(batch)) return n ? `Resume (${n} left, then keep reading)` : 'Resume (keep reading)';
   return n ? `Resume (${n} left)` : null;
 }

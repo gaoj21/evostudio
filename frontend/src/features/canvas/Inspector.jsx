@@ -63,9 +63,30 @@ function SourceInspector({ node, onUpdate, onRename, getGraph }) {
   }, []);
 
   const d = node.data;
-  const cfg = d.source || { type: 'credit_risk' };
+  // An Input without a type has not been chosen yet: nothing is assumed.
+  const cfg = d.source || {};
   const schema = schemas?.[cfg.type];
   const setCfg = (patch) => onUpdate(node.id, { source: { ...cfg, ...patch } });
+  // A type starts from its own schema: config defaults and declared outputs.
+  const chooseType = (type) => {
+    const chosen = schemas?.[type];
+    if (!chosen) return;
+    onUpdate(node.id, {
+      source: { type, ...Object.fromEntries((chosen.config || []).map((f) => [f.name, f.default ?? ''])) },
+      outputs: (chosen.outputs || []).map((o) => (typeof o === 'string'
+        ? { name: o, type: 'str', description: `${chosen.label || type} output`, required: false } : o)),
+    });
+  };
+  // Types that offer details (versions, counts) describe the current config.
+  const [info, setInfo] = useState(null);
+  const infoParams = schema?.has_info ? JSON.stringify(Object.fromEntries((schema.config || []).map((f) => [f.name, cfg[f.name]]))) : null;
+  useEffect(() => {
+    setInfo(null);
+    if (!infoParams) return undefined;
+    let active = true;
+    api.sourceInfo(cfg.type, JSON.parse(infoParams)).then((value) => { if (active) setInfo(value); }).catch(() => {});
+    return () => { active = false; };
+  }, [cfg.type, infoParams]);
   const [probing, setProbing] = useState(false);
   const [probeNote, setProbeNote] = useState(null);
   const probe = async () => {
@@ -93,8 +114,17 @@ function SourceInspector({ node, onUpdate, onRename, getGraph }) {
       {cfg.type === 'dataloader' && <DataLoaderInput key={node.id} config={cfg} nodeId={node.id} getGraph={getGraph} onChange={(source,outputs) => onUpdate(node.id,{source,...(outputs?{outputs}:{})})} />}
       {cfg.type === 'user_dataset' && <DatasetInput key={node.id} config={cfg}
         onChange={(source, outputs) => onUpdate(node.id, { source, ...(outputs ? { outputs } : {}) })} />}
-      {cfg.type !== 'dataloader' && <button onClick={() => onUpdate(node.id,{source:{type:'dataloader',loader:'source',source_config:cfg,n:0,read_batch_size:100,...(cfg.type==='credit_risk' && cfg.step && cfg.step!=='none'?{group_by:'sample_id',order_by:'as_of'}:{})}})}>Use DataLoader preprocessing</button>}
-      {!schema && <p className="muted small">Loading source schema…</p>}
+      {!cfg.type && schemas && <div className="field">
+        <label htmlFor="source-type">Input type</label>
+        <select id="source-type" value="" onChange={(e) => chooseType(e.target.value)}>
+          <option value="">Choose an input type…</option>
+          {Object.values(schemas).map((s) => <option key={s.type} value={s.type}>{s.label || s.type}</option>)}
+        </select>
+        <div className="muted small">Choose where this Input reads its records from.</div>
+      </div>}
+      {cfg.type && cfg.type !== 'dataloader' && <button onClick={() => onUpdate(node.id,{source:{type:'dataloader',loader:'source',source_config:cfg,n:0,read_batch_size:100,...(schema?.sequence?.group ? {group_by:schema.sequence.group,...(schema.sequence.order ? {order_by:schema.sequence.order} : {})} : {})}})}>Use DataLoader preprocessing</button>}
+      {!schemas && <p className="muted small">Loading source schema…</p>}
+      {schemas && cfg.type && !schema && !['user_dataset','dataloader'].includes(cfg.type) && <p className="muted small">Unknown input type “{cfg.type}”.</p>}
       {(['user_dataset','dataloader'].includes(cfg.type) ? [] : schema?.config || []).map((f) => (
         <div className="field" key={f.name}>
           <label htmlFor={`source-config-${f.name}`}>
@@ -102,23 +132,24 @@ function SourceInspector({ node, onUpdate, onRename, getGraph }) {
             {f.required ? ' *' : ''}
           </label>
           {f.type === 'select' ? (
-            <select id={`source-config-${f.name}`} value={cfg[f.name] ?? (f.name === 'step' && cfg.dataset && cfg.dataset !== 'contemporary' ? 'daily' : f.default) ?? ''} onChange={(e) => setCfg({ [f.name]: e.target.value, ...(f.name === 'dataset' ? { split: 'dev' } : {}) })}>
-              {(f.name === 'split' && cfg.dataset && cfg.dataset !== 'contemporary' ? ['', 'dev', 'test'] : f.options || []).map((o) => (
-                <option key={o} value={o}>
-                  {o === '' ? '(all)' : o}
-                </option>
-              ))}
+            <select id={`source-config-${f.name}`} value={cfg[f.name] ?? f.default ?? ''} onChange={(e) => setCfg({ [f.name]: e.target.value })}>
+              {(f.options || []).map((o) => {
+                const value = typeof o === 'object' && o ? o.value : o;
+                const label = typeof o === 'object' && o ? o.label ?? o.value : o;
+                return <option key={value} value={value}>{label === '' ? '(all)' : label}</option>;
+              })}
             </select>
           ) : f.type === 'number' ? (
-            <NumberInput type="number" value={cfg[f.name] ?? f.default ?? 0} onChange={(e) => setCfg({ [f.name]: Number(e.target.value) })} />
+            <NumberInput id={`source-config-${f.name}`} type="number" value={cfg[f.name] ?? f.default ?? 0} onChange={(e) => setCfg({ [f.name]: Number(e.target.value) })} />
           ) : f.type === 'textarea' ? (
-            <textarea rows={3} value={cfg[f.name] ?? f.default ?? ''} onChange={(e) => setCfg({ [f.name]: e.target.value })} />
+            <textarea id={`source-config-${f.name}`} rows={3} value={cfg[f.name] ?? f.default ?? ''} onChange={(e) => setCfg({ [f.name]: e.target.value })} />
           ) : (
-            <input value={cfg[f.name] ?? f.default ?? ''} onChange={(e) => setCfg({ [f.name]: e.target.value })} />
+            <input id={`source-config-${f.name}`} value={cfg[f.name] ?? f.default ?? ''} onChange={(e) => setCfg({ [f.name]: e.target.value })} />
           )}
         </div>
       ))}
-      {cfg.type === 'credit_risk' && cfg.dataset && cfg.dataset !== 'contemporary' && <p className="muted small">Samples selects trajectories. Walk each window chooses daily, weekly or monthly batches of new evidence; none runs the whole window once. Outcomes stay outside the inputs.</p>}
+      {schema?.sequence?.group && <p className="muted small" data-testid="source-sequence">Records sharing {schema.sequence.group} form one trajectory{schema.sequence.order ? `, run in ${schema.sequence.order} order` : ''}.</p>}
+      {info && <details className="input-disclosure"><summary>Input details</summary><JsonView value={info} startOpen={false} /></details>}
       <details className="input-disclosure" open={cfg.type !== 'user_dataset'}><summary>Scheduling & node settings</summary>
       <div className="field">
         <label>Schedule</label>

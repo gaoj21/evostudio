@@ -4,7 +4,6 @@ Keep records as dictionaries: torch's default collator would transpose fields,
 convert numbers to tensors, and reject optional (None) values.
 """
 import contextlib
-import io
 import json
 import inspect
 from itertools import islice
@@ -35,14 +34,30 @@ def batches(dataset, batch_size):
                       drop_last=False, num_workers=0, collate_fn=collate_records)
 
 
+FILENAME = '<dataloader.py>'
+
+
 def execute_python(payload, emit=None):
-    """Called in a killable worker, never exec user code in the API process."""
+    """Called in a killable worker, never exec user code in the API process.
+
+    Anything the Dataset code raises comes back as a UserCodeError naming
+    the line in the user's code and carrying what it printed before it."""
+    from backend.features.user_code import TailBuffer, UserCodeError, explain
+    output = TailBuffer()
+    try:
+        return _execute_python(payload, emit, output)
+    except Exception as exc:
+        raise UserCodeError(explain(exc, payload['code'], output.getvalue(), FILENAME, 'Dataset code')) from exc
+
+
+def _execute_python(payload, emit, output):
     from backend.features.data.dataset_interface import arguments
     values = arguments(payload['code'], payload.get('config') or {})
     namespace = {'__name__': 'studio_dataset'}
-    # Prints from a dataset should not corrupt the worker result protocol.
-    with contextlib.redirect_stdout(io.StringIO()):
-        exec(compile(payload['code'], '<dataloader.py>', 'exec'), namespace)
+    # Prints from a dataset should not corrupt the worker result protocol;
+    # they are kept to explain a failure.
+    with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+        exec(compile(payload['code'], FILENAME, 'exec'), namespace)
         factory = namespace.get('build_dataset')
         if not callable(factory):
             raise ValueError('Define build_dataset(resource, config) returning a PyTorch Dataset.')

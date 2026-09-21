@@ -401,8 +401,11 @@ def test_all_builtin_records_use_isolated_pytorch_dataloader(client, monkeypatch
     config={'resource_id':resource['id'],'read_batch_size':2}
     assert len(dataloaders.prepare(config)[0]) == 3
     assert not calls  # Preview must not initialize a second native runtime.
+    # Consecutive batches, final partial batch kept; cut in-process now, so
+    # no subprocess receives a full copy of the records just to slice them.
     assert [len(c) for c in dataloaders.iter_batches(config)] == [2,1]
-    assert calls == [('dataset_batches', 2)]
+    assert [r['a'] for c in dataloaders.iter_batches(config) for r in c] == [1, 2, 3]
+    assert calls == []
 
 
 def test_uploaded_dataset_is_visible_in_workspace_before_graph_save(client):

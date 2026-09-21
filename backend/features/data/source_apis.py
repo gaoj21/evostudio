@@ -1,11 +1,10 @@
 """API-backed canvas source nodes for EvoAgentX Studio.
 
-Three source types beyond the local credit_risk feed:
+API-backed Input types:
 
 - gdelt_news: GDELT doc API (artlist), free, no key. Throttling / 429 backoff
-  adapted from projects/credit_risk/dataset/builders/build_r02_fetch_news.py (fair-use PAUSE).
-- sec_edgar_8k: EDGAR submissions API + SGML full-text parse, adapted from
-  projects/credit_risk/dataset/builders/build_r03_fetch_8k.py and build_02b_verify_events.py
+  (fair-use PAUSE between requests).
+- sec_edgar_8k: EDGAR submissions API + SGML full-text parse
   (User-Agent header is mandatory or EDGAR returns 403).
 - http_api: generic JSON API with {placeholder} URL templating, optional
   params/headers/body (header values of the form "$ENV_VAR" are resolved from
@@ -87,9 +86,15 @@ def http_request(url: str, method: str = "GET", params: dict | None = None,
             if e.code == 429 or 500 <= e.code < 600:
                 continue
             raise SourceError(f"HTTP {e.code} for {url}: {e.read()[:200]!r}")
-        except Exception as e:
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+            # Network trouble is worth retrying; a malformed URL or a bad
+            # argument is not, and says so at once.
+            if isinstance(e, urllib.error.URLError) and not isinstance(getattr(e, "reason", None), (OSError, TimeoutError)):
+                raise SourceError(f"Request to {url} failed: {e}") from None
             last_error = e
             continue
+        except ValueError as e:
+            raise SourceError(f"Request to {url} failed: {e}") from None
     if isinstance(last_error, urllib.error.HTTPError) and last_error.code == 429:
         raise SourceError(
             f"Rate limited (HTTP 429) by {urllib.parse.urlparse(url).netloc} "
@@ -158,6 +163,9 @@ def fetch_gdelt_news(config: dict, start: date | None = None, end: date | None =
         "news_batch": "\n".join(lines) or "(no news found)",
         "window_start": start.isoformat(),
         "window_end": end.isoformat(),
+        # The date the evidence runs up to — what downstream nodes and memory
+        # are dated by. The window fields stay as extra outputs.
+        "as_of": end.isoformat(),
         "n_articles": len(articles),
     }
 
@@ -202,7 +210,7 @@ def collect_gdelt_records(config, progress=lambda done, total: None, on_record=l
         if lines:
             records.append({'company': config['query'].strip(), 'news_batch': '\n'.join(lines),
                             'window_start': first.isoformat(), 'window_end': last.isoformat(),
-                            'as_of': last.isoformat(), 'sample_id': config['query'].strip(),
+                            'as_of': last.isoformat(),
                             'n_articles': len(lines)})
             on_record(records[-1])
         progress(index + 1, len(windows))
@@ -266,6 +274,7 @@ def fetch_edgar_8k(config: dict) -> dict:
         "company": (data or {}).get("name", ""),
         "filing_batch": "\n\n".join(blocks) or "(no recent 8-K filings)",
         "window_end": filings[0]["filing_date"] if filings else date.today().isoformat(),
+        "as_of": filings[0]["filing_date"] if filings else date.today().isoformat(),
     }
 
 
@@ -312,16 +321,29 @@ def fetch_http_api(config: dict, *, split_records=False):
     headers = parse_json_field("headers")
     body = parse_json_field("body") if (config.get("method") or "GET").upper() == "POST" else None
 
-    def fill(text):
+    def fill(text, quote=False):
         for key, value in vars_.items():
-            text = text.replace("{" + str(key) + "}", urllib.parse.quote(str(value)))
+            text = text.replace("{" + str(key) + "}", urllib.parse.quote(str(value)) if quote else str(value))
         return text
 
-    url = fill(url)
+    def fill_json(value):
+        # Placeholders inside a JSON body are filled in its string values,
+        # unquoted: the body is JSON, not part of a URL.
+        if isinstance(value, str):
+            return fill(value)
+        if isinstance(value, list):
+            return [fill_json(v) for v in value]
+        if isinstance(value, dict):
+            return {fill(str(k)): fill_json(v) for k, v in value.items()}
+        return value
+
+    # Only the URL itself is quoted here; query params are encoded once, by
+    # urlencode in http_request.
+    url = fill(url, quote=True)
     if params:
         params = {k: fill(str(v)) for k, v in params.items()}
     if body is not None:
-        body = json.dumps(body) if not isinstance(body, str) else fill(body)
+        body = json.dumps(fill_json(body))
     if headers:
         headers = {k: _resolve_env(v) for k, v in headers.items()}
 
@@ -353,6 +375,40 @@ def fetch_http_api(config: dict, *, split_records=False):
 
 
 # ---------------------------------------------------------------------------
+# Collecting a whole dataset from an API source
+# ---------------------------------------------------------------------------
+
+def collect_records(config: dict, progress=None, on_record=None) -> list[dict]:
+    """Every record an API source yields over its configured range.
+
+    Not the same as one execution of the node. A single run fetches once
+    (fetch_source_record); collecting walks the range — GDELT window by
+    window, an HTTP API item by item — so a year of daily news is a year of
+    records, not ten articles. Used by source collection and by a DataLoader
+    that wraps an API source; both run it outside the HTTP request.
+    """
+    from .sources import records_from_source_node
+    progress = progress or (lambda done, total: None)
+    kind = config.get("type")
+    if kind == "gdelt_news":
+        return collect_gdelt_records(config, progress, on_record=on_record or (lambda record: None))
+    if kind == "http_api" and config.get("batch_items") == "items":
+        records = fetch_http_api(config, split_records=True)
+    else:
+        records = records_from_source_node({"source": config})
+    if on_record:
+        for record in records:
+            on_record(record)
+    return records
+
+
+def is_api_source(config: dict) -> bool:
+    """Fetched from a remote service rather than read from local data."""
+    kind = (config or {}).get("type")
+    return kind in FETCHERS or is_custom_source(kind or "")
+
+
+# ---------------------------------------------------------------------------
 # Dispatch + config schema (drives the frontend Inspector form)
 # ---------------------------------------------------------------------------
 
@@ -361,6 +417,9 @@ FETCHERS = {
     "sec_edgar_8k": fetch_edgar_8k,
     "http_api": fetch_http_api,
 }
+
+# Inputs that read local data rather than a remote API.
+LOCAL_TYPES = frozenset({"dataloader", "user_dataset"})
 
 SOURCE_TYPE_SCHEMAS = {
     "dataloader": {"label": "DataLoader", "description": "Read files or folders, preprocess and emit workflow records.",
@@ -374,21 +433,6 @@ SOURCE_TYPE_SCHEMAS = {
         ],
         "outputs": [],
     },
-    "credit_risk": {
-        "label": "Credit Risk Feed",
-        "description": "Sample news + 8-K filings from projects/credit_risk/dataset/contemporary.",
-        "config": [
-            {"name": "split", "label": "Split", "type": "select",
-             "options": ["", "train", "dev", "test"], "default": ""},
-            {"name": "n", "label": "Samples per batch (0 = entire split)", "type": "number", "default": 1},
-            {"name": "seed", "label": "Seed", "type": "number", "default": 42},
-            {"name": "step", "label": "Walk each window", "type": "select",
-             "options": ["none", "monthly", "weekly", "daily"], "default": "none"},
-        ],
-        "outputs": ["sample_id", "company", "symbol", "cik", "window_start",
-                    "window_end", "as_of", "news_batch", "filing_batch",
-                    "sample_json"],
-    },
     "gdelt_news": {
         "label": "GDELT News",
         "description": "Recent English news about a query from the GDELT doc API (free, no key).",
@@ -400,7 +444,7 @@ SOURCE_TYPE_SCHEMAS = {
             {"name": "batch_step", "label": "Batch window", "type": "select", "options": ["daily", "weekly", "monthly"], "default": "daily"},
             {"name": "max_records", "label": "Max articles (single run only)", "type": "number", "default": 10},
         ],
-        "outputs": ["company", "news_batch", "window_start", "window_end", "n_articles"],
+        "outputs": ["company", "news_batch", "as_of", "window_start", "window_end", "n_articles"],
     },
     "sec_edgar_8k": {
         "label": "SEC EDGAR 8-K",
@@ -409,7 +453,7 @@ SOURCE_TYPE_SCHEMAS = {
             {"name": "cik", "label": "CIK", "type": "text", "default": "", "required": True},
             {"name": "count", "label": "Filings to fetch", "type": "number", "default": 2},
         ],
-        "outputs": ["cik", "company", "filing_batch", "window_end"],
+        "outputs": ["cik", "company", "filing_batch", "as_of", "window_end"],
     },
     "http_api": {
         "label": "HTTP API",
@@ -444,15 +488,18 @@ def all_source_types() -> dict:
     plus whatever custom toolkits have offered as input sources."""
     from backend.api import custom_tools
 
-    import copy
-    from backend.api.datasets import catalog
-    schemas = copy.deepcopy(SOURCE_TYPE_SCHEMAS)
-    from backend.api.sources import CREDIT_RISK_SAMPLES
-    available = (['contemporary'] if CREDIT_RISK_SAMPLES.is_file() else []) + [item['id'] for item in catalog()]
-    schemas['credit_risk']['config'].insert(0, {'name': 'dataset', 'label': 'Dataset version', 'type': 'select',
-        'default': available[0] if available else '', 'options': available})
-    schemas['credit_risk']['description'] = 'Choose a dataset version and split. Releases emit dated observations in trajectory order.'
+    from backend.features import plugins
+
+    schemas = {type_: {**schema, **({"local": True} if type_ in LOCAL_TYPES else {})}
+               for type_, schema in SOURCE_TYPE_SCHEMAS.items()}
+    schemas.update(plugins.source_schemas())
     return {**schemas, **custom_tools.custom_source_types()}
+
+
+def is_local(type_) -> bool:
+    """Local Inputs read files or project data and can run inline; the rest
+    call remote APIs and must be collected first."""
+    return bool((all_source_types().get(type_) or {}).get("local"))
 
 
 def is_custom_source(type_) -> bool:

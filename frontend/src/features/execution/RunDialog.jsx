@@ -427,14 +427,17 @@ function SingleRunForm({ graphId, onCancel, onSubmit, submitting, beforeRun, onS
 export function previewSummary(p) {
   if (!p) return null;
   const runs = `${p.total} run${p.total === 1 ? '' : 's'}`;
-  if (!p.steps || p.steps <= 1 || !p.samples || p.samples >= p.total) return runs;
-  const span = p.dates && p.dates[0] !== p.dates[1]
-    ? ` covering ${p.dates[0]} to ${p.dates[1]}` : '';
-  // Windows differ per sample, so the number of dates can too.
+  // Only an Input that declares trajectories (a group and an order field)
+  // turns several records into one subject; otherwise a record is a run.
+  const group = p.sequence?.group;
+  if (!group || !p.samples || p.samples >= p.total) return runs;
+  const order = p.sequence.order;
+  const span = order && p.dates?.[0]
+    ? (p.dates[0] !== p.dates[1] ? `, ${order} from ${p.dates[0]} to ${p.dates[1]}` : `, ${order} ${p.dates[0]}`) : '';
+  // Trajectories differ in length, so the number of steps can too.
   const each = p.steps_min && p.steps_min !== p.steps
-    ? `${p.steps_min}–${p.steps} dates each` : `${p.steps} dates each`;
-  return `${runs} — ${p.samples} sample${p.samples === 1 ? '' : 's'} `
-    + `stepped over ${each}${span}`;
+    ? `${p.steps_min}–${p.steps} steps each` : `${p.steps} step${p.steps === 1 ? '' : 's'} each`;
+  return `${runs} — ${p.samples} trajector${p.samples === 1 ? 'y' : 'ies'} by ${group} (${each})${span}`;
 }
 
 // The count, above the Run button. A batch is the expensive thing in this app:
@@ -451,6 +454,16 @@ function BatchPreview({ preview, loading, error, idle }) {
   return (
     <div className={`batch-preview${preview.total >= BIG_BATCH ? ' batch-preview-big' : ''}`}>
       <strong>{previewSummary(preview)}</strong>
+      {preview.memory_order?.mode === 'entity' && (
+        <div className="muted small" data-testid="memory-order">
+          {`Memory: records with the same ${preview.memory_order.field} run in order (${preview.memory_order.sequences} sequence${preview.memory_order.sequences === 1 ? '' : 's'}); different ones run in parallel.`}
+        </div>
+      )}
+      {preview.memory_order?.mode === 'all' && (
+        <div className="muted small" data-testid="memory-order">
+          {`Memory: records run one at a time, because ${preview.memory_order.reason}. Match memory on a field to run independent records in parallel.`}
+        </div>
+      )}
       {loading && <div role="status">Updating preview… Wait for the latest count before running.</div>}
       <details className="input-disclosure"><summary>Run details</summary>
       {preview.nodes?.length > 0 && <div>Participating nodes: {preview.nodes.map((node) => node.name).join(', ')}</div>}
@@ -477,42 +490,40 @@ function BatchPreview({ preview, loading, error, idle }) {
   );
 }
 
+// The id of a collection still running is kept so reopening the dialog finds
+// it; once it settles (or is gone) there is nothing to come back to.
+function forgetCollection(graphId, collectionId) {
+  try { if (localStorage.getItem(`source-collection:${graphId}`) === collectionId) localStorage.removeItem(`source-collection:${graphId}`); } catch { /* Storage can be unavailable. */ }
+}
+
 function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchStart }) {
   // A graph with a source node on it has already said where its data comes
   // from; making you pick a file again is the wrong default.
   const [source, setSource] = useState(hasCanvasSource ? 'canvas' : 'upload');
-  const [dataset, setDataset] = useState('contemporary');
   const [file, setFile] = useState(null);
-  const [sourceInfo, setSourceInfo] = useState(null);
-  const [split, setSplit] = useState('');
-  const [n, setN] = useState(3);
-  const [fullSplit, setFullSplit] = useState(false);
-  const [seed, setSeed] = useState(42);
-  // Walking the window instead of handing it over whole. It multiplies the
-  // batch, which is why the count above the button matters.
-  const [step, setStep] = useState('none');
   const [error, setError] = useState(null);
   const [starting, setStarting] = useState(false);
   const [workers, setWorkers] = useState(2);
   const [apiBatch, setApiBatch] = useState(false);
   const [apiBatchSize, setApiBatchSize] = useState(32);
-  // An evaluation is this same batch with a metric attached; leaving the metric
+  // Scoring is done by canvas Evaluator nodes; the batch-start metric is gone.
   // empty runs it as an ordinary batch.
-  const [metric, setMetric] = useState('');
-  const [labelKey, setLabelKey] = useState('');
-  const [metrics, setMetrics] = useState([]);
+  const metric = '';
+  const labelKey = '';
   const [preview, setPreview] = useState(null);
   const loaderSize = source === 'canvas' && preview?.source?.config?.type === 'dataloader'
     ? (preview.source.config.read_batch_size ?? 100) : null;
   const effectiveBatchSize = loaderSize ?? Number(apiBatchSize);
   const [loaderPeriod,setLoaderPeriod]=useState('none');
-  const [dateField,setDateField]=useState('as_of');
+  const [dateField,setDateField]=useState('');
   const executionParams = {...(apiBatch ? {llm_batch_size: effectiveBatchSize} : {workers}), ...(loaderSize != null && loaderPeriod !== 'none' ? {period:loaderPeriod,date_field:dateField} : {})};
   const invalidApiBatch = apiBatch && (!Number.isInteger(effectiveBatchSize) || effectiveBatchSize < 1 || effectiveBatchSize > 1024);
   const [previewing, setPreviewing] = useState(false);
   const [previewError, setPreviewError] = useState(null);
+  // A collection started earlier (the dialog was closed while it ran) is
+  // picked up again, and says so; the stored id goes once it has settled.
   const [collection, setCollection] = useState(() => {
-    try { const id = localStorage.getItem(`source-collection:${graphId}`); return id ? { id, status: 'collecting' } : null; } catch { return null; }
+    try { const id = localStorage.getItem(`source-collection:${graphId}`); return id ? { id, status: 'collecting', restored: true } : null; } catch { return null; }
   });
   const [collectionSource, setCollectionSource] = useState(null);
   const [stoppingCollection, setStoppingCollection] = useState(false);
@@ -536,15 +547,24 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
       try {
         const value = await api.sourceCollection(collectionGraph, collection.id);
         if (!active) return;
-        setCollection(value);
+        setCollection(current => ({ ...value, ...(current?.restored ? { restored: true } : {}) }));
         if (value.source) setCollectionSource(value.source);
         if (value.mode) setCollectionMode(value.mode);
         if (value.batch_size) setChunkSize(value.batch_size);
         if (value.status !== 'collecting') {
           setCollecting(false); setStoppingCollection(false);
+          forgetCollection(collectionGraph, collection.id);
           if (['failed', 'cancelled'].includes(value.status)) setError(value.error);
         }
-      } catch (err) { if (active) { setError(err.body?.detail || err.message); setCollecting(false); } }
+      } catch (err) {
+        if (!active) return;
+        // Stop asking: a gone collection (404) is forgotten, any other error
+        // ends this poll rather than repeating every second.
+        forgetCollection(collectionGraph, collection.id);
+        if (err.status === 404) { setCollection(null); setCollectionSource(null); }
+        else { setCollection(current => current && { ...current, status: 'error' }); setError(err.body?.detail || err.message); }
+        setCollecting(false); setStoppingCollection(false);
+      }
       finally { polling = false; }
     }, 1000);
     return () => { active = false; clearInterval(timer); };
@@ -562,7 +582,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
       setCollectionGraph(id);
       const value = await api.collectSource(id, { ...collectionOptions, mode: collectionMode, batch_size: Number(chunkSize), ...executionParams, ...(metric ? { metric, label_key: labelKey } : {}) });
       setCollection(value);
-      try { localStorage.setItem(`source-collection:${id}`, value.id); } catch { /* Storage can be unavailable. */ }
+      try { if (value.status === 'collecting') localStorage.setItem(`source-collection:${id}`, value.id); } catch { /* Storage can be unavailable. */ }
       if (value.status !== 'collecting') {
         setCollecting(false);
         if (value.status === 'failed') setError(value.error);
@@ -570,14 +590,6 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
     } catch (err) { setError(err.body?.detail || err.message); setCollecting(false); }
   }
   const collectionId = collection?.status === 'ready' ? collection.id : undefined;
-
-
-  useEffect(() => {
-    let active = true;
-    api.creditRiskSource(dataset).then(info => { if (active) { setSourceInfo(info); if (info.dataset && info.dataset !== dataset) setDataset(info.dataset); } }).catch(() => { if (active) setSourceInfo(null); });
-    api.listMetrics().then((r) => setMetrics(r.metrics || [])).catch(() => setMetrics([]));
-    return () => { active = false; };
-  }, [dataset]);
 
   // Held in a ref so re-rendering the parent does not re-run the preview.
   const beforeRunRef = useRef(beforeRun);
@@ -605,17 +617,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
         const scoring = metric ? { metric, label_key: labelKey } : {};
         const res = source === 'upload'
           ? await api.previewBatchUpload(activeGraphId, file, { ...executionParams, ...scoring })
-          : source === 'canvas'
-            ? await api.previewBatchCanvas(activeGraphId, { ...executionParams, ...scoring, ...(collectionId ? { collection_id: collectionId } : {}) })
-            : await api.previewBatchSource(activeGraphId, {
-              ...(dataset !== 'contemporary' ? { dataset } : {}),
-              split: split || undefined,
-              n: fullSplit ? 0 : (Number(n) || 5),
-              seed: Number(seed) || 42,
-              step,
-              ...executionParams,
-              ...scoring,
-            });
+          : await api.previewBatchCanvas(activeGraphId, { ...executionParams, ...scoring, ...(collectionId ? { collection_id: collectionId } : {}) });
         if (cancelled) return;
         setPreview(res);
         if (res.requires_collection) setCollectionSource(res.source);
@@ -629,7 +631,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
       }
     }, 350);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [graphId, source, file, split, n, fullSplit, seed, step, metric, labelKey, workers, collectionId, dataset, collectionMode, apiBatch, apiBatchSize, loaderPeriod, dateField]);
+  }, [graphId, source, file, metric, labelKey, workers, collectionId, collectionMode, apiBatch, apiBatchSize, loaderPeriod, dateField]);
 
   const start = async (e) => {
     e.preventDefault();
@@ -644,9 +646,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
       const res =
         source === 'upload'
           ? await api.runBatchUpload(activeGraphId, file, { ...executionParams, ...scoring })
-          : source === 'canvas'
-            ? await api.runBatchCanvas(activeGraphId, { ...executionParams, ...scoring, ...(collectionId ? { collection_id: collectionId } : {}) })
-            : await api.runBatchSource(activeGraphId, { ...(dataset !== 'contemporary' ? { dataset } : {}), split: split || undefined, n: fullSplit ? 0 : (Number(n) || 5), seed: Number(seed) || 42, step, ...executionParams, ...scoring });
+          : await api.runBatchCanvas(activeGraphId, { ...executionParams, ...scoring, ...(collectionId ? { collection_id: collectionId } : {}) });
       // Hand the batch to the canvas and close: progress belongs on the graph,
       // not in a window covering it.
       onBatchStart?.(res.batch_id);
@@ -657,13 +657,9 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
     }
   };
 
-  const splits = Object.keys(sourceInfo?.splits || {});
-  // Records from the credit-risk feed carry the sample they came from, and
-  // with it the truth; the preview says so through the fields it lists.
-  const selfLabelled = (preview?.fields || []).includes('sample_json');
   const runLabel = preview?.total ? `Run batch (${preview.total})` : 'Run batch';
   // Nothing starts on a count that has not arrived, failed, or is zero.
-  const canStart = !invalidApiBatch && !(source === 'canvas' && collectionMode !== 'all') && (!!preview?.total || preview?.deferred) && !previewing && !previewError && !starting && !collecting && !(source === 'canvas' && collectionSource && !collectionId);
+  const canStart = !(loaderSize != null && loaderPeriod !== 'none' && !dateField.trim()) && !invalidApiBatch && !(source === 'canvas' && collectionMode !== 'all') && (!!preview?.total || preview?.deferred) && !previewing && !previewError && !starting && !collecting && !(source === 'canvas' && collectionSource && !collectionId);
   const needsCollection = source === 'canvas' && (collectionMode !== 'all' || (!!preview?.requires_collection && !collectionId));
   const collectionInvalid = invalidApiBatch || collecting || starting || (collectionMode === 'prepare' && !collectionOptions.preprocess_tool)
     || (collectionMode !== 'all' && (!Number.isInteger(Number(chunkSize)) || Number(chunkSize) < 1 || Number(chunkSize) > 1000));
@@ -678,7 +674,6 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
         <select id="data-source" value={source} onChange={(e) => setSource(e.target.value)}>
           {hasCanvasSource && <option value="canvas">Canvas source node config</option>}
           <option value="upload">Upload JSON / JSONL / CSV file</option>
-          <option value="credit_risk">credit_risk feed (samples.jsonl)</option>
         </select>
       </div>
       </details>
@@ -712,12 +707,15 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
                 <option value="daily">Day</option><option value="weekly">Week</option><option value="monthly">Month</option>
               </select></label>
             </details>}
+            {collection?.restored && <p className="muted small" data-testid="collection-restored">Using collection {collection.id}, started earlier for this workflow. <button type="button" className="link small" disabled={collecting} onClick={() => { forgetCollection(collectionGraph, collection.id); setCollection(null); setCollectionSource(null); setCollecting(false); }}>Discard</button></p>}
             {collecting && <p role="status">{collection?.phase === 'preprocessing' ? 'Preprocessing the entire dataset; workflow has not started' : collection?.collection_complete ? 'Collection complete; finishing batches' : 'Collecting input data'}{collection?.total ? `: ${collection.completed} / ${collection.total} windows` : '…'} · {['stream', 'prepare'].includes(collection?.mode) ? `${collection.record_count || 0} records collected, ${collection.submitted_records || 0} submitted to batches` : 'Workflow has not started.'}</p>}
             <EvaluatorReports reports={collection?.evaluations} />
             {['stream', 'prepare'].includes(collection?.mode) && <>
               {collection.status === 'completed' && <p role="status">Collection and all batches completed · {collection.record_count} input records{collection.processed_count != null ? ` → ${collection.processed_count} processed records` : ''}.</p>}
               {(collection.batches || []).map((item, index) => <div key={item.id}>Batch {index + 1} · {item.total} records · {item.status || 'running'} <button type="button" onClick={() => onBatchStart?.(item.id)}>View batch {index + 1}</button></div>)}
             </>}
+            {collection?.resource_name && <p className="muted small" data-testid="collection-resource">Saved as data resource “{collection.resource_name}”. To preprocess it in code, choose it as the data resource of a PyTorch Dataset Input; later runs reuse it without fetching again.</p>}
+            {collection?.resource_error && <p className="muted small batch-error">{collection.resource_error}</p>}
             {collectionId && <>
               <p role="status">Collection complete · {collection.record_count} saved records. Ready for batch run.</p>
               <details><summary>Preview collected inputs</summary><pre style={{ maxHeight: 240, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{JSON.stringify(collection.sample, null, 2)}</pre></details>
@@ -725,61 +723,11 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
             </>}
           </div>}
         </div>
-      ) : source === 'upload' ? (
+      ) : (
         <div className="field">
           <label htmlFor="batch-file">File (.jsonl or .csv; record keys map to input names)</label>
           <input id="batch-file" type="file" accept=".json,.jsonl,.csv" required onChange={(e) => setFile(e.target.files?.[0] || null)} />
         </div>
-      ) : (
-        <>
-          <div className="field"><label htmlFor="batch-dataset">Dataset version</label>
-            <select id="batch-dataset" value={dataset} onChange={e => { setDataset(e.target.value); setSplit('dev'); }}>
-              {(sourceInfo?.datasets || [{id:'contemporary',label:'Contemporary (legacy)'}]).map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
-            </select>
-            {dataset !== 'contemporary' && <p>Counts select trajectories. Walk the window controls how its observations are grouped.</p>}
-          </div>
-          <div className="field">
-            <label htmlFor="batch-split">Split</label>
-            <select id="batch-split" value={split} onChange={(e) => setSplit(e.target.value)}>
-              <option value="">(all)</option>
-              {splits.map((s) => (
-                <option key={s} value={s}>
-                  {s} ({sourceInfo.splits[s]} {dataset === 'contemporary' ? 'samples' : 'trajectories'})
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="field">
-            <label>Records (n)</label>
-            <NumberInput type="number" min="1" value={n} disabled={fullSplit} onChange={(e) => setN(e.target.value)} />
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, fontWeight: 'normal' }}>
-              <input type="checkbox" checked={fullSplit} onChange={(e) => setFullSplit(e.target.checked)} />
-              Entire split ({split ? (sourceInfo?.splits?.[split] ?? '?') : Object.values(sourceInfo?.splits || {}).reduce((a, b) => a + b, 0)} records)
-            </label>
-          </div>
-          <div className="field">
-            <label htmlFor="batch-step">Walk the window</label>
-            <select id="batch-step" value={step} onChange={(e) => setStep(e.target.value)}>
-              <option value="none">No — one run per sample, whole window at once</option>
-              <option value="monthly">Monthly — one run per month of the window</option>
-              <option value="weekly">Weekly — one run per week of the window</option>
-              <option value="daily">Daily — one run per day of the window</option>
-            </select>
-            <div className="muted small">
-              {dataset === 'contemporary'
-                ? 'Each step sees the evidence available up to its date.'
-                : 'Each step contains new evidence within that period. Weekly periods start at the window start; monthly periods end at the calendar month end. Empty periods are skipped.'}
-              {' '}The preview shows the resulting number of runs.
-            </div>
-          </div>
-          <div className="field">
-            <label htmlFor="batch-seed">Seed</label>
-            <NumberInput id="batch-seed" type="number" value={seed} onChange={(e) => setSeed(e.target.value)} />
-          </div>
-          {sourceInfo && (
-            <div className="muted small">Sample fields: {sourceInfo.fields.join(', ')}</div>
-          )}
-        </>
       )}
       <BatchPreview
         preview={preview}
@@ -788,45 +736,10 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
         idle={source === 'upload' && !file}
       />
       {error && <div className="muted small batch-error">{String(error)}</div>}
-      <details className="input-disclosure"><summary>Evaluation · {metric || 'off'}</summary>
-      <div className="field">
-        <label htmlFor="batch-metric">Score the results (evaluation)</label>
-        <select id="batch-metric" disabled={collecting} value={metric} onChange={(e) => setMetric(e.target.value)}>
-          <option value="">Don&apos;t score — just run the batch</option>
-          {metrics.map((m) => (
-            <option key={m.name} value={m.name}>
-              {m.name}{m.custom ? ' (custom)' : ''}
-            </option>
-          ))}
-        </select>
-        <div className="muted small">
-          {metric
-            ? (metrics.find((m) => m.name === metric)?.description || '')
-            : 'Optional: any finished batch can be evaluated afterwards from its Evaluation tab.'}
-        </div>
-      </div>
-      {metric && selfLabelled && (
-        <div className="muted small">
-          The credit-risk feed carries its own truth; nothing to name. You can
-          also skip this and press Evaluate on the finished batch.
-        </div>
-      )}
-      {metric && !selfLabelled && (
-        <div className="field">
-          <label htmlFor="batch-label-key">Field holding the expected answer</label>
-          <input
-            id="batch-label-key"
-            value={labelKey}
-            placeholder="e.g. answer, label, expected"
-            required
-            onChange={(e) => setLabelKey(e.target.value)}
-          />
-          <div className="muted small">
-            Removed from each record before the run, so the workflow never sees it.
-          </div>
-        </div>
-      )}
-      </details>
+      <p className="muted small" data-testid="evaluation-note">
+        Evaluation runs the Evaluator nodes on the canvas (your own code), at the timing each one sets.
+        A finished batch can also be evaluated later from its Evaluation tab, without rerunning the workflow.
+      </p>
       <div className="field">
         <label htmlFor="model-execution">Model execution</label>
         <select id="model-execution" disabled={collecting || starting} value={apiBatch ? 'native' : 'standard'} onChange={e => setApiBatch(e.target.value === 'native')}>
@@ -835,7 +748,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
         </select>
       </div>
       {loaderSize != null && <div className="field"><label htmlFor="loader-period">Execution grouping</label><select id="loader-period" value={loaderPeriod} onChange={e=>setLoaderPeriod(e.target.value)}><option value="none">In dataset order</option><option value="daily">By day</option><option value="weekly">By week</option><option value="monthly">By month</option></select>
-      {loaderPeriod!=='none' && <><label htmlFor="loader-date-field">Date field</label><input id="loader-date-field" value={dateField} onChange={e=>setDateField(e.target.value)}/><p className="muted small">DataLoader must yield chronologically ordered records with ISO dates. Execution batches stay within a period and respect the DataLoader batch size. Records are not aggregated.</p></>}</div>}
+      {loaderPeriod!=='none' && <><label htmlFor="loader-date-field">Date field</label><input id="loader-date-field" list="loader-date-fields" value={dateField} placeholder="Choose the field holding each record's date" onChange={e=>setDateField(e.target.value)}/><datalist id="loader-date-fields">{(preview?.fields || []).map(f => <option key={f} value={f} />)}</datalist><p className="muted small">DataLoader must yield chronologically ordered records with ISO dates in this field. Execution batches stay within a period and respect the DataLoader batch size. Records are not aggregated: to run once per entity per period, group them in your Dataset (see the aggregation example in the Dataset editor).</p></>}</div>}
       {apiBatch && loaderSize == null && <div className="field">
         <label htmlFor="api-batch-size">API batch size</label>
         <NumberInput id="api-batch-size" type="number" min="1" max="1024" disabled={collecting || starting} value={apiBatchSize} onChange={e => setApiBatchSize(e.target.value)} />
@@ -849,12 +762,12 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
           <NumberInput id="batch-workers" type="number" min="1" max="64" value={workers} onChange={(e) => setWorkers(Math.max(1, Math.min(64, Number(e.target.value) || 1)))} />
           {preview?.samples > 0 && preview.samples !== workers && (
             <button type="button" className="link small" onClick={() => setWorkers(Math.min(64, preview.samples))}>
-              one per sample ({preview.samples})
+              one per trajectory ({preview.samples})
             </button>
           )}
         </div>
         <div className="muted small">
-          A sample's steps run one after another, so more workers than samples does nothing.
+          A trajectory's steps run one after another, so more workers than trajectories does nothing.
         </div>
       </div>
       </details>}

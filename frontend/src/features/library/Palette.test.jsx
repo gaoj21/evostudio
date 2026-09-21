@@ -10,7 +10,9 @@ vi.mock('../../api.js', () => ({ api }));
 
 const templates = [
   { type: 'agent', label: 'LLM Task', description: 'General purpose task' },
-  { type: 'cr-detect', label: 'CR Detect', description: 'Credit risk detection' },
+  { type: 'triage', label: 'Ticket Triage', description: 'Sort tickets', group: 'Support desk' },
+  { type: 'reply', label: 'Draft Reply', description: 'Answer a ticket', group: 'Support desk' },
+  { type: 'label', label: 'Label Images', description: 'Tag an image', group: 'Vision lab' },
 ];
 const sources = [
   { type: 'gdelt', label: 'GDELT News', description: 'Recent news source' },
@@ -45,15 +47,24 @@ describe('node library hierarchy', () => {
     setup();
 
     expect(screen.getByText('LLM Task')).toBeInTheDocument();
-    expect(screen.queryByText('CR Detect')).not.toBeInTheDocument();
+    expect(screen.queryByText('Ticket Triage')).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: /Tools/ })).toBeInTheDocument());
     expect(screen.queryByText('⚙ save')).not.toBeInTheDocument();
   });
 
   it('opens a specialist group only when requested', async () => {
     const user = setup();
-    await user.click(screen.getByRole('button', { name: /Credit risk/ }));
-    expect(screen.getByText('CR Detect')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Support desk/ }));
+    expect(screen.getByText('Ticket Triage')).toBeInTheDocument();
+    expect(screen.getByText('Draft Reply')).toBeInTheDocument();
+    expect(screen.queryByText('Label Images')).not.toBeInTheDocument();
+  });
+
+  it('gives each preset group its own section, titled by its group, and no fixed domain section', () => {
+    setup();
+    expect(screen.getByRole('button', { name: /Support desk\s*2/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Vision lab\s*1/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Credit risk/ })).not.toBeInTheDocument();
   });
 
   it('searches across folded groups and exposes matching results', async () => {

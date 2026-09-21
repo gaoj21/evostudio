@@ -1,31 +1,13 @@
-"""Table memory: one row per subject per date.
-
-Modelled on Coze's 数据库 rather than its 知识库. A node that tracks a subject
-— an obligor, a ticker, a customer — is not doing fuzzy lookup. It is keeping
-a record, and a record wants a table: typed key, exact read, a row that is
-either there or it is not.
-
-That last property is the point. Memory built on a vector corpus fails
-silently: a store that never attached, never wrote, or matched nothing
-produces a workflow that still runs and still answers plausibly. A missing
-row, by contrast, is visible — you can count them.
-
-Bi-temporal, in the sense Zep's Graphiti uses the word. Every row carries two
-times and they are never interchangeable:
-
-    at           when the state was true in the world   (valid time)
-    recorded_at  when this system learned it            (transaction time)
-
-Only `at` may be compared against the date a run is processing. Comparing
-against `recorded_at` mixes two clocks, and a batch that writes its records
-out of order then reads its own future.
-"""
+"""Structured memory with independent record identity and optional business time."""
 
 import json
+import hashlib
+import uuid
 import sqlite3
 import time
 import threading
 from pathlib import Path
+from .identity import storage_name, display_names
 from backend.api.studio_config import data_path
 
 TABLES_DIR = data_path("tables")
@@ -48,7 +30,7 @@ _WRITE_ATTEMPTS = 5
 
 
 def path(graph_id: str, node: str) -> Path:
-    return TABLES_DIR / graph_id / f"{_safe(node)}.db"
+    return TABLES_DIR / graph_id / f"{_safe(storage_name(graph_id, node))}.db"
 
 
 def _safe(name: str) -> str:
@@ -70,6 +52,7 @@ def _connect(graph_id: str, node: str, create: bool):
         target.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(target, timeout=_BUSY_TIMEOUT_MS / 1000)
     conn.row_factory = sqlite3.Row
+    conn.create_function("eax_at", 1, _instant, deterministic=True)
     conn.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
     if not fresh:
         return conn
@@ -77,24 +60,56 @@ def _connect(graph_id: str, node: str, create: bool):
         # Readers do not block the writer, which is what a batch needs:
         # several records of the same node write while others read.
         conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS rows_ (
-                subject     TEXT NOT NULL,
-                at          TEXT NOT NULL,
-                recorded_at TEXT NOT NULL,
-                payload     TEXT NOT NULL,
-                PRIMARY KEY (subject, at)
-            )
-        """)
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS rows_subject_at ON rows_ (subject, at)")
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(rows_)")}
+        if columns and "record_id" not in columns:
+            conn.execute("BEGIN IMMEDIATE")
+            # Re-check under the SQLite lock in case another process migrated it.
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(rows_)")}
+            if "record_id" not in columns:
+                conn.execute("ALTER TABLE rows_ RENAME TO legacy_rows")
+                conn.execute("DROP INDEX IF EXISTS rows_subject_at")
+                _create_schema(conn)
+                for row in conn.execute("SELECT * FROM legacy_rows").fetchall():
+                    conn.execute("INSERT INTO rows_ VALUES (?, ?, ?, ?, ?)",
+                                 (_legacy_id(row['subject'], row['at']), row['subject'], row['at'], row['recorded_at'], row['payload']))
+                conn.execute("DROP TABLE legacy_rows")
+        _create_schema(conn)
         conn.commit()
         _ready.add(str(target))
     return conn
 
 
+def _instant(value):
+    """A stored time as comparable UTC text, to the microsecond.
+
+    SQLite's julianday() keeps milliseconds, so 23:59:59.999999 rounded into
+    the next day and a row from the last instant before a cutoff fell after
+    it. None (like julianday's NULL) for a value that is not a time.
+    """
+    from datetime import datetime, timezone
+
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat(timespec="microseconds")
+
+
+def _create_schema(conn):
+    conn.execute("CREATE TABLE IF NOT EXISTS rows_ (record_id TEXT PRIMARY KEY, subject TEXT NOT NULL, at TEXT NOT NULL, recorded_at TEXT NOT NULL, payload TEXT NOT NULL)")
+    conn.execute("CREATE INDEX IF NOT EXISTS rows_subject_at ON rows_ (subject, at)")
+
+
+def _legacy_id(subject, at):
+    return 'legacy:' + hashlib.sha256(json.dumps([str(subject), str(at or '')]).encode()).hexdigest()
+
+
 def upsert(graph_id: str, node: str, subject: str, at: str,
-           payload: dict, recorded_at: str) -> None:
+           payload: dict, recorded_at: str, *, record_id: str | None = None) -> None:
     """Write one dated state, replacing any row already held for that date.
 
     Re-running a date corrects it rather than stacking a second copy, which is
@@ -108,11 +123,11 @@ def upsert(graph_id: str, node: str, subject: str, at: str,
             # Inside the retry: opening is where a vanished folder fails.
             conn = _connect(graph_id, node, create=True)
             conn.execute(
-                "INSERT INTO rows_ (subject, at, recorded_at, payload) "
-                "VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(subject, at) DO UPDATE SET "
-                "recorded_at = excluded.recorded_at, payload = excluded.payload",
-                (str(subject), str(at or ""), str(recorded_at),
+                "INSERT INTO rows_ (record_id, subject, at, recorded_at, payload) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(record_id) DO UPDATE SET "
+                "subject = excluded.subject, at = excluded.at, recorded_at = excluded.recorded_at, payload = excluded.payload",
+                (record_id or _legacy_id(subject, at), str(subject), str(at or ""), str(recorded_at),
                  json.dumps(payload, ensure_ascii=False, default=str)),
             )
             conn.commit()
@@ -155,8 +170,8 @@ def before(graph_id: str, node: str, subject: str, cutoff: str,
         return recent(graph_id, node, subject, limit)
     return _select(
         graph_id, node,
-        "SELECT * FROM rows_ WHERE subject = ? AND at != '' AND at < ? "
-        "ORDER BY at DESC LIMIT ?",
+        "SELECT * FROM rows_ WHERE subject = ? AND at != '' AND eax_at(at) < eax_at(?) "
+        "ORDER BY eax_at(at) DESC, recorded_at DESC, record_id DESC LIMIT ?",
         (str(subject), str(cutoff), int(limit)),
     )
 
@@ -165,7 +180,7 @@ def recent(graph_id: str, node: str, subject: str, limit: int = 10) -> list[dict
     """This subject's most recent states, oldest first, with no cutoff."""
     return _select(
         graph_id, node,
-        "SELECT * FROM rows_ WHERE subject = ? ORDER BY at DESC LIMIT ?",
+        "SELECT * FROM rows_ WHERE subject = ? ORDER BY eax_at(at) DESC, recorded_at DESC, record_id DESC LIMIT ?",
         (str(subject), int(limit)),
     )
 
@@ -188,7 +203,7 @@ def _row(record) -> dict:
         payload = json.loads(record["payload"])
     except (TypeError, ValueError):
         payload = {}
-    return {"subject": record["subject"], "at": record["at"],
+    return {"record_id": record["record_id"], "subject": record["subject"], "at": record["at"],
             "recorded_at": record["recorded_at"], "payload": payload}
 
 
@@ -218,7 +233,7 @@ def nodes(graph_id: str) -> list[str]:
     base = TABLES_DIR / graph_id
     if not base.is_dir():
         return []
-    return sorted(p.stem for p in base.glob("*.db"))
+    return display_names(graph_id, [p.stem for p in base.glob("*.db")], _safe)
 
 
 def count(graph_id: str, node: str) -> int:
@@ -242,3 +257,22 @@ def clear(graph_id: str, node: str) -> int:
         return removed
     finally:
         conn.close()
+
+
+def latest(graph_id, node, limit=10, cutoff=''):
+    if cutoff:
+        return _select(graph_id, node,
+            "SELECT * FROM rows_ WHERE at != '' AND eax_at(at) < eax_at(?) ORDER BY eax_at(at) DESC, recorded_at DESC, record_id DESC LIMIT ?",
+            (cutoff, int(limit)))
+    return _select(graph_id, node,
+        "SELECT * FROM rows_ ORDER BY recorded_at DESC, record_id DESC LIMIT ?", (int(limit),))
+
+
+def write(graph_id, node, subject, at, payload, recorded_at, *, mode='append', execution_id=None, key=None):
+    if mode == 'append':
+        identity = 'event:' + (str(execution_id) if execution_id else uuid.uuid4().hex)
+    elif key is not None:
+        identity = 'key:' + hashlib.sha256(str(key).encode()).hexdigest()
+    else:
+        identity = _legacy_id(subject, at)
+    upsert(graph_id, node, subject, at, payload, recorded_at, record_id=identity)

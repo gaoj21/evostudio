@@ -24,7 +24,7 @@ export default function MemoryNode({ id, data, selected }) {
       </div>
       <div className="node-desc">
         {data.kind === 'table'
-          ? <>table per <b>{data.match}</b>{data.at ? <>, dated by <b>{data.at}</b></> : null}</>
+          ? <>records{data.match ? <> matching <b>{data.match}</b></> : null}{data.at ? <>, dated by <b>{data.at}</b></> : null}</>
           : data.kind === 'mem0' ? 'shared project space' : 'searchable corpus of past runs'}
       </div>
       <div className="node-desc">{data.readers?.length || 0} readers · {data.writers?.length || 0} writers</div>

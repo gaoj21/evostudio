@@ -34,3 +34,13 @@ it('keeps pasted edits in a draft and supports discarding them',async()=>{
  expect(onDirtyChange).toHaveBeenLastCalledWith(false);
  expect(onChange).not.toHaveBeenCalled();
 });
+it('offers a group-by-entity-and-period example with no preset field names',async()=>{
+  render(<PythonDatasetEditor code="" onChange={vi.fn()}/>);
+  await userEvent.selectOptions(screen.getByLabelText('Example'),'Group by entity and period');
+  await userEvent.click(screen.getByText('Load example'));
+  const code=screen.getByLabelText('Python Dataset code').value;
+  expect(code).toContain('def build_dataset(resource, date_field: str, entity_field: str = ""');
+  expect(code).toContain('OUTPUT_SCHEMA');
+  // A general template: it names no business fields of its own.
+  for (const risk of ['company','as_of','news_batch','window_start','window_end']) expect(code).not.toContain(risk);
+});

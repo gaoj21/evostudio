@@ -183,8 +183,13 @@ class TestTheRunEngine:
             FakeWorkflow({"verdict": "concern"}), state,
         )
 
+        # Still never falls through to a vector store. A missing entity is no
+        # longer an error: the run notes it, and this (legacy, update-by-
+        # entity-and-date) memory has nothing to update, so it stores nothing.
         assert opened == []
-        assert "no table-memory subject" in state["memory_notes"][0]
+        assert "memory_error" not in state
+        assert any("had no 'company'" in note and "nothing was stored" in note
+                   for note in state["memory_notes"])
 
     def test_it_stores_only_what_the_node_selected(self, saved):
         memory = saved(graph_doc(outputs=["verdict"], inputs=["company"]), DATA)
@@ -824,13 +829,12 @@ class TestTheRunnerHoldsRecallToTheRunsOwnDate:
         assert "SUPPRESS FROM THE FUTURE" not in prompt
         assert "an earlier look" in prompt
 
-    def test_the_run_with_no_date_reads_the_whole_record(self, wired):
-        # A workflow that never dated its memory keeps working exactly as it
-        # did, rather than silently recalling nothing.
-        prompt = self.prompt_for(wired, {"_effective_inputs": {"company": "Lucid"}})
-
-        assert "SUPPRESS FROM THE FUTURE" in prompt
-        assert "an earlier look" in prompt
+    def test_the_run_with_no_date_skips_time_filtered_recall(self, wired):
+        state = {"_effective_inputs": {"company": "Lucid"}}
+        prompt = self.prompt_for(wired, state)
+        assert "SUPPRESS FROM THE FUTURE" not in prompt
+        assert "an earlier look" not in prompt
+        assert "dated by 'as_of', which this run did not provide" in state['memory_error']
 
     def test_a_table_node_needs_no_vector_store(self, wired):
         # It used to load FAISS and an embedding model per node to build an
@@ -880,7 +884,11 @@ class TestTheExportedProjectDatesItsMemoryToo:
 
     def test_what_it_reads_is_held_to_the_date(self, generated):
         assert "run_data=run_data," in generated
-        assert "attach_ltm(manager, graph, tasks, memories, run_data=inputs)" in generated
+        # The live environment dict, not the static inputs: recall runs when
+        # the node does, and by then env.data also holds the upstream outputs
+        # and their nodes.<name>.outputs.<field> aliases a cutoff may bind to.
+        assert "attach_ltm(manager, graph, tasks, memories, run_data=env.data)" in generated
+        assert 'env.data[f"nodes.{name}.{side}.{field}"] = value' in generated
 
     def test_it_carries_the_policy_rather_than_a_second_copy_of_it(self, memory_graph):
         # The cutoff lives in memory_policy; an export that reimplemented it
@@ -1018,7 +1026,8 @@ class TestTheExportedProjectKeepsTablesToo:
         assert "recorded_at" in generated["vendor/table_store.py"]
 
     def test_it_writes_rows(self, generated):
-        assert "_table_store().upsert(" in generated["workflow.py"]
+        assert "_table_store().write(" in generated["workflow.py"]
+        assert "vendor/memory_bindings.py" in generated
 
     def test_it_reads_them_point_in_time(self, generated):
         assert "table=_table_store()" in generated["workflow.py"]

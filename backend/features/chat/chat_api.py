@@ -85,7 +85,7 @@ Do not infer connections just because field names match.
 
 DataLoader source: {"kind":"source","source":{"type":"dataloader","resource_id":"uploaded resource ID","loader":"python","code":"<build_dataset(resource, config) returning a PyTorch Dataset>","n":0},"outputs":[...]}. Uploaded resources are chosen by the user. Never invent resource IDs. Loader owns transforms, selection and order; Run owns execution settings. Create new DataLoader inputs only with loader="python". Legacy reader modes are for existing saved inputs only. All loader modes use PyTorch DataLoader with drop_last=False and dictionary-preserving collation. For pasted Python use loader="python", code defining build_dataset(resource, config) returning torch.utils.data.Dataset or IterableDataset, and read_batch_size. Prefer named typed build_dataset arguments (resource, path: str, split: str = "dev") so Studio can generate the input form; resource is automatic. Legacy config keys are also supported. Each item must be a JSON-compatible dictionary; do not return an already batched DataLoader. Preview determines output fields and types, never guess them. Code is saved on the Input, not in the model adapter.
 New reusable Python tools may define build_tool(typed configuration parameters), returning an object with synchronous run(inputs). Declare literal INPUT_SCHEMA and OUTPUT_SCHEMA lists of {name,type,required,nullable}; types use str/int/float/bool/dict/list. Only the factory is exported under the saved tool name; other functions/classes are internal. Config is shared by canvas, Agent and Chat callers. Existing function toolkits remain supported.
-Evaluator: {"kind":"evaluator","evaluator":{"type":"exact_match","timing":"run"},"inputs":[{"name":"prediction","type":"any","required":true},{"name":"expected","type":"any","required":false}],"outputs":[]}. Connect any workflow output to prediction using field mappings. Timings are node/run/batch. For new evaluators use type=python, code defining evaluate(records, threshold: float = 0.5), config containing additional typed arguments, and metric naming the chosen Evolve objective. Users can upload .py code and preview its returned metrics on saved runs/batches in the Inspector without rerunning agents. Keep existing registered type=tool evaluators compatible. Python evaluators and tools receive complete saved executions (inputs, result, all nodes and node_outputs, status/errors, execution_snapshot, focus), even for unconnected nodes. Tools own grouping and aggregation; return metrics with optional details/records and optional coverage declaring its unit. Never impose trajectory aggregation. Evaluators cannot feed workflow nodes. Evolve selects an evaluator as an objective, not via an outgoing edge.
+Evaluator: {"kind":"evaluator","evaluator":{"type":"python","timing":"batch","code":"def build_evaluator(threshold: float = 0.5):\n    return MyEvaluator(threshold)  # an object with evaluate(self, records) returning {\"metrics\": {...}}","config":{},"metric":"<metric the code returns>"},"inputs":[],"outputs":[]}. An evaluator is the user's own Python code: always create type=python (build_evaluator(...) returning an object with evaluate(records), or legacy evaluate(records, ...)); never create exact_match, contains or required_fields, which only remain for old graphs. Connect workflow outputs to it with field mappings when its code wants a mapped prediction. Timings are node (needs incoming connections)/run/batch. Users can upload .py code and preview its returned metrics on saved runs/batches in the Inspector without rerunning agents. Keep existing registered type=tool evaluators compatible. Python evaluators and tools receive complete saved executions (inputs, result, all nodes and node_outputs, status/errors, execution_snapshot, focus), even for unconnected nodes. Tools own grouping and aggregation; return metrics with optional details/records and optional coverage declaring its unit. Never impose trajectory aggregation. Evaluators cannot feed workflow nodes. Evolve selects an evaluator as an objective, not via an outgoing edge.
 
 Four kinds of node:
 
@@ -94,7 +94,7 @@ Four kinds of node:
 "system_prompt": "...", "parse_mode": "json", \
 "inputs": [{"name": "news", "type": "str", "description": "...", "required": true}], \
 "outputs": [{"name": "finding", "type": "str", "description": "...", "required": true}], \
-"tool_names": ["PythonInterpreterToolkit"], "skill_names": ["risk_rubric"]}
+"tool_names": ["PythonInterpreterToolkit"], "skill_names": ["style_guide"]}
    - `prompt` references its inputs with SINGLE braces: {news}
    - When `parse_mode` is "json" the prompt must instruct the model to return \
 JSON whose keys are exactly the output names.
@@ -166,11 +166,11 @@ Example code: \
 measure\\n    \\"\\"\\"\\n    return {\\"words\\": len(text.split())}\\n". After \
 creating one, use a tool by name via a tool node, or attach the toolkit \
 through a task's `tool_names`.
-- {"op": "create_skill", "spec": {"name": "risk_rubric", "description": \
-"When and how to grade credit-risk severity.", "content": "# Rubric\\n\\n..."}} \
+- {"op": "create_skill", "spec": {"name": "style_guide", "description": \
+"How findings are graded and worded.", "content": "# Guide\\n\\n..."}} \
 -- defines a skill: standing Markdown instructions a node follows. Overwriting \
 an existing skill keeps the previous version. Attach it with `skill_names`.
-- {"op": "delete_skill", "name": "risk_rubric"}
+- {"op": "delete_skill", "name": "style_guide"}
 
 Tools vs skills: a tool is code the workflow CALLS (deterministic, returns a \
 value); a skill is instructions a node FOLLOWS (a taxonomy, a rubric, a house \
@@ -515,6 +515,8 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None)
                 new_name = _unique(raw.get("new_name") or "", taken - {task["name"]})
                 old = task["name"]
                 task["name"] = new_name
+                from backend.features.memory.identity import rename_references
+                rename_references(graph, old, new_name)
                 for e in edges:
                     if e.get("source") == old:
                         e["source"] = new_name

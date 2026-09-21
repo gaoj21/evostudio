@@ -48,10 +48,7 @@ export function describeSource(source) {
   if (!source) return '';
   if (source.filename) return source.filename;
   if (source.node) return `canvas · ${source.node}`;
-  if (source.type === 'credit_risk') {
-    return `credit_risk${source.split ? ` · ${source.split}` : ''}`;
-  }
-  return source.type || '';
+  return source.label || source.type || '';
 }
 
 function RunRows({ runs, onOpenRun }) {

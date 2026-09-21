@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -230,4 +230,30 @@ it('copies the usable full path for uploaded dataset folders and files',async()=
   expect(screen.queryByRole('button',{name:'Delete',exact:true})).not.toBeInTheDocument();
   fireEvent.click(item('Copy path'));
   expect(clipboard).toHaveBeenLastCalledWith('/server/data/files/a.json');
+});
+
+
+describe('creating a file', () => {
+  it('suggests a free path, refuses an existing one, and opens the editor on a new file', async () => {
+    api.getWorkspace.mockResolvedValue({ files: [{ path: 'files/notes.txt', size: 5, mtime: '' }] });
+    api.getWorkspaceFile.mockImplementation(async (_g, path) => ({ path, content: '' }));
+    api.saveWorkspaceFile.mockResolvedValue({});
+    const user = userEvent.setup();
+    render(<WorkspacePanel open graphId="g" onClose={() => {}} />);
+    await waitFor(() => expect(api.getWorkspace).toHaveBeenCalled());
+    await act(async () => {});
+    await user.click(screen.getByText('+ New file'));
+    const path = screen.getByPlaceholderText('files/notes.txt');
+    expect(path).toHaveValue('files/notes-2.txt');
+    await user.clear(path);
+    await user.type(path, 'files/notes.txt');
+    await user.click(screen.getByText('Create'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('already exists');
+    expect(api.saveWorkspaceFile).not.toHaveBeenCalled();
+    await user.clear(path);
+    await user.type(path, 'files/new.txt');
+    await user.click(screen.getByText('Create'));
+    expect(api.saveWorkspaceFile).toHaveBeenCalledWith('g', 'files/new.txt', '');
+    await waitFor(() => expect(document.querySelector('textarea.ws-editor')).not.toBeNull());
+  });
 });

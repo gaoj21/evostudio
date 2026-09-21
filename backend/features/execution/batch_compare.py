@@ -15,9 +15,28 @@ def _key(item: dict) -> str:
     Its inputs, not its position: the two batches may have been drawn with a
     different sample size or order, and lining them up by index would then
     compare unrelated records and call the difference a regression.
+
+    The full inputs: a streamed batch keeps only a trimmed copy on the item
+    and the rest in its input file, and two records that differ only in a
+    long field would otherwise look alike. The loader's bookkeeping is left
+    out — it names the draw, not the record.
     """
-    inputs = item.get("inputs") or {}
+    inputs = _full_inputs(item)
+    if isinstance(inputs, dict):
+        inputs = {k: v for k, v in inputs.items() if k != "_dataloader"}
     return json.dumps(inputs, sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _full_inputs(item: dict):
+    """A record's inputs as they went in, read back from its input file when
+    the batch archived them (as batch_export does)."""
+    if item.get("input_file"):
+        from .batch import BATCHES_DIR
+        try:
+            return json.loads((BATCHES_DIR / item["input_file"]).read_text())
+        except (OSError, ValueError):
+            pass
+    return item.get("inputs") or {}
 
 
 def _index(items: list[dict]) -> tuple[dict[str, dict], int]:
@@ -40,15 +59,24 @@ def _index(items: list[dict]) -> tuple[dict[str, dict], int]:
 
 
 def _label(item: dict) -> str:
-    """A short, human-readable name for a record."""
-    inputs = item.get("inputs") or {}
-    for field in ("sample_id", "id", "name", "company", "question", "city"):
-        if inputs.get(field):
-            return str(inputs[field])
-    if not inputs:
-        return f"record {item.get('index')}"
-    key, value = next(iter(inputs.items()))
-    return f"{key}={str(value)[:40]}"
+    """A short, human-readable name for a record: its trajectory and first
+    short field when it has them, else the first short field — whatever the
+    data is about."""
+    inputs = {k: v for k, v in (item.get("inputs") or {}).items() if not k.startswith("_")}
+    short = [(k, v) for k, v in inputs.items()
+             if isinstance(v, (str, int, float)) and not isinstance(v, bool) and 0 < len(str(v)) <= 60]
+    if item.get("trajectory") is not None:
+        rest = [f"{k}={v}" for k, v in short if str(v) != str(item["trajectory"])][:1]
+        return " · ".join([str(item["trajectory"]), *rest])
+    # A value with letters in it reads as a name; a bare number or code needs
+    # its field name to mean anything.
+    named = next((v for _, v in short if any(c.isalpha() for c in str(v))), None)
+    if named is not None:
+        return str(named)
+    if short:
+        key, value = short[0]
+        return f"{key}={value}"
+    return f"record {item.get('index')}"
 
 
 def _mean(values: list[float]) -> float | None:
@@ -99,12 +127,13 @@ def compare(baseline: dict, candidate: dict) -> dict:
     cand_scores = [i["score"] for i in cand_index.values() if i.get("score") is not None]
     mean_before, mean_after = _mean(base_scores), _mean(cand_scores)
 
-    # Over the shared records only: comparing a mean over 200 records with one
-    # over the 20 that overlap would not be a comparison of anything.
-    shared_before = [base_index[k]["score"] for k in shared
-                     if base_index[k].get("score") is not None]
-    shared_after = [cand_index[k]["score"] for k in shared
-                    if cand_index[k].get("score") is not None]
+    # Over the shared records scored on both sides only: a record that failed
+    # in one batch would otherwise count in one mean and not the other, and
+    # move the delta without anything having got better or worse.
+    both = [k for k in shared if base_index[k].get("score") is not None
+            and cand_index[k].get("score") is not None]
+    shared_before = [base_index[k]["score"] for k in both]
+    shared_after = [cand_index[k]["score"] for k in both]
 
     notes = []
     metric_a = baseline.get("metric")
@@ -142,6 +171,7 @@ def compare(baseline: dict, candidate: dict) -> dict:
             "total": len(candidate.get("items") or []),
         },
         "matched": len(shared),
+        "scored_both": len(both),
         "mean_before": _mean(shared_before),
         "mean_after": _mean(shared_after),
         "delta": (round(_mean(shared_after) - _mean(shared_before), 4)

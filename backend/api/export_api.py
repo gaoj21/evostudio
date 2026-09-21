@@ -193,8 +193,8 @@ def _iter_tree(root: Path):
 def _repo_modules_reached(sources: dict[str, str]) -> set[Path]:
     """Repo-local modules the given sources import, transitively.
 
-    Only what is actually reached: `credit_risk` alone is 5.7 GB of dataset, so
-    bundling a whole package because one function imports one module of it is
+    Only what is actually reached: a project package can hold gigabytes of
+    data, so bundling a whole package because one function imports one module of it is
     not an option.
     """
     import ast
@@ -241,7 +241,7 @@ def _repo_modules_reached(sources: dict[str, str]) -> set[Path]:
                 if node.level == 0 and node.module:
                     dotted_names.add(node.module)
                 elif node.level and package:
-                    # `from .sourcing import X` inside credit_risk.agentic_pipeline
+                    # `from .sibling import X` inside a package
                     base = package.split(".")
                     base = base[: len(base) - (node.level - 1)] if node.level > 1 else base
                     prefix = ".".join(base)
@@ -334,7 +334,7 @@ def _relocate_root(source: str) -> str:
 def _classify_toolkits(names: list[str]) -> tuple[list[str], dict[str, str]]:
     """Split referenced toolkits into evoagentx built-ins and Studio-local ones.
 
-    A toolkit registered by Studio (e.g. ObligorMatchToolkit) does not exist in
+    A toolkit registered by Studio (e.g. one a project plugin adds) does not exist in
     a bare evoagentx install, so the export ships its source. Its own imports
     may still reach outside the bundle — the README says so rather than the
     project failing mysteriously.
@@ -342,7 +342,7 @@ def _classify_toolkits(names: list[str]) -> tuple[list[str], dict[str, str]]:
     builtins, local = [], {}
     for name in names:
         try:
-            instance = tools_registry.TOOL_REGISTRY[name]["factory"]()
+            instance = tools_registry.toolkits()[name]["factory"]()
             module_name = type(instance).__module__
         except Exception:
             builtins.append(name)  # unavailable here; assume importable there
@@ -497,11 +497,19 @@ def project_files(graph: dict, include_vendor: bool = True) -> tuple[dict, dict]
     )
     uses_memory = any(t.get("use_long_term_memory") for t in llm_tasks)
     from . import run_plan
+    disabled = [t for t in ordered if t.get("name") in parked and not is_source_task(t)]
     files["workflow.py"] = _workflow_py(goal, llm_tasks, tool_nodes, edges,
                                         bundled_skills, graph_id, sorted(local_tools),
-                                        plan_nodes=run_plan.compile_plan(graph)["nodes"])
+                                        plan_nodes=run_plan.compile_plan(graph)["nodes"],
+                                        disabled=disabled)
     files["run.py"] = _run_py(name, required_inputs)
     files["requirements.txt"] = _requirements(needs_memory=uses_memory)
+    tool_requirements = sorted({r for spec in bundled_custom
+                                for r in (spec.get("requirements") or [])
+                                + ((spec.get("package") or {}).get("requirements") or [])})
+    if tool_requirements:
+        files["requirements.txt"] += ("\n# What the bundled custom tools declared:\n"
+                                      + "\n".join(tool_requirements) + "\n")
     files[".env.example"] = (
         "# The bundled provider layer (vendor/llm/providers.json) reads the key\n"
         "# for the provider it selects. This is the default path.\n"
@@ -528,14 +536,15 @@ def project_files(graph: dict, include_vendor: bool = True) -> tuple[dict, dict]
         # the rule lives in one module that travels with it rather than being
         # re-implemented in the generated file.
         files["vendor/memory_policy.py"] = (
-            Path(__import__("backend.api.memory_policy", fromlist=["__file__"]).__file__).read_text(encoding="utf-8")
+            Path(__import__("backend.api.memory_policy", fromlist=["__file__"]).__file__).read_text(encoding="utf-8").replace("from . import bindings", "import memory_bindings as bindings")
         )
+        files["vendor/memory_bindings.py"] = Path(__import__("backend.features.memory.bindings", fromlist=["__file__"]).__file__).read_text(encoding="utf-8")
         # A node that keeps a table needs the table, not a re-implementation.
         files["vendor/table_store.py"] = (
             Path(__import__("backend.api.table_store", fromlist=["__file__"]).__file__).read_text(encoding="utf-8").replace(
                 "from backend.api.studio_config import data_path",
                 "def data_path(*parts):\n    return Path(__file__).resolve().parent.joinpath(*parts)",
-            )
+            ).replace("from .bindings import timestamp, BindingError", "from memory_bindings import timestamp, BindingError").replace("from .identity import storage_name, display_names", "def storage_name(graph_id, node): return node\ndef display_names(graph_id, names, *args): return sorted(names)")
         )
 
     binary_files: dict[str, bytes] = {}
@@ -545,19 +554,32 @@ def project_files(graph: dict, include_vendor: bool = True) -> tuple[dict, dict]
             folder = custom_tools.package_dir(spec["name"])
             for path in sorted(p for p in folder.rglob("*") if p.is_file()):
                 rel = path.relative_to(folder).as_posix()
+                if (any(part in SKIP_DIRS for part in path.relative_to(folder).parts)
+                        or path.suffix in {".pyc", ".pyo"}):
+                    continue
                 try:
                     files[f"tools/{spec['name']}/{rel}"] = path.read_text(encoding="utf-8")
                 except UnicodeDecodeError:
                     binary_files[f"tools/{spec['name']}/{rel}"] = path.read_bytes()
         else:
             files[f"tools/{spec['name']}.py"] = spec["code"].rstrip() + "\n"
+        # The whole stored spec but its code (which is the file beside it):
+        # configuration, input-source marking and requirements included, so
+        # the project runs the tool as Studio does and imports back whole.
         files[f"tools/{spec['name']}.json"] = json.dumps(
-            {k: spec[k] for k in ("name", "description", "tools") if k in spec}
-            | ({"package": spec["package"]} if spec.get("package") else {}),
-            ensure_ascii=False, indent=2,
+            {k: v for k, v in spec.items() if k != "code"},
+            ensure_ascii=False, indent=2, default=str,
         )
     if bundled_custom:
         files["tools/__init__.py"] = ""
+    if any(spec.get("factory") for spec in bundled_custom):
+        # A class-based tool runs through the same contract as in Studio:
+        # its configuration applied to build_tool, its inputs checked.
+        from backend.features.data import dataset_interface
+        from backend.features.library import python_tool
+        files["vendor/python_tool.py"] = Path(python_tool.__file__).read_text(encoding="utf-8").replace(
+            "from backend.features.data.dataset_interface import", "from dataset_interface import")
+        files["vendor/dataset_interface.py"] = Path(dataset_interface.__file__).read_text(encoding="utf-8")
 
     for skill in bundled_skills:
         files[f"skills/{skill['name']}/SKILL.md"] = (

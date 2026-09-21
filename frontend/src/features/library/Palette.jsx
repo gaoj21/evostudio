@@ -64,12 +64,16 @@ export default function Palette({ templates, sources, graphTemplates, onAdd, onL
       .toLowerCase();
     return haystack.includes(query.trim().toLowerCase());
   };
-  const domain = (templates || []).filter((tpl) => /^CR\b/i.test(tpl.label || ''));
-  const core = [...(templates || []).filter((tpl) => !domain.includes(tpl)),
+  // Presets a project adds carry the group they belong to; each group is its
+  // own section, titled as the project names it.
+  const grouped = (templates || []).filter((tpl) => tpl.group);
+  const groups = [...new Set(grouped.map((tpl) => tpl.group))]
+    .map((name) => ({ name, entries: grouped.filter((tpl) => tpl.group === name).filter(matches) }));
+  const core = [...(templates || []).filter((tpl) => !tpl.group),
     {type:'evaluate',label:'Evaluator',description:'Score intermediate or final outputs; use the same objective in Evolve.',defaults:{kind:'evaluator',evaluator:{type:'python',timing:'batch'},inputs:[{name:'prediction',type:'any',required:false},{name:'expected',type:'any',required:false}],outputs:[]}}];
   const filtered = {
     core: core.filter(matches),
-    domain: domain.filter(matches),
+    groups: groups.flatMap((g) => g.entries),
     sources: (sources || []).filter(matches),
     graphTemplates: (graphTemplates || []).filter(matches),
     tools: toolItems.filter(matches),
@@ -112,9 +116,11 @@ export default function Palette({ templates, sources, graphTemplates, onAdd, onL
       <PaletteSection title="Input sources" count={filtered.sources.length} searching={searching}>
         {filtered.sources.map(item)}
       </PaletteSection>
-      <PaletteSection title="Credit risk" count={filtered.domain.length} searching={searching}>
-        {filtered.domain.map(item)}
-      </PaletteSection>
+      {groups.map((g) => (
+        <PaletteSection key={g.name} title={g.name} count={g.entries.length} searching={searching}>
+          {g.entries.map(item)}
+        </PaletteSection>
+      ))}
       <PaletteSection title="Workflow templates" count={filtered.graphTemplates.length} searching={searching}>
         {filtered.graphTemplates.map((template) => (
             <ResourceActions key={template.id} name={template.name} items={[{ label: 'Load workflow template', disabled, action: () => onLoadTemplate(template.id) }, { label: 'Built-in template · read only', disabled: true }]}><button

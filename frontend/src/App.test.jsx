@@ -92,10 +92,15 @@ vi.mock('./features/workspace/WorkspacePanel.jsx', () => ({
   default: () => <div>Workspace is visible</div>,
 }));
 vi.mock('./features/canvas/Inspector.jsx', () => ({
-  default: ({ onGraphChange }) => (
-    <button type="button" onClick={() => onGraphChange({ name: 'Renamed workflow' })}>
-      Rename on canvas
-    </button>
+  default: ({ onGraphChange, node, onRename, graph }) => (
+    <>
+      <button type="button" onClick={() => onGraphChange({ name: 'Renamed workflow' })}>
+        Rename on canvas
+      </button>
+      <button type="button" onClick={() => onGraphChange({ goal: 'edited during save' })}>Edit goal</button>
+      <span data-testid="goal">{graph?.goal}</span>
+      {node && <button type="button" onClick={() => onRename(node.id, 'renamed_writer')}>Rename node</button>}
+    </>
   ),
 }));
 vi.mock('./features/execution/RunDialog.jsx', () => ({
@@ -107,9 +112,10 @@ vi.mock('./features/evaluation/EvolvePanel.jsx', () => ({
   default: ({ open }) => open ? <div>Evolve overlay</div> : null,
 }));
 vi.mock('./components/TopBar.jsx', () => ({
-  default: ({ dirty, onRun, onImport, onWorkspace, onToggleWatch, onReview, onRuns }) => (
+  default: ({ dirty, onRun, onImport, onWorkspace, onToggleWatch, onReview, onRuns, onSave }) => (
     <div>
       <span data-testid="dirty">{dirty ? 'dirty' : 'clean'}</span>
+      <button type="button" onClick={onSave}>Save</button>
       <button type="button" onClick={onRun}>Run</button>
       <button type="button" onClick={onImport}>Import</button>
       <button type="button" onClick={onWorkspace}>Workspace</button>
@@ -274,7 +280,10 @@ it('connecting a memory source creates a compatible read-only reader', async () 
   act(() => state.canvas.onConnect({ source: 'mem:writer', target: 'reader' }));
   await waitFor(() => expect(state.canvas.nodes.find(n => n.id === 'reader').data.memory).toMatchObject({
     read_enabled: true, write_enabled: false, read_from: ['writer'],
-    kind: 'table', match: 'company', at: 'as_of', context: ['company', 'as_of'],
+    kind: 'table', match: 'company', at: 'as_of',
+    // Entity and time bindings resolve on their own (memory bindings v2):
+    // a reader no longer has to "also record" them to be matched by them.
+    context: [], time_filter: true,
   }));
   expect(state.canvas.edges.some(e => e.id === 'mw:reader')).toBe(false);
 });
@@ -633,4 +642,44 @@ it('undo restores an archived Chat node through the server without losing sessio
   fireEvent.keyDown(window, {key:'z',ctrlKey:true});
   await waitFor(() => expect(api.restoreCanvasAgents).toHaveBeenCalledWith('old-id',[agent]));
   await waitFor(() => expect(state.canvas.nodes.some(n => n.id === `chat:${agent.id}`)).toBe(true));
+});
+
+
+it('renaming a memory owner keeps readers, positions and chat agents pointed at its store', async () => {
+  api.getGraph.mockResolvedValue({ ...GRAPH, memory_positions: { 'mem:writer': { x: 5, y: 6 } }, tasks: [
+    { name: 'writer', use_long_term_memory: true, memory: {}, inputs: [], outputs: [] },
+    { name: 'reader', use_long_term_memory: true, memory: { read_from: ['reader', 'writer'], write_enabled: false,
+      canvas_connections: { 'mem:writer:read': { sourceHandle: 's-out', targetHandle: 'b-in' } } }, inputs: [], outputs: [] },
+  ] });
+  const agent = { id: 'ag1', name: 'Chat', x: 0, y: 0, memories: [{ memory_id: 'mem:writer', read: true, write: false }] };
+  api.canvasAgents.mockResolvedValue({ agents: [agent] });
+  api.updateCanvasAgent.mockImplementation(async (_g, id, settings) => ({ id, ...settings }));
+  render(<App initialGraphId="old-id" />);
+  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'reader')).toBe(true));
+  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:ag1')).toBe(true));
+  act(() => state.canvas.onNodeClick(null, { id: 'writer' }));
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'Rename node' }));
+  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'renamed_writer')).toBe(true));
+  const reader = state.canvas.nodes.find(n => n.id === 'reader');
+  expect(reader.data.memory.read_from).toEqual(['reader', 'renamed_writer']);
+  expect(Object.keys(reader.data.memory.canvas_connections)).toEqual(['mem:writer:read']);
+  expect(state.canvas.edges.some(e => e.data?.memory === 'read' && e.data.agent === 'reader' && e.data.from === 'renamed_writer')).toBe(true);
+  expect(state.canvas.nodes.find(n => n.id === 'mem:writer').position).toEqual({ x: 5, y: 6 });
+  expect(state.canvas.edges.some(e => e.source === 'mem:writer' && e.target === 'chat:ag1')).toBe(true);
+  expect(api.updateCanvasAgent).not.toHaveBeenCalled();
+});
+
+it('keeps settings edited while a save is in flight', async () => {
+  let finish;
+  api.saveGraph.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+  const { user } = await loadedApp();
+  await user.click(screen.getByRole('button', { name: 'Rename on canvas' }));
+  await user.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(api.saveGraph).toHaveBeenCalled());
+  await user.click(screen.getByRole('button', { name: 'Edit goal' }));
+  expect(screen.getByTestId('goal')).toHaveTextContent('edited during save');
+  await act(async () => { finish({ ...GRAPH, name: 'Renamed workflow', goal: '' }); });
+  expect(screen.getByTestId('goal')).toHaveTextContent('edited during save');
+  await waitFor(() => expect(screen.getByTestId('dirty')).toHaveTextContent('dirty'));
 });

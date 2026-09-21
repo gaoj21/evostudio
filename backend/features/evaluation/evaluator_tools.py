@@ -11,13 +11,27 @@ from fastapi import APIRouter, Body, HTTPException
 from backend.api.sources import SourceError
 
 router = APIRouter(prefix='/api/evaluators', tags=['Evaluators'])
+# An evaluator is the user's own code. The fixed built-ins below remain only
+# so graphs that already use them keep working; they are not offered for new
+# evaluators.
 CATALOG = [
     {'id': 'python', 'label': 'Python evaluator', 'metric': 'score', 'direction': 'maximize'},
-    {'id': 'exact_match', 'label': 'Exact match', 'metric': 'accuracy', 'direction': 'maximize'},
-    {'id': 'contains', 'label': 'Contains expected text', 'metric': 'match_rate', 'direction': 'maximize'},
-    {'id': 'required_fields', 'label': 'Required JSON fields', 'metric': 'valid_rate', 'direction': 'maximize'},
-    {'id': 'tool', 'label': 'Custom evaluator tool', 'metric': 'score', 'direction': 'maximize'},
+    {'id': 'exact_match', 'label': 'Exact match', 'metric': 'accuracy', 'direction': 'maximize', 'legacy': True},
+    {'id': 'contains', 'label': 'Contains expected text', 'metric': 'match_rate', 'direction': 'maximize', 'legacy': True},
+    {'id': 'required_fields', 'label': 'Required JSON fields', 'metric': 'valid_rate', 'direction': 'maximize', 'legacy': True},
+    {'id': 'tool', 'label': 'Custom evaluator tool', 'metric': 'score', 'direction': 'maximize', 'legacy': True},
 ]
+# One default, used by the runner, the batch and the Inspector alike.
+DEFAULT_TIMING = 'run'
+DEFAULT_TIMEOUT = 120
+
+
+def timing_of(cfg):
+    return (cfg or {}).get('timing') or DEFAULT_TIMING
+
+
+def timeout_of(cfg):
+    return int((cfg or {}).get('timeout') or DEFAULT_TIMEOUT)
 
 
 def is_evaluator(task):
@@ -27,25 +41,33 @@ def is_evaluator(task):
 def validate_graph(graph):
     tasks = {t['name']: t for t in graph.get('tasks', [])}
     for task in tasks.values():
-        if not is_evaluator(task):
-            continue
-        cfg = task.get('evaluator') or {}
-        if cfg.get('type', 'exact_match') not in {e['id'] for e in CATALOG}:
-            raise SourceError('Unknown evaluator type.')
-        if cfg.get('timing', 'run') not in ('node', 'run', 'batch'):
-            raise SourceError('Evaluator timing must be node, run, or batch.')
-        if cfg.get('type') == 'python':
-            from .python_evaluator import interface
-            try:
-                interface(cfg.get('code') or '')
-            except (ValueError, TypeError) as exc:
-                raise SourceError(str(exc)) from exc
-        if cfg.get('type') == 'tool' and not cfg.get('tool'):
-            raise SourceError('Choose an evaluator tool.')
-        if cfg.get('direction', 'maximize') not in ('maximize', 'minimize'):
-            raise SourceError('Evaluator direction must be maximize or minimize.')
+        if is_evaluator(task):
+            validate_task(graph, task)
     if any(is_evaluator(tasks.get(e.get('source'), {})) for e in graph.get('edges', [])):
         raise SourceError('Evaluator outputs are reports, not workflow inputs. Select an evaluator in Evolve instead of connecting it downstream.')
+
+
+def validate_task(graph, task):
+    cfg = task.get('evaluator') or {}
+    if cfg.get('type', 'exact_match') not in {e['id'] for e in CATALOG}:
+        raise SourceError('Unknown evaluator type.')
+    if timing_of(cfg) not in ('node', 'run', 'batch'):
+        raise SourceError('Evaluator timing must be node, run, or batch.')
+    if timing_of(cfg) == 'node' and not any(e.get('target') == task['name'] for e in graph.get('edges', [])):
+        raise SourceError(f"Evaluator '{task['name']}' runs when its connected outputs are ready, but nothing is connected to it. Connect the outputs it should wait for, or run it after each run or after the batch.")
+    timeout = cfg.get('timeout', DEFAULT_TIMEOUT)
+    if isinstance(timeout, bool) or not isinstance(timeout, int) or not 10 <= timeout <= 3600:
+        raise SourceError('Evaluator time limit must be a whole number of seconds between 10 and 3600.')
+    if cfg.get('type') == 'python':
+        from .python_evaluator import interface
+        try:
+            interface(cfg.get('code') or '')
+        except (ValueError, TypeError) as exc:
+            raise SourceError(str(exc)) from exc
+    if cfg.get('type') == 'tool' and not cfg.get('tool'):
+        raise SourceError('Choose an evaluator tool.')
+    if cfg.get('direction', 'maximize') not in ('maximize', 'minimize'):
+        raise SourceError('Evaluator direction must be maximize or minimize.')
 
 
 def decode(value):
@@ -72,19 +94,34 @@ def report(cfg, records):
     if kind == 'tool' and cfg.get('tool') in ('read_dataset','evaluate_records'):
         raise SourceError('Choose a non-recursive custom evaluator.')
     if kind in ('tool', 'python'):
+        logs = ''
         if kind == 'python':
             from backend.features.chat import chat_control
-            result = chat_control.worker('evaluate_python', {'code':cfg['code'], 'records':records, 'config':cfg.get('config') or {}}, timeout=120)
+            try:
+                outcome = chat_control.worker('evaluate_python', {'code':cfg['code'], 'records':records, 'config':cfg.get('config') or {}}, timeout=timeout_of(cfg))
+            except TimeoutError as exc:
+                raise SourceError(f'Evaluator took longer than its {timeout_of(cfg)}-second limit. Raise the limit in the evaluator settings or make the code faster.') from exc
+            if isinstance(outcome, dict) and outcome.get('studio_evaluator_output'):
+                result, logs = outcome['report'], outcome.get('logs') or ''
+            else:
+                result = outcome
         else:
             from backend.api import tools_registry
             result = tools_registry.call_tool(cfg['tool'], {'records': records, 'config': cfg.get('config') or {}})
         if not isinstance(result, dict) or not isinstance(result.get('metrics'), dict):
             raise SourceError('Evaluator tools return {metrics: {name: number}} with optional records, coverage and details.')
         result = copy.deepcopy(result)
-        metric = cfg.get('metric') or (next(iter(result['metrics']), 'score') if cfg.get('_preview') else 'score')
-        result['objective'] = {'metric': metric, 'direction': cfg.get('direction', 'maximize')}
+        if logs:
+            result['logs'] = logs
+        # No objective chosen yet (never previewed, or the code changed): the
+        # first metric the code returns, said so, rather than a failed report.
+        metric = cfg.get('metric') or next(iter(result['metrics']), None)
+        if metric is None:
+            raise SourceError('Evaluator returned no metrics. Return {"metrics": {"name": number}}.')
+        result['objective'] = {'metric': metric, 'direction': cfg.get('direction', 'maximize'),
+                               **({} if cfg.get('metric') else {'chosen': 'first metric returned'})}
         if metric not in result['metrics']:
-            raise SourceError(f'Evaluator did not return objective metric {metric!r}.')
+            raise SourceError(f'Evaluator did not return its objective metric {metric!r}; it returned {sorted(result["metrics"])}. Choose one of these in the evaluator settings.')
         if any(v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)) for v in result['metrics'].values()):
             raise SourceError('Evaluator metrics must be finite numbers or null.')
         if 'records' in result and (not isinstance(result['records'], list) or any(not isinstance(r, dict) for r in result['records'])):
@@ -159,15 +196,17 @@ def record_for(graph, task, run, record_id=None):
 
 
 def evaluate_runs(graph, runs, names=None, timing=None):
-    validate_graph(graph)
+    """Reports per evaluator. Never raises: an evaluator that is misconfigured
+    reports its own failure, and the runs it scores keep their status."""
     reports = {}
     for task in graph.get('tasks', []):
         if not is_evaluator(task) or not task.get('enabled', True) or (names is not None and task['name'] not in names):
             continue
         cfg = task.get('evaluator') or {}
-        if timing and cfg.get('timing', 'run') not in timing:
+        if timing and timing_of(cfg) not in timing:
             continue
         try:
+            validate_task(graph, task)
             records = [record_for(graph, task, run, str(i)) for i, run in enumerate(runs)]
             # Labels are a separate resource and are never injected into Agents.
             if cfg.get('labels') or '_label_records' in cfg:
@@ -262,6 +301,11 @@ def evaluate_saved(graph_id: str, body: dict = Body(...)):
         raise HTTPException(404, 'Workflow not found.')
     runs = saved_runs(graph_id, body)
     try:
-        return {'evaluations': evaluate_runs(graph, runs, body.get('evaluators'))}
+        evaluations = evaluate_runs(graph, runs, body.get('evaluators'))
     except SourceError as exc:
         raise HTTPException(422, str(exc)) from exc
+    if body.get('batch_id'):
+        # Kept with the batch, so its drawer and the history list show it.
+        from backend.api import batch
+        batch.set_evaluations(body['batch_id'], evaluations)
+    return {'evaluations': evaluations}

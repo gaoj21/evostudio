@@ -50,6 +50,74 @@ root** so that both layers are importable.
     --input projects/credit_risk/dataset/v0.2/dev.jsonl
 ```
 
+## In Studio
+
+Studio knows nothing about credit risk. This project reaches it only through
+`studio_plugin.py`, loaded by `backend/features/plugins.py` (contract:
+[`projects/README.md`](../README.md)). The code behind it lives in `studio/`:
+
+| File | Provides |
+|---|---|
+| `studio_plugin.py` | `NAME = "Credit risk"`; `presets()`, `templates()`, `toolkits()`, `source_types()` |
+| `studio/feed.py` | the `credit_risk` Input's records and `info` (legacy `dataset/contemporary/samples.jsonl`) |
+| `studio/releases.py` | versioned releases under `dataset/expansion/releases/<id>/` |
+| `studio/presets.py` | the seven `CR …` preset nodes, the template and its review rule |
+| `studio/obligor_tool.py` | `ObligorMatchToolkit` |
+
+**Input type `credit_risk`** ("Credit Risk Feed"). Config: `dataset`
+(`contemporary` when the legacy file exists, plus every release id), `split`
+(`""` for all, `dev`, `test`), `n` (trajectories; `0` = the entire split),
+`seed` (42), `step` (`none` / `monthly` / `weekly` / `daily`, default
+`monthly`). With a step, one company window becomes a series of dated records,
+each seeing only the evidence up to its `as_of`. Outputs: `sample_id`,
+`company`, `symbol`, `cik`, `window_start`, `window_end`, `as_of`,
+`news_batch`, `filing_batch`, `sample_json`. The type declares
+`sequence: {"group": "sample_id", "order": "as_of"}`, so a batch or canvas
+Evolve runs each company's records in date order and blocks the rest of a
+company after a failed step, and the batch preview reports companies and date
+range. `watch_key: "sample_id"`. `GET /api/sources/credit_risk/info?dataset=<id>`
+returns the available versions, splits and fields.
+
+**Presets** (palette group "Credit risk"): `cr_source_news`, `cr_source_8k` →
+`cr_grounding` (uses `ObligorMatchToolkit`) → `cr_detect` → `cr_investigate` →
+`cr_reflect` → `cr_decide`. `cr_investigate` and `cr_decide` default to
+`use_long_term_memory: true`. Skill texts from `skills/` are inlined into the
+prompts.
+
+**Template** `credit-risk-monitoring` ("Credit Risk Monitoring"): a
+`credit_risk` Input feeding the seven nodes, with this review rule on the
+graph:
+
+```json
+{"node": "decide", "score_field": "score", "range": [35, 65],
+ "when": {"field": "action", "equals": "alert"},
+ "show": ["action", "risk_level", "score", "rationale"],
+ "approve_label": "alert", "reject_label": "suppress"}
+```
+
+An `alert` from `decide` with a score of 35–65 (or any output with
+`review_required: true`) goes to Studio's Review panel; approving makes the
+final action `alert`, rejecting `suppress`. A batch's `review_zone` replaces
+the range.
+
+**`ObligorMatchToolkit`**: `match_company_name` and `match_cik` against the
+internal obligor list (`dataset/contemporary/candidates.csv`, loaded lazily
+and cached per process).
+
+**Evaluator `evaluators/monitoring_report.py`**: ordinary evaluator code, not
+part of the platform. Upload it to an Evaluator node with timing "after the
+entire batch". `build_evaluator(decision_field="decision",
+trajectory_field="sample_id", date_field="as_of", label_key="case_id",
+reasoning_nodes="detect,investigate,reflect,decide")` reports per company
+(caught / missed, lead days, false alarms on verified negatives) and per step
+(level against the countdown band, reasoning that names a future date).
+Metrics: `detection_rate`, `false_alarm_rate`, `mean_lead_days`,
+`countdown_near_rate`, `foresight_steps`, `failed_steps`; the usual Evolve
+objective is `detection_rate` (maximize). Truth comes from the Evaluator's
+separate labels (`evaluators/labels.py` builds them for a release) or, for the
+contemporary dataset, from each record's `sample_json`. See
+`evaluators/README.md`.
+
 ## Compatibility notes
 
 - `data/credit_risk_dataset` is a symlink to `projects/credit_risk/dataset`, kept so

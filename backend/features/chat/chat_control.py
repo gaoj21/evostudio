@@ -65,7 +65,8 @@ def worker(kind, payload, on_stage=None, on_record=None, timeout=None):
         (root / 'input.json').write_text(json.dumps(payload, ensure_ascii=False))
         with (root / 'stderr.log').open('wb') as stderr:
             process = subprocess.Popen([sys.executable, str(Path(__file__).with_name('chat_worker.py')), kind, directory],
-                                       stdout=subprocess.DEVNULL, stderr=stderr, start_new_session=True)
+                                       stdout=subprocess.DEVNULL, stderr=stderr, start_new_session=True,
+                                       env={**os.environ, 'STUDIO_WORKER_PARENT': str(os.getpid())})
         started = time.monotonic()
         last_stage = None
         offset = 0

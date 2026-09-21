@@ -50,8 +50,12 @@ def files_dir(graph_id: str) -> Path:
 
 # What the project is made of, as opposed to what its runs produce. Rewritten
 # from the canvas on every save, so anything left over from an earlier shape of
-# the workflow — a tool it no longer uses — is cleared out first.
+# the workflow — a tool it no longer uses — is cleared out first. Only what a
+# generation wrote is cleared: these folders are shared with the user's own
+# files (an uploaded data/customers.csv), which a save must never take.
 PROJECT_DIRS = ("tools", "skills", "data")
+# The files the last generation wrote, so the next one removes exactly those.
+GENERATED_MANIFEST = ".generated-files"
 
 # The framework and the layers under it: 262 files, 3.8 MB, identical for every
 # workflow and changing only when this repo does. Rewriting that on every save
@@ -107,12 +111,17 @@ def write_project(graph: dict) -> list[str]:
     else:
         files, vendor = export_api.project_files(graph, include_vendor=not vendor_current)
 
-    for name in PROJECT_DIRS:
-        shutil.rmtree(root / name, ignore_errors=True)
-    keep = set(files) | {VENDOR_STAMP}
-    for stale in root.glob("*"):
-        if stale.is_file() and stale.name not in keep:
+    # Only files the previous generation wrote and this one does not: the
+    # workspace also holds the user's uploads and notes, and run artifacts.
+    # A workspace from before the manifest existed loses nothing.
+    for rel in sorted(_generated_files(root) - set(files)):
+        try:
+            stale = _resolve_in_workspace(graph_id, rel)
+        except WorkspaceError:
+            continue
+        if stale.is_file():
             stale.unlink(missing_ok=True)
+            _prune_empty_parents(stale.parent, root)
     if not vendor_current:
         shutil.rmtree(root / VENDOR_DIR, ignore_errors=True)
 
@@ -129,7 +138,43 @@ def write_project(graph: dict) -> list[str]:
         written.append(rel)
     if not vendor_current:
         stamp.write_text(fingerprint, encoding="utf-8")
+    (root / GENERATED_MANIFEST).write_text(
+        json.dumps(sorted(files), ensure_ascii=False, indent=0), encoding="utf-8")
     return sorted(written)
+
+
+def _generated_files(root: Path) -> set[str]:
+    """What the last generation wrote outside vendor/, per its manifest."""
+    try:
+        listed = json.loads((root / GENERATED_MANIFEST).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return {p for p in listed if isinstance(p, str)} if isinstance(listed, list) else set()
+
+
+def _prune_empty_parents(folder: Path, root: Path) -> None:
+    """Remove folders a stale generated file leaves empty, up to the root."""
+    while folder != root and root in folder.parents:
+        try:
+            folder.rmdir()
+        except OSError:
+            return
+        folder = folder.parent
+
+
+def check_output_dir(output_dir: str) -> str | None:
+    """Why run artifacts cannot go to `output_dir`, or None.
+
+    Generated folders are rewritten from the canvas on every save; run
+    output sharing one would mix what a run produced with what a save may
+    replace.
+    """
+    first = (output_dir or "").strip().strip("/").split("/")[0]
+    if first in set(PROJECT_DIRS) | {VENDOR_DIR, MEMORY_DIR_NAME}:
+        return (f"output_dir {output_dir!r} is inside '{first}/', which the "
+                "workspace keeps for the generated project. Use another folder, "
+                "e.g. 'runs'.")
+    return None
 
 
 def _safe_name(name: str) -> str:
@@ -318,7 +363,7 @@ def tree(graph_id: str) -> list[dict]:
         rel = path.relative_to(root).as_posix()
         # Bookkeeping, not part of the project: it says which version of the
         # framework is sitting in vendor/, and means nothing to a reader.
-        if rel == VENDOR_STAMP or "__pycache__" in rel:
+        if rel in (VENDOR_STAMP, GENERATED_MANIFEST) or "__pycache__" in rel:
             continue
         if path.is_dir():
             entries.append({"path": rel, "dir": True, "absolute_path": str(path.resolve())})
@@ -405,7 +450,7 @@ def _table_file(graph_id: str, relpath: str) -> dict | None:
 def _memory_names(entries: list[dict]) -> list[str]:
     """Filenames for one node's memory, in the order given.
 
-    A node that tracks a subject keeps one entry per subject, so the obligor's
+    A node that tracks a subject keeps one entry per subject, so the subject's
     name is what makes the file findable — `sleep-number.json` rather than
     `007.json`, which said only how recently it happened to be written. Kept
     in one function because the listing and the reader must agree on it.

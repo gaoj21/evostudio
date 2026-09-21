@@ -8,6 +8,8 @@ the ones that did not finish and keeps the rest.
 
 import pytest
 
+import sequenced_input
+
 
 @pytest.fixture
 def batches(tmp_path, monkeypatch):
@@ -24,10 +26,10 @@ def batches(tmp_path, monkeypatch):
 class Recorder:
     def __init__(self, outcome=None):
         self.calls, self.runs = [], {}
-        self.outcome = outcome or (lambda record: {"status": "success", "result": {"d": record["sample_id"]}})
+        self.outcome = outcome or (lambda record: {"status": "success", "result": {"d": record["account"]}})
 
     def start_run(self, graph, record, background, gray_zone, run_id, batch_id, session_started_at):
-        self.calls.append((record["sample_id"], record.get("as_of")))
+        self.calls.append((record["account"], record.get("day")))
         self.runs[run_id] = dict(self.outcome(record))
 
     def get_run(self, run_id):
@@ -35,15 +37,19 @@ class Recorder:
 
 
 def stopped_batch(batches, statuses):
-    """A persisted batch as a stop left it: `statuses` per item, in order."""
+    """A persisted batch as a stop left it: `statuses` per item, in order.
+
+    The items are one trajectory ("acme"), as a batch over an Input that
+    declares a sequence records it (batch.assign_sequences)."""
     items = [{"index": i, "status": st, "run_id": f"r{i}" if st != "pending" else None,
-              "inputs": {"sample_id": "acme", "as_of": f"2026-0{i + 1}-01"},
+              "inputs": {"account": "acme", "day": f"2026-0{i + 1}-01"},
+              "trajectory": "acme",
               "output_summary": "…" if st == "success" else None, "error": None,
               "review_status": None, "label": None, "score": 1.0 if st == "success" else None,
               "score_detail": None, "attempts": 1 if st != "pending" else 0}
              for i, st in enumerate(statuses)]
     state = {"batch_id": "b1", "graph_id": "g1", "status": "cancelled",
-             "created_at": "2026-09-08T05:00:00+00:00", "source": {"type": "credit_risk"},
+             "created_at": "2026-09-08T05:00:00+00:00", "source": {"type": sequenced_input.TYPE},
              "metric": None, "summary": None, "workers": 1, "total": len(items),
              "items": items, "cancelled_items": 2}
     batches._persist_batch(state)
@@ -154,7 +160,8 @@ def test_standalone_records_bring_nothing_along(batches, monkeypatch):
     monkeypatch.setattr(batches.runner, "get_run", rec.get_run)
     state = stopped_batch(batches, ["success", "failed", "success"])
     for i in state["items"]:
-        i["inputs"] = {"sample_id": f"s{i['index']}"}      # no as_of: not stepped
+        i["inputs"] = {"account": f"s{i['index']}"}
+        i.pop("trajectory")                                # not a trajectory
     batches._persist_batch(state)
 
     outcome = batches.resume_batch("b1", {"id": "g1"})
@@ -165,38 +172,43 @@ def test_standalone_records_bring_nothing_along(batches, monkeypatch):
 
 class TestAFailedStepStopsItsSample:
     def test_later_steps_are_blocked_not_run(self, batches, monkeypatch):
+        sequenced_input.install(monkeypatch)
+
         def outcome(record):
-            if record["as_of"] == "2026-02-01":
+            if record["day"] == "2026-02-01":
                 return {"status": "failed", "error": "boom", "node_error": {"code": "llm_failed"}}
             return {"status": "success", "result": {}}
         rec = Recorder(outcome)
         monkeypatch.setattr(batches.runner, "start_run", rec.start_run)
         monkeypatch.setattr(batches.runner, "get_run", rec.get_run)
-        records = [{"sample_id": "acme", "as_of": f"2026-0{i}-01"} for i in (1, 2, 3, 4)]
-        bid = batches.start_batch({"id": "g1"}, records, {"type": "credit_risk"}, workers=1)
+        records = [{"account": "acme", "day": f"2026-0{i}-01"} for i in (1, 2, 3, 4)]
+        bid = batches.start_batch(sequenced_input.graph(id="g1"), records,
+                                  {"type": sequenced_input.TYPE}, workers=1)
         assert batches.wait_for(bid, timeout=10)
 
         state = batches.get_batch(bid)
         assert [a for _, a in rec.calls] == ["2026-01-01", "2026-02-01"]
         assert [i["status"] for i in state["items"]] == ["success", "failed", "blocked", "blocked"]
-        assert "2026-02-01" in state["items"][2]["error"]
+        assert "record #2" in state["items"][2]["error"]
         assert state["status"] == "completed_with_errors"
         assert len(batches.unfinished(state)) == 3
 
     def test_an_unreachable_model_retries_the_step_and_then_the_blocked_ones(self, batches, monkeypatch):
+        sequenced_input.install(monkeypatch)
         seen = []
 
         def outcome(record):
-            seen.append(record["as_of"])
-            if record["as_of"] == "2026-02-01" and seen.count("2026-02-01") == 1:
+            seen.append(record["day"])
+            if record["day"] == "2026-02-01" and seen.count("2026-02-01") == 1:
                 return {"status": "failed", "error": "…",
                         "node_error": {"code": "llm_unreachable", "retryable": True}}
             return {"status": "success", "result": {}}
         rec = Recorder(outcome)
         monkeypatch.setattr(batches.runner, "start_run", rec.start_run)
         monkeypatch.setattr(batches.runner, "get_run", rec.get_run)
-        records = [{"sample_id": "acme", "as_of": f"2026-0{i}-01"} for i in (1, 2, 3)]
-        bid = batches.start_batch({"id": "g1"}, records, {"type": "credit_risk"}, workers=1)
+        records = [{"account": "acme", "day": f"2026-0{i}-01"} for i in (1, 2, 3)]
+        bid = batches.start_batch(sequenced_input.graph(id="g1"), records,
+                                  {"type": sequenced_input.TYPE}, workers=1)
         assert batches.wait_for(bid, timeout=10)
 
         assert [a for _, a in rec.calls] == ["2026-01-01", "2026-02-01", "2026-02-01", "2026-03-01"]

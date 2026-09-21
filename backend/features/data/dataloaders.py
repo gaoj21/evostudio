@@ -11,7 +11,33 @@ import threading
 import uuid
 from backend.api.studio_config import data_path
 
-_cache_lock = threading.RLock()
+# One lock per prepared-data cache key, so preparing one dataset never makes
+# another workflow's preparation wait. The guard only protects the dict.
+_cache_locks: dict = {}
+_cache_locks_guard = threading.Lock()
+
+
+def _cache_lock_for(key):
+    with _cache_locks_guard:
+        return _cache_locks.setdefault(key, threading.Lock())
+
+
+DEFAULT_BATCH_TIMEOUT = 120
+# A full (non-streaming) read has no per-batch progress to watch, so it is
+# allowed this many batch periods before it is stopped.
+FULL_READ_BATCHES = 10
+
+
+def batch_timeout(config):
+    """Seconds a Dataset may take to produce one batch."""
+    return int((config or {}).get('batch_timeout') or DEFAULT_BATCH_TIMEOUT)
+
+
+def api_backed(config):
+    """A DataLoader whose reader is a remote API source: it must be collected
+    first, outside any HTTP request, and never fetched as a side effect."""
+    from .source_apis import is_api_source
+    return (config or {}).get('loader') == 'source' and is_api_source((config or {}).get('source_config'))
 from fastapi import APIRouter, Body, HTTPException
 from backend.api.sources import SourceError
 from . import data_resources
@@ -60,6 +86,9 @@ def validate(config):
         value = config.get(key, default)
         if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
             raise SourceError(f'{key} must be an integer >= {minimum}.')
+    timeout = config.get('batch_timeout', DEFAULT_BATCH_TIMEOUT)
+    if isinstance(timeout, bool) or not isinstance(timeout, int) or not 10 <= timeout <= 3600:
+        raise SourceError('Time allowed per batch must be a whole number of seconds between 10 and 3600.')
     if config.get('loader') == 'source':
         if not isinstance(config.get('source_config'), dict) or config['source_config'].get('type') == 'dataloader':
             raise SourceError('Choose a non-recursive source adapter.')
@@ -113,8 +142,13 @@ def raw_records(config, sample_limit=None):
     loader = config.get('loader', 'auto')
     if loader == 'source':
         from .sources import records_from_source_node
-        rows = records_from_source_node({'source': config['source_config']})
-        return rows, {'source_config': copy.deepcopy(config['source_config'])}
+        from .source_apis import collect_records, is_api_source
+        source_config = config['source_config']
+        # An API source is collected over its whole range (every GDELT
+        # window), not executed once: a single execution is one record.
+        rows = (collect_records(source_config) if is_api_source(source_config)
+                else records_from_source_node({'source': source_config}))
+        return rows, {'source_config': copy.deepcopy(source_config)}
     resource = data_resources.load(config.get('resource_id'))
     entries = [entry for entry in resource['files'] if fnmatch.fnmatch(entry['path'], config.get('file_pattern') or '*')]
     root = data_resources.path_for(resource['id']) / 'files'
@@ -124,9 +158,13 @@ def raw_records(config, sample_limit=None):
             rows = chat_control.worker('dataset', {'code':config['code'],
                 'resource':{**resource, 'root':str(root), 'files':entries},
                 'config':{**(config.get('reader_config') or {}), 'reference_inputs':config.get('reference_inputs') or {}},
-                'batch_size':config.get('read_batch_size', 100), 'sample_limit':sample_limit, 'offset':config.get('offset',0), 'record_limit':config.get('n',0)}, timeout=30 if sample_limit is not None else 120)
+                'batch_size':config.get('read_batch_size', 100), 'sample_limit':sample_limit, 'offset':config.get('offset',0), 'record_limit':config.get('n',0)},
+                timeout=30 if sample_limit is not None else batch_timeout(config) * FULL_READ_BATCHES)
         except Exception as exc:
-            raise SourceError(f'Python DataLoader failed: {exc}') from exc
+            # The worker already told errors from the Dataset code in terms of
+            # that code ("Dataset code line N: ..."); anything else is ours.
+            message = str(exc)
+            raise SourceError(message if message.startswith('Dataset code') else f'Python DataLoader failed: {message}') from exc
         return rows, resource
     if loader == 'tool':
         from backend.api import tools_registry
@@ -167,6 +205,15 @@ def raw_records(config, sample_limit=None):
     return records, resource
 
 
+def content_identity(resource):
+    """The resource fields that define its bytes. Bookkeeping such as which
+    workflows it is attached to, or its display name, must not change the
+    snapshot or the prepared-data cache key."""
+    if 'files' not in resource:
+        return resource
+    return {key: resource.get(key) for key in ('id', 'version', 'files')}
+
+
 def _prepare(config):
     config = copy.deepcopy(config)
     config.pop('preview_snapshot', None)
@@ -175,9 +222,12 @@ def _prepare(config):
     rows, resource = raw_records(config)
     rows = _object_rows(rows)
     original = len(rows)
-    if config.get('reference_inputs'):
+    references = config.get('reference_inputs') or {}
+    if references:
+        # Transforms see the shared references; they are re-attached below
+        # to whatever the transform and field mapping produce.
         from .input_composition import merge
-        rows = merge(rows, config['reference_inputs'])
+        rows = merge(rows, references)
     if config.get('transform_tool'):
         from backend.api import tools_registry
         if config.get('transform_scope', 'record') == 'all':
@@ -198,6 +248,12 @@ def _prepare(config):
             rows = [{target: get_path(row, source) for source, target in mapping.items()} for row in rows]
         except (KeyError, IndexError, TypeError) as exc:
             raise SourceError(f'Missing mapped field: {exc}') from exc
+        if any(target in references and source != target for source, target in mapping.items()):
+            raise SourceError('Mapped field names overlap shared reference output names. Rename the mapped field or the reference output.')
+    if references:
+        # Shared references reach every record even when the transform or
+        # field mapping rebuilt it from selected fields only.
+        rows = [{**row, **{k: copy.deepcopy(v) for k, v in references.items() if k not in row}} for row in rows]
     group, order = config.get('group_by'), config.get('order_by')
     if group:
         try:
@@ -207,7 +263,7 @@ def _prepare(config):
     rows = _object_rows(rows)
     fields = list(dict.fromkeys(key for row in rows for key in row))
     rows = [{key: row.get(key) for key in fields} for row in rows]
-    digest = hashlib.sha256(json.dumps({'config': config, 'resource': resource, 'records': rows}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    digest = hashlib.sha256(json.dumps({'config': config, 'resource': content_identity(resource), 'records': rows}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     offset, limit = config.get('offset', 0), config.get('n', 0)
     if config.get('loader') != 'python':
         rows = rows[offset:offset + limit if limit else None]
@@ -248,11 +304,11 @@ def _prepare_cached(config):
             raise SourceError(f"Resource file changed: {entry['path']}. Upload a new version.")
     from backend.api import custom_tools
     tool_versions = {config[key]: custom_tools.find(config[key]) for key in ('reader_tool', 'transform_tool') if config.get(key)}
-    key = hashlib.sha256(json.dumps({'config':config, 'resource':resource, 'tools':tool_versions, 'contract':3},sort_keys=True,default=str).encode()).hexdigest()
+    key = hashlib.sha256(json.dumps({'config':config, 'resource':content_identity(resource), 'tools':tool_versions, 'contract':4},sort_keys=True,default=str).encode()).hexdigest()
     root = data_path('dataloader-cache')
     root.mkdir(parents=True, exist_ok=True)
     path = root / (key + '.json')
-    with _cache_lock:
+    with _cache_lock_for(key):
         check_cancel()
         if path.exists():
             rows, meta = json.loads(path.read_text())
@@ -275,15 +331,18 @@ def records(config):
 
 
 def iter_batches(config):
+    """Prepared records in consecutive batches of read_batch_size.
+
+    The same batches torch's DataLoader makes for a list with shuffle off,
+    no dropped tail and the identity collator, cut here instead of in a
+    worker: shipping every record to a subprocess only to slice it cost a
+    full copy and could time out on large datasets.
+    """
     rows, _ = _prepare_cached(config)
-    from backend.features.chat.chat_control import worker
-    try:
-        chunks = worker('dataset_batches', {'records': rows, 'batch_size': config.get('read_batch_size', 100)}, timeout=120)
-    except Exception as exc:
-        raise SourceError(f'DataLoader batching failed: {exc}') from exc
-    for chunk in chunks:
+    size = config.get('read_batch_size', 100)
+    for start in range(0, len(rows), size):
         check_cancel()
-        yield chunk
+        yield rows[start:start + size]
 
 
 @router.get('')

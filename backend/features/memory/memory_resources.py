@@ -1,5 +1,6 @@
 """Shared identity and access rules for canvas and chat Memory resources."""
-from backend.api import mem0_service, memory_store, table_store
+import json
+from backend.api import mem0_service, memory_store, table_store, memory_policy
 
 
 def key(binding):
@@ -13,8 +14,8 @@ def catalog(graph):
     for task in graph.get('tasks', []):
         policy = task.get('memory') or {}
         if not task.get('use_long_term_memory') or policy.get('provider') == 'mem0': continue
-        kind = policy.get('kind') or ('table' if policy.get('match') else 'recall')
-        result.append({'id': 'mem:' + task['name'], 'name': task['name'] + ' memory', 'kind': kind,
+        kind = memory_policy.policy(task)['kind']
+        result.append({'id': 'mem:' + (policy.get('store_id') or task['name']), 'name': task['name'] + ' memory', 'kind': kind,
                        'node': task['name'], 'writable': False,
                        'write_reason': 'Written by the owning workflow Agent; Chat can read this history.',
                        'subject_field': policy.get('match'), 'date_field': policy.get('at')})
@@ -30,12 +31,15 @@ def resolve(graph, reference):
 
 def read(graph, resource, query='', limit=10, before=None, offset=0):
     if resource['kind'] == 'mem0':
+        if before:
+            raise ValueError('This Mem0 adapter does not support business-time filtering.')
         return mem0_service.entries(graph, resource['space_id'], query or None, limit)
     if resource['kind'] == 'table':
         needle = query.strip().casefold()
         rows = [r for r in table_store.rows(graph['id'], resource['node'])
-                if (not needle or needle in r['subject'].casefold() or r['subject'].casefold() in needle)
-                and (not before or r['at'] < before)]
+                if (not needle or needle in r['subject'].casefold() or (r['subject'] and r['subject'].casefold() in needle)
+                    or needle in json.dumps(r['payload'], ensure_ascii=False).casefold())
+                and (not before or memory_policy._earlier(r['at'], before))]
         rows.sort(key=lambda r: (r['at'], r['subject']), reverse=True)
         return [{'subject': r['subject'], 'at': r['at'], 'content': r['payload']} for r in rows[offset:offset + limit]]
     store = memory_store.open_memory(graph['id'], resource['node'], create=False)
@@ -56,4 +60,4 @@ def preview(graph, resource, query, limit=5):
         hits = read(graph, resource, '', limit)
         mode = 'browse'
     return {'records': hits, 'mode': mode, 'returned': len(hits), 'total_records': total,
-            'note': 'Preview only. Use browse_memory pages for a complete overview; do not infer all companies from this sample.'}
+            'note': 'Preview only. Use browse_memory pages for a complete overview; do not infer the complete dataset from this sample.'}
