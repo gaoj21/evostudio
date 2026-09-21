@@ -61,6 +61,7 @@ export const api = {
   updateProject: (id, body) => req(`/api/projects/${encodeURIComponent(id)}`, { method: 'PUT', body }),
   deleteProject: id => req(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   createProject: (body) => req('/api/projects', { method: 'POST', body }),
+  copyTask: (project, id) => req(`/api/projects/${encodeURIComponent(project)}/tasks/${encodeURIComponent(id)}/copy`, {method:'POST'}),
   projectTasks: (id) => req(`/api/projects/${encodeURIComponent(id)}/tasks`),
   createTask: (id, body) => req(`/api/projects/${encodeURIComponent(id)}/tasks`, { method: 'POST', body }),
   assignTask: (id, graph) => req(`/api/projects/${encodeURIComponent(id)}/tasks/${encodeURIComponent(graph)}`, { method: 'PUT' }),

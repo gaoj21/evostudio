@@ -100,3 +100,25 @@ def test_task_can_be_created_without_a_project(client):
     task = result.json()
     assert task['project_id'] is None
     assert client.get('/api/projects/unassigned/tasks').json()[0]['id'] == task['id']
+
+
+def test_copy_task_has_independent_identity_and_preserves_definition(client, monkeypatch):
+    from backend.api import graphs, harness_api
+    p = client.post('/api/projects', json={'name':'Research'}).json()
+    task = client.post(f'/api/projects/{p["id"]}/tasks', json={'name':'Original','goal':'Summarize'}).json()
+    task['tasks'][0]['x'] = 123
+    task = graphs.save_graph(task['id'], task)
+    monkeypatch.setattr(harness_api, 'list_agents', lambda _: {'agents':[]})
+    result = client.post(f'/api/projects/{p["id"]}/tasks/{task["id"]}/copy')
+    assert result.status_code == 201, result.text
+    copied = result.json()
+    assert copied['id'] != task['id'] and copied['task_id'] != task['task_id']
+    assert copied['tasks'] == task['tasks'] and copied['edges'] == task['edges']
+    assert copied['project_id'] == p['id']
+    assert copied['name'] == 'Original (copy)'
+    assert graphs.load_graph(task['id']) == task
+    copied['tasks'][0]['prompt'] = 'Changed'
+    graphs.save_graph(copied['id'], copied)
+    assert graphs.load_graph(task['id'])['tasks'][0]['prompt'] != 'Changed'
+    again = client.post(f'/api/projects/{p["id"]}/tasks/{task["id"]}/copy').json()
+    assert again['id'] != copied['id']

@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import Platform from './Platform.jsx';
 import { api } from './api.js';
-vi.mock('./api.js', () => ({api:{listProjects:vi.fn(),projectTasks:vi.fn(),createProject:vi.fn(),createTask:vi.fn(),assignTask:vi.fn(),deleteGraph:vi.fn(),renameGraph:vi.fn(),deleteProject:vi.fn()}}));
+vi.mock('./api.js', () => ({api:{listProjects:vi.fn(),projectTasks:vi.fn(),createProject:vi.fn(),createTask:vi.fn(),copyTask:vi.fn(),assignTask:vi.fn(),deleteGraph:vi.fn(),renameGraph:vi.fn(),deleteProject:vi.fn()}}));
 vi.mock('./TaskDetail.jsx', () => ({default:({graphId,onEdit,onRun}) => <div>Detail: {graphId}<button onClick={onEdit}>Edit workflow</button><button onClick={onRun}>Prepare run</button></div>}));
 vi.mock('./App.jsx', () => ({default:({initialGraphId,onHome}) => <div>Editor: {initialGraphId}<button onClick={onHome}>Home</button></div>}));
 beforeEach(() => { vi.resetAllMocks(); api.listProjects.mockResolvedValue([]); api.projectTasks.mockResolvedValue([]); });
@@ -82,4 +82,17 @@ it('creates in the right-clicked project and exposes management on the main proj
  fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Summarize' } });
  fireEvent.click(screen.getByRole('button', { name: 'Create task', exact: true }));
  await waitFor(() => expect(api.createTask).toHaveBeenCalledWith('research', expect.objectContaining({ name: 'Summary' })));
+});
+
+it('copies a task into its current project and refreshes the task list',async()=>{
+ api.projectTasks.mockResolvedValue([{id:'original',name:'Original'}]);
+ api.copyTask.mockResolvedValue({id:'copy',name:'Original (copy)'});
+ render(<Platform/>);
+ fireEvent.click(await screen.findByLabelText('Actions for Original'));
+ fireEvent.click(screen.getByRole('menuitem',{name:'Copy task'}));
+ expect(api.copyTask).not.toHaveBeenCalled();
+ api.projectTasks.mockResolvedValue([{id:'original',name:'Original'},{id:'copy',name:'Original (copy)'}]);
+ fireEvent.click(screen.getByRole('button',{name:'Copy',exact:true}));
+ await waitFor(()=>expect(api.copyTask).toHaveBeenCalledWith('unassigned','original'));
+ expect(await screen.findByText('Original (copy)')).toBeVisible();
 });

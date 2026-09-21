@@ -120,3 +120,32 @@ def update_project(project_id: str, body: ProjectInput):
         temp.write_text(json.dumps(project, ensure_ascii=False, indent=2))
         temp.replace(path)
     return project
+
+
+@router.post('/{project_id}/tasks/{graph_id}/copy', status_code=201)
+def copy_task(project_id: str, graph_id: str):
+    """Copy definitions with a fresh execution identity; resources remain references."""
+    import copy
+    from backend.api import harness_api
+    if project_id != 'unassigned': get_project(project_id)
+    if not re.fullmatch(r'[a-z0-9_-]+', graph_id): raise HTTPException(404, 'Task not found')
+    original = graphs.load_graph(graph_id)
+    if not original: raise HTTPException(404, 'Task not found')
+    agents = harness_api.list_agents(graph_id)['agents']
+    name = f"{original['name']} (copy)"
+    created = graphs.create_graph(name, original.get('goal', ''))
+    try:
+        cloned = graphs.save_graph(created['id'], {
+            **copy.deepcopy(original), 'id':created['id'], 'name':name,
+            'project_id':None if project_id == 'unassigned' else project_id,
+            'task_id':uuid.uuid4().hex})
+        for agent in agents:
+            settings = {k:v for k,v in agent.items() if k in harness_api.AgentSettings.model_fields}
+            harness_api.create_agent(cloned['id'], harness_api.AgentSettings(**settings))
+        return cloned
+    except Exception:
+        # No partial task should appear after an unsuccessful copy.
+        for agent in harness_api.list_agents(created['id'])['agents']:
+            harness_api.remove_agent(created['id'], agent['id'])
+        graphs.delete_graph(created['id'])
+        raise

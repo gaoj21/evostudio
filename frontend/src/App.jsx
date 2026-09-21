@@ -104,7 +104,7 @@ function extractErrors(err) {
 // the saved layout.
 const MAIN_PANEL_IDS = ['sidebar', 'canvas', 'inspector'];
 
-export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
+export function Studio({ initialGraphId, onHome, projectId, initialRun, initialBatchId } = {}) {
   const [palette, setPalette] = useState([]);
   const [sourcePalette, setSourcePalette] = useState([]);
   const [graphs, setGraphs] = useState([]);
@@ -485,7 +485,8 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
         } else {
           await newGraph();
         }
-        if (initialRun) setActiveOverlay('run');
+        if (initialBatchId) await openPastBatch({batch_id:initialBatchId});
+        else if (initialRun) setActiveOverlay('run');
       } catch (err) {
         setErrors([`Could not reach backend: ${err.message}. Canvas is in offline scratch mode.`]);
         setGraph({ id: null, name: 'Untitled Workflow', goal: '' });

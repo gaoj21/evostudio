@@ -2,10 +2,11 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from './api.js';
 import RunResultPage from './features/execution/RunResultPage.jsx';
 
-export default function TaskDetail({ graphId, onBack, onEdit, onRun }) {
+export default function TaskDetail({ graphId, onBack, onEdit, onRun, onOpenBatch }) {
   const [graph,setGraph]=useState(null);
   const [plan,setPlan]=useState(null);
   const [runs,setRuns]=useState([]);
+  const [batches,setBatches]=useState([]);
   const [error,setError]=useState('');
   const [planError,setPlanError]=useState('');
   const [revision,setRevision]=useState(0);
@@ -38,6 +39,15 @@ export default function TaskDetail({ graphId, onBack, onEdit, onRun }) {
     const timer=setInterval(()=>{api.listResultRuns(graphId).then(r=>{if(active)setRuns(r);}).catch(e=>{if(active)setError(e.message);});},3000);
     return ()=>{active=false;clearInterval(timer);};
   },[graphId,runs]);
+  useEffect(()=>{
+    let active=true;
+    const load=()=>api.listBatches(graphId).then(result=>{
+      if(active)setBatches(result.batches || result);
+    }).catch(e=>{if(active)setError(e.message);});
+    load();
+    const timer=setInterval(load,3000);
+    return ()=>{active=false;clearInterval(timer);};
+  },[graphId,revision]);
   function inspect(run){
     overviewPosition.current=overviewRef.current?.scrollTop||0;
     returnRun.current=run.run_id;
@@ -69,6 +79,13 @@ export default function TaskDetail({ graphId, onBack, onEdit, onRun }) {
         <section className="project-task-card"><h2>Inputs</h2><p>Provided when you run this task.</p>{(plan?.inputs||[]).map(i=><div className="task-field" key={i.name}><strong>{i.description||i.name}</strong><small>{i.name} · {i.type} · {i.required?'Required':'Optional'}</small></div>)}{plan&&!plan.inputs?.length&&<p>No manual inputs required.</p>}</section>
         <section className="project-task-card"><h2>Execution</h2><div className="task-field"><strong>{nodes.length} workflow steps</strong><small>Model: platform configuration; review before running.</small></div><div className="task-field"><strong>Tools</strong><small>{tools.join(', ')||'None configured'}</small></div><div className="task-field"><strong>Skills</strong><small>{skills.join(', ')||'None configured'}</small></div><p>Memory behavior is configured per step in the editor.</p></section>
       </div>
+      <section className="project-task-section" aria-label="Batch history"><div className="task-section-heading"><h2>Batch runs</h2></div>
+        {!batches.length ? <p className="muted small">No batch runs yet.</p> : <div className="task-run-list">{batches.map(b=><button key={b.batch_id} onClick={()=>onOpenBatch?.(b.batch_id)}>
+          <span>{b.created_at ? new Date(b.created_at).toLocaleString() : b.batch_id}</span><strong>{b.status}</strong>
+          <span>{b.input_total ?? b.total ?? 0} records{b.error ? ` · ${b.error}` : ''}</span>
+          <span>{['interrupted','failed','cancelled'].includes(b.status) ? 'Open / Resume →' : 'Open batch →'}</span>
+        </button>)}</div>}
+      </section>
       <section className="project-task-section"><div className="task-section-heading"><h2>Recent runs</h2><button onClick={()=>setRevision(v=>v+1)}>Refresh</button></div>{!runs.length?<div className="project-empty"><h3>No runs yet</h3><p>Prepare a run to review inputs and settings. Nothing runs until you confirm.</p></div>:<div className="task-run-list">{runs.map(r=><button data-run-id={r.run_id} key={r.run_id} onClick={()=>inspect(r)}><span>{r.created_at?new Date(r.created_at).toLocaleString():r.run_id}</span><strong>{r.status}</strong><span>View result →</span></button>)}</div>}</section>
     </>}
   </main>;

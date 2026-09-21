@@ -3,13 +3,14 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import TaskDetail from './TaskDetail.jsx';
 import { api } from './api.js';
-vi.mock('./api.js',()=>({api:{getGraph:vi.fn(),listResultRuns:vi.fn(),runPlan:vi.fn(),getRun:vi.fn()}}));
+vi.mock('./api.js',()=>({api:{getGraph:vi.fn(),listResultRuns:vi.fn(),listBatches:vi.fn(),runPlan:vi.fn(),getRun:vi.fn()}}));
 beforeEach(()=>{
  vi.resetAllMocks();
  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
  window.matchMedia = vi.fn(() => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
  api.getGraph.mockResolvedValue({id:'g',name:'Summarize',goal:'Summarize feedback',tasks:[{tool_names:['Search'],skill_names:[]}]});
  api.listResultRuns.mockResolvedValue([]);
+ api.listBatches.mockResolvedValue([]);
  api.runPlan.mockResolvedValue({inputs:[{name:'input',description:'Customer comments',type:'str',required:true}]});
 });
 it('shows inputs and requires an explicit preparation action',async()=>{
@@ -120,4 +121,14 @@ it('collapses input data as a whole and provides a keyboard-accessible resize se
  expect(details.open).toBe(true);
  const separator=screen.getByRole('separator',{name:'Resize result and chat panels'});
  expect(separator).toHaveAttribute('tabindex','0');
+});
+
+it('keeps an interrupted batch discoverable even before its first result',async()=>{
+ api.listBatches.mockResolvedValue([{batch_id:'b0',status:'interrupted',total:0}]);
+ const open=vi.fn();
+ render(<TaskDetail graphId="g" onOpenBatch={open}/>);
+ expect(await screen.findByText('interrupted')).toBeVisible();
+ fireEvent.click(screen.getByText('Open / Resume →'));
+ expect(open).toHaveBeenCalledWith('b0');
+ expect(api.getRun).not.toHaveBeenCalled();
 });

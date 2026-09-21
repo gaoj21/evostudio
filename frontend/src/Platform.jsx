@@ -18,6 +18,7 @@ export default function Platform() {
   const [editor, setEditor] = useState(null);
   const [detail, setDetail] = useState(null);
   const [prepareRun, setPrepareRun] = useState(false);
+  const [initialBatchId, setInitialBatchId] = useState(null);
   const [form, setForm] = useState(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -76,6 +77,7 @@ export default function Platform() {
     const values = Object.fromEntries(new FormData(event.currentTarget));
     setBusy(true); setError('');
     try {
+      if (taskAction.kind === 'copy') await api.copyTask(selected, taskAction.task.id);
       if (taskAction.kind === 'delete') await api.deleteGraph(taskAction.task.id);
       if (taskAction.kind === 'rename-project') await api.updateProject(taskAction.task.id, { name: values.name.trim(), description: taskAction.task.description || '' });
       if (taskAction.kind === 'rename') await api.renameGraph(taskAction.task.id, values.name.trim());
@@ -98,8 +100,8 @@ export default function Platform() {
     ];
   }
 
-  if (editor) return <App key={editor} initialGraphId={editor} projectId={selected} initialRun={prepareRun} onHome={() => { setEditor(null); setPrepareRun(false); setDetail(null); setRevision(v => v + 1); }} />;
-  if (detail) return <TaskDetail key={detail} graphId={detail} onBack={() => { setDetail(null); setRevision(v => v + 1); }} onEdit={() => { setPrepareRun(false); setEditor(detail); }} onRun={() => { setPrepareRun(true); setEditor(detail); }} />;
+  if (editor) return <App key={editor} initialGraphId={editor} projectId={selected} initialRun={prepareRun} initialBatchId={initialBatchId} onHome={() => { setEditor(null); setInitialBatchId(null); setPrepareRun(false); setDetail(null); setRevision(v => v + 1); }} />;
+  if (detail) return <TaskDetail onOpenBatch={id => {setInitialBatchId(id);setPrepareRun(false);setEditor(detail);}} key={detail} graphId={detail} onBack={() => { setDetail(null); setRevision(v => v + 1); }} onEdit={() => { setPrepareRun(false); setEditor(detail); }} onRun={() => { setPrepareRun(true); setEditor(detail); }} />;
   return <div className="platform">
     <aside className="project-sidebar">
       <div className="platform-brand"><span className="brand-mark">E</span> EvoAgentX <small>WORKSPACE</small></div>
@@ -139,18 +141,19 @@ export default function Platform() {
     {menu && <ResourceMenu menu={menu} onClose={() => setMenu(null)} items={[
       { label: 'Open task', action: () => setDetail(menu.task.id) },
       { label: 'Edit workflow', action: () => { setPrepareRun(false); setEditor(menu.task.id); } },
-      ...['rename', 'move', 'delete'].map(kind => ({ label: { rename: 'Rename', move: 'Move to project…', delete: 'Delete task…' }[kind], danger: kind === 'delete', disabled: busy, action: () => { setError(''); setTaskAction({ kind, task: menu.task }); } })),
+      ...['copy', 'rename', 'move', 'delete'].map(kind => ({ label: { copy: 'Copy task', rename: 'Rename', move: 'Move to project…', delete: 'Delete task…' }[kind], danger: kind === 'delete', disabled: busy, action: () => { setError(''); setTaskAction({ kind, task: menu.task }); } })),
     ]} />}
     {taskAction && <div className="resource-dialog-backdrop"><section role="dialog" aria-modal="true" aria-label="Task action" className="project-form resource-dialog" onKeyDown={e => { if (e.key === 'Escape' && !busy) setTaskAction(null); }}>
-      <h2>{{ 'rename-project': 'Rename project', rename: 'Rename task', move: 'Move task', delete: 'Delete task?', 'delete-project': 'Delete project?' }[taskAction.kind]}</h2>
+      <h2>{{ copy: 'Copy task?', 'rename-project': 'Rename project', rename: 'Rename task', move: 'Move task', delete: 'Delete task?', 'delete-project': 'Delete project?' }[taskAction.kind]}</h2>
       <p>{taskAction.task.name}</p>
       {error && <p role="alert" className="platform-error">{error}</p>}
       <form onSubmit={applyTaskAction}>
         {['rename', 'rename-project'].includes(taskAction.kind) && <label>Name<input autoFocus name="name" required maxLength={120} defaultValue={taskAction.task.name} /></label>}
         {taskAction.kind === 'move' && <label>Project<select autoFocus name="project" defaultValue={selected}><option value="unassigned">Unassigned tasks</option>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>}
+        {taskAction.kind === 'copy' && <p>Copy the workflow and canvas configuration into this project. Data resources, tools and shared Memory remain references; run and chat history are not copied.</p>}
         {taskAction.kind === 'delete' && <p>Remove this task and its workflow definition. Stored run results and Memory data are retained.</p>}
         {taskAction.kind === 'delete-project' && <p>Only empty projects can be deleted. Move or delete their tasks first.</p>}
-        <div className="form-actions"><button autoFocus={taskAction.kind.startsWith('delete')} type="button" disabled={busy} onClick={() => setTaskAction(null)}>Cancel</button><button disabled={busy} className={taskAction.kind.startsWith('delete') ? 'danger' : 'platform-primary'}>{busy ? 'Saving…' : taskAction.kind.startsWith('delete') ? 'Delete' : 'Save'}</button></div>
+        <div className="form-actions"><button autoFocus={taskAction.kind.startsWith('delete')} type="button" disabled={busy} onClick={() => setTaskAction(null)}>Cancel</button><button disabled={busy} className={taskAction.kind.startsWith('delete') ? 'danger' : 'platform-primary'}>{busy ? 'Saving…' : taskAction.kind.startsWith('delete') ? 'Delete' : taskAction.kind === 'copy' ? 'Copy' : 'Save'}</button></div>
       </form>
     </section></div>}
   </div>;
