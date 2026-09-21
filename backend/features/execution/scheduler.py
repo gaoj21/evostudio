@@ -7,6 +7,7 @@ occurrences. Schedule timing is separate from Input Watch polling.
 """
 
 import json
+import copy
 import math
 import os
 import uuid
@@ -166,6 +167,13 @@ def set_schedule(graph: dict, body: dict) -> dict:
         if existing.get('in_flight') and changed:
             raise ScheduleError('Finish or recover the current occurrence before changing its frequency.')
         schedule = {**existing, **config}
+        if not schedule.get('execution_snapshot'):
+            schedule['execution_snapshot'] = {'graph': copy.deepcopy(graph)}
+        from .scheduled_execution import execution_kind
+        try:
+            execution_kind(schedule['execution_snapshot']['graph'])
+        except ValueError as exc:
+            raise ScheduleError(str(exc)) from exc
         experiment = existing.get('experiment_id') or uuid.uuid4().hex
         schedule['experiment_id'] = experiment
         schedule['session'] = config['session'] or existing.get('session') or f'schedule:{experiment}'
@@ -198,11 +206,19 @@ def _reconcile(schedule):
     occurrence = schedule.get('in_flight')
     if not occurrence:
         return False
-    run = runner.get_run(occurrence['run_id'])
-    if run and run.get('status') == 'success':
+    from .scheduled_execution import get_execution
+    run = get_execution(occurrence)
+    if run and run.get('persistence_error'):
+        from backend.api import batch
+        retry = batch.retry_persistence if occurrence.get('kind') == 'batch' else runner.retry_persistence
+        if not retry(occurrence['run_id']):
+            schedule['needs_resume'] = True
+            schedule['last_error'] = run['persistence_error']
+            return False
+    if run and run.get('status') in ('success', 'succeeded'):
         _advance(schedule, occurrence['due'])
         return False
-    if run and run.get('status') in ('running', 'pending', 'queued', 'stopping'):
+    if run and run.get('status') in ('running', 'pending', 'queued', 'stopping', 'cancelling'):
         return True
     schedule['needs_resume'] = True
     schedule['last_error'] = (run or {}).get('error') or 'Scheduled occurrence was interrupted. Choose a recovery strategy and Resume.'
@@ -218,6 +234,10 @@ def resume(graph_id, recovery_policy):
             raise ScheduleError('No schedule exists for this workflow.')
         if _reconcile(schedule):
             raise ScheduleError('An occurrence is still running; it will finish before the next one starts.')
+        from .scheduled_execution import get_execution
+        pending = schedule.get('in_flight')
+        if pending and (get_execution(pending) or {}).get('persistence_error'):
+            raise ScheduleError(schedule.get('last_error') or 'Execution state could not be saved.')
         stop(graph_id)
         now = _now()
         anchor = _parse(schedule.get('last_completed_due') or schedule.get('last_fire')) or now
@@ -234,7 +254,12 @@ def resume(graph_id, recovery_policy):
                     if recovery_policy == 'latest' and following > now:
                         break
                     due = following
-        schedule.update(enabled=True, needs_resume=False, in_flight=None,
+        occurrence = schedule.get('in_flight')
+        if occurrence and _parse(occurrence['due']) == due:
+            occurrence = {**occurrence, 'retry_pending': True}
+        else:
+            occurrence = None
+        schedule.update(enabled=True, needs_resume=False, in_flight=occurrence,
                         last_recovery_policy=recovery_policy, last_error=None,
                         next_fire=due.isoformat())
         _save(graph_id, schedule)
@@ -269,7 +294,9 @@ def status(graph_id: str) -> dict:
         return {"graph_id": graph_id, "scheduled": False}
     with _lock:
         running = graph_id in _threads
-    return {**schedule, "scheduled": True, "running": running}
+    return {**{k: v for k, v in schedule.items() if k != 'execution_snapshot'},
+            'uses_saved_workflow': bool(schedule.get('execution_snapshot')),
+            "scheduled": True, "running": running}
 
 
 def _start_thread(graph: dict, schedule: dict) -> None:
@@ -312,7 +339,7 @@ def _fire(graph_id, schedule, stop_event=None):
         schedule = load(graph_id) or schedule
         if not schedule.get('enabled') or schedule.get('needs_resume'):
             return
-        if schedule.get('in_flight'):
+        if schedule.get('in_flight') and not schedule['in_flight'].get('retry_pending'):
             _reconcile(schedule)
             _save(graph_id, schedule)
             return
@@ -320,21 +347,39 @@ def _fire(graph_id, schedule, stop_event=None):
         experiment = schedule.setdefault('experiment_id', uuid.uuid4().hex)
         schedule['session'] = schedule.get('session') or f'schedule:{experiment}'
         run_id = uuid.uuid5(uuid.NAMESPACE_URL, f'evostudio:{experiment}:{due}').hex[:20]
-        schedule['in_flight'] = {'due': due, 'run_id': run_id}
+        from .scheduled_execution import execution_kind, launch
+        graph = copy.deepcopy((schedule.get('execution_snapshot') or {}).get('graph'))
+        if graph is None:
+            graph = graph_store.load_graph(graph_id)
+            if graph is None:
+                schedule.update(needs_resume=True, last_error=f"Workflow '{graph_id}' no longer exists")
+                _save(graph_id, schedule)
+                return
+            schedule['execution_snapshot'] = {'graph': copy.deepcopy(graph)}
+        graph['id'] = graph_id
+        try:
+            occurrence = schedule.get('in_flight') or {'due': due, 'run_id': run_id, 'kind': execution_kind(graph)}
+        except ValueError as exc:
+            schedule.update(needs_resume=True, last_error=str(exc))
+            _save(graph_id, schedule)
+            return
+        occurrence.pop('retry_pending', None)
+        if 'inputs' not in occurrence:
+            occurrence['inputs'] = dict(schedule.get('inputs') or {})
+            if schedule.get('time_input'):
+                occurrence['inputs'][schedule['time_input']] = due
+        occurrence.setdefault('session', schedule['session'])
+        run_id = occurrence['run_id']
+        schedule['in_flight'] = occurrence
         schedule['last_run_id'] = run_id
         schedule['last_fire'] = _now().isoformat()
         schedule['fires'] = int(schedule.get('fires') or 0) + 1
         _save(graph_id, schedule)  # claim survives a crash before dispatch
         try:
-            graph = graph_store.load_graph(graph_id)
-            if graph is None:
+            if graph_store.load_graph(graph_id) is None:
                 raise ScheduleError(f"Workflow '{graph_id}' no longer exists")
-            inputs = dict(schedule.get('inputs') or {})
-            if schedule.get('time_input'):
-                inputs[schedule['time_input']] = due
-            returned = runner.start_run(graph, inputs, background=True,
-                                       session=schedule['session'], run_id=run_id,
-                                       session_started_at=due)
+            returned = launch(graph, occurrence['inputs'],
+                              {**schedule, 'session': occurrence['session']}, occurrence)
             schedule['last_run_id'] = returned
             schedule['in_flight']['run_id'] = returned
             schedule['last_error'] = None

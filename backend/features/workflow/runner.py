@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 from llm import get_evoagentx_llm
 
+from backend.features.persistence import write_json
 from backend.features.memory.identity import execution_snapshot
 from backend.features.memory.bindings import runtime_context
 from backend.api import memory_policy
@@ -122,6 +123,7 @@ def start_run(graph: dict, inputs: dict, background: bool = True, gray_zone=None
         # their batch's start, a single run its own. Names the run's folder.
         "session_started_at": session_started_at,
         "input_summary": _summarise_inputs(inputs),
+        "_executing": True,
         "_graph": None,  # live WorkFlowGraph, set once execution starts
         "_gray_zone": gray_zone,
     }
@@ -130,7 +132,10 @@ def start_run(graph: dict, inputs: dict, background: bool = True, gray_zone=None
     # Written before execution starts, not only when it ends: a run that the
     # process never finishes (a restart, a crash) would otherwise vanish, and
     # the client polling it gets a 404 for something it just started.
-    _persist_run(state)
+    if not _persist_run(state):
+        with _lock:
+            _runs.pop(run_id, None)
+        raise OSError("Could not persist Run; execution was not started.")
     if background:
         thread = threading.Thread(
             target=_execute_run, args=(run_id, graph, inputs or {}), daemon=True
@@ -446,10 +451,14 @@ async def _walk(plan: dict, graph_doc: dict, inputs: dict, state: dict,
                     out = supplied
                 else:
                     try:
-                        from backend.features.data.input_composition import is_reference, load_primary
-                        found = load_primary(graph_doc, task) if (task.get('source') or {}).get('type') == 'dataloader' and not is_reference(task) else sources.records_from_source_node(task)
+                        from backend.features.data.input_composition import is_reference, read_record
                         index = 0 if is_reference(task) else (state.get("record_index") or 0)
-                        out = {**dict(found[index]), **supplied}
+                        if (task.get('source') or {}).get('type') == 'dataloader' and not is_reference(task):
+                            record = read_record(graph_doc, task, index, external,
+                                                 lambda: state.get('_cancel_requested', False))
+                        else:
+                            record = sources.records_from_source_node(task)[index]
+                        out = {**dict(record), **supplied}
                     except NodeError:
                         raise
                     except Exception as e:
@@ -645,6 +654,9 @@ def _execute_run(run_id: str, graph_doc: dict, inputs: dict) -> None:
             _save_ltm(graph_doc, memories, graph, env, state, succeeded=False)
     finally:
         persisted = _persist_run(state)
+        if not persisted:
+            state["persistence_error"] = "Run completed in memory but could not be saved. Restore disk access before recovery."
+        state["_executing"] = False
         try:
             state["_save_output_flags"] = {
                 t.get("name"): t.get("save_output", True)
@@ -1148,8 +1160,7 @@ def mark_interrupted() -> int:
             "Nothing was resumed — start it again if you still need the result."
         )
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+            write_json(path, data)
             marked += 1
         except OSError:
             continue
@@ -1159,12 +1170,20 @@ def mark_interrupted() -> int:
 def _persist_run(state: dict) -> bool:
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     data = _public(state)
+    data.pop("persistence_error", None)
     try:
-        with open(RUNS_DIR / f"{state['run_id']}.json", "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+        write_json(RUNS_DIR / f"{state['run_id']}.json", data)
+        state.pop("persistence_error", None)
         return True
     except OSError:
         return False
+
+
+def retry_persistence(run_id):
+    """Retry saving a settled in-memory Run without executing it again."""
+    with _lock:
+        state = _runs.get(run_id)
+        return bool(state is not None and _persist_run(state))
 
 
 def _public(state: dict) -> dict:
@@ -1210,7 +1229,11 @@ def get_run(run_id: str) -> dict | None:
     with _lock:
         state = _runs.get(run_id)
         if state is not None:
-            return _public(state)
+            result = _public(state)
+            if state.get("_executing") and result.get("status") in ("success", "failed", "cancelled"):
+                # Completion includes Memory writes and the durable Run checkpoint.
+                result["status"] = "running"
+            return result
     return _read_run(run_id)
 
 

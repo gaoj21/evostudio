@@ -21,7 +21,7 @@ def period_settings(body):
     return period, date_field
 
 
-def chunk_source(graph, node, config, size, period, date_field, metric, label_key, skip=0):
+def chunk_source(graph, node, config, size, period, date_field, metric, label_key, skip=0, runtime_inputs=None):
     """A generator factory over the Dataset's records, starting after `skip`
     records already read. Yields (mapped records, labels, raw records read)."""
     config = copy.deepcopy(config)
@@ -41,16 +41,19 @@ def chunk_source(graph, node, config, size, period, date_field, metric, label_ke
                 if refs:
                     rows = input_composition.merge(rows, refs)
                 mapped, labels = source_collection.mapped_chunk(graph, node, rows, metric, label_key)
+                if runtime_inputs:
+                    mapped = [{**row, **runtime_inputs} for row in mapped]
                 yield mapped, labels, read
         finally:
             stream.close()
     return chunks
 
 
-def start(graph, node, body):
+def start(graph, node, body, *, batch_id=None, session=None, session_started_at=None, run_context=None):
     graph = copy.deepcopy(graph)
     graphs.validate_graph(graph)
-    config = copy.deepcopy(node['source'])
+    runtime_inputs = copy.deepcopy(body.get('inputs') or {})
+    config = input_composition.runtime_config(copy.deepcopy(node['source']), runtime_inputs, run_context)
     source = {'type': 'canvas', 'node': node['name'], 'config': config}
     size = loader_batch_size(source)
     requested = body.get('llm_batch_size')
@@ -65,10 +68,11 @@ def start(graph, node, body):
     period, date_field = period_settings(body)
     metric, label_key = body.get('metric'), body.get('label_key')
     # Kept with the batch so a Resume can continue reading the same way.
-    source.update(period=period, date_field=date_field, metric=metric, label_key=label_key)
-    chunks = chunk_source(graph, node, config, size, period, date_field, metric, label_key)
+    source.update(period=period, date_field=date_field, metric=metric, label_key=label_key, runtime_inputs=runtime_inputs)
+    chunks = chunk_source(graph, node, config, size, period, date_field, metric, label_key, runtime_inputs=runtime_inputs)
     bid = batch.start_batch(graph, [], source, gray_zone=zone, workers=workers,
-                            metric=metric, record_chunks=chunks)
+                            metric=metric, record_chunks=chunks, batch_id=batch_id,
+                            session=session, session_started_at=session_started_at)
     return {'batch_id': bid, 'total': None, 'streaming': True}
 
 
@@ -86,7 +90,7 @@ def resume_chunks(graph, state):
         read = len(state.get('items') or [])
     return chunk_source(graph, node, config, size, source.get('period', 'none'),
                         source.get('date_field') or '', source.get('metric'),
-                        source.get('label_key'), skip=read)
+                        source.get('label_key'), skip=read, runtime_inputs=source.get('runtime_inputs'))
 
 
 def period_chunks(stream, size, period, date_field):

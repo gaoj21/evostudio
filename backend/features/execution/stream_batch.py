@@ -7,6 +7,7 @@ can be resumed: unfinished records run first, in order, then reading
 continues where it stopped.
 """
 import json
+from backend.features.persistence import write_json
 from . import batch
 from backend.api import runner
 
@@ -18,7 +19,7 @@ def _archive(state, batch_id, records, labels):
         relative = f'{batch_id}-inputs/{index}.json'
         path = batch.BATCHES_DIR / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(record, ensure_ascii=False, allow_nan=False))
+        write_json(path, record)
         item = {'index': index, 'status': 'pending', 'run_id': None, 'inputs': record, 'input_file': relative,
                 'output_summary': None, 'error': None, 'review_status': None,
                 'label': labels[i] if labels else None, 'score': None, 'score_detail': None}
@@ -38,7 +39,9 @@ def _release(pairs):
         item['inputs_archived'] = True
         if item.get('run_id'):
             with runner._lock:
-                runner._runs.pop(item['run_id'], None)
+                live = runner._runs.get(item['run_id']) or {}
+                if not live.get('persistence_error'):
+                    runner._runs.pop(item['run_id'], None)
 
 
 def _consume(batch_id, graph, iterator, workers):
@@ -51,6 +54,8 @@ def _consume(batch_id, graph, iterator, workers):
         pairs = _archive(state, batch_id, records, labels)
         with batch._lock:
             state['records_read'] = state.get('records_read', 0) + read
+        # Save both input files and the read cursor before dispatching any tools.
+        batch._persist_batch(state)
         batch._execute_batch(batch_id, graph, pairs, workers, finalize=False)
         _release(pairs)
         batch._persist_batch(state)

@@ -58,3 +58,34 @@ def load_primary(graph, main=None):
         from .dataloaders import records
         return records({**config, 'reference_inputs': refs})
     return merge(sources.records_from_source_node(main), refs)
+
+
+def runtime_config(config, inputs=None, context=None):
+    """Runtime inputs override reader defaults; context is available to Dataset code."""
+    return {**config, 'reader_config': {**(config.get('reader_config') or {}),
+            **(inputs or {}), **({'run_context': context} if context else {})}}
+
+
+def read_record(graph, node, index=0, inputs=None, cancelled=lambda: False):
+    """Read one selected Python Dataset record without materializing the dataset."""
+    config = node.get('source') or {}
+    if config.get('loader') != 'python' or is_reference(node):
+        return load_primary(graph, node)[index]
+    if index < 0 or (config.get('n') and index >= config['n']):
+        raise sources.SourceError('Record index is outside the configured sample count.')
+    from .dataset_stream import chunks
+    refs = snapshot(graph, node)
+    config = runtime_config(config, inputs)
+    config.update(offset=config.get('offset', 0) + index, n=1,
+                  read_batch_size=1, reference_inputs=refs)
+    stream = chunks(config, cancelled)
+    try:
+        first = next(stream, [])
+        if not first:
+            if cancelled():
+                import asyncio
+                raise asyncio.CancelledError()
+            raise sources.SourceError('DataLoader produced no record at this index.')
+        return merge([first[0]], refs)[0] if refs else first[0]
+    finally:
+        stream.close()

@@ -7,6 +7,8 @@ and is persisted to backend/data/batches/{batch_id}.json on completion.
 """
 
 import json
+import copy
+from backend.features.persistence import write_json
 import threading
 import time
 import uuid
@@ -44,7 +46,8 @@ def _summarize(text, limit: int = _SUMMARY_CHARS) -> str:
 
 def start_batch(graph: dict, records: list[dict], source: dict, gray_zone=None,
                 workers: int = 2, metric: str | None = None,
-                labels: list | None = None, record_chunks=None) -> str:
+                labels: list | None = None, record_chunks=None, *, batch_id=None,
+                session=None, session_started_at=None) -> str:
     """Start a batch over pre-mapped input records; returns the batch_id.
 
     With `metric` and `labels`, the batch is an evaluation: each item is scored
@@ -59,12 +62,15 @@ def start_batch(graph: dict, records: list[dict], source: dict, gray_zone=None,
     size = provider_batch.validate(graph, record_batch_size if record_batch_size is not None and requested is not None else requested)
     if size is not None:
         graph = {**graph, '_llm_batch_size': size}
-    batch_id = uuid.uuid4().hex[:12]
+    graph, source = copy.deepcopy(graph), copy.deepcopy(source)
+    batch_id = batch_id or uuid.uuid4().hex[:12]
     if size is not None:
         workers = min(size, MAX_WORKERS)
     workers = max(1, min(int(workers or 2), MAX_WORKERS))
     state = {
         "batch_id": batch_id,
+        "session": session,
+        "session_started_at": session_started_at,
         "graph_id": graph.get("id"),
         "execution_snapshot": {"graph": graph, "source": source, "workers": workers},
         "status": "running",
@@ -95,7 +101,12 @@ def start_batch(graph: dict, records: list[dict], source: dict, gray_zone=None,
         _batches[batch_id] = state
     # Persisted before execution: a batch the process never finishes would
     # otherwise disappear, leaving the canvas polling an id nothing knows.
-    _persist_batch(state)
+    try:
+        _persist_batch(state)
+    except OSError:
+        with _lock:
+            _batches.pop(batch_id, None)
+        raise
     if record_chunks is not None:
         from .stream_batch import execute_stream
         thread = threading.Thread(target=execute_stream, args=(batch_id,graph,record_chunks,workers),daemon=True)
@@ -154,14 +165,21 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
             item["status"] = "running"
             # pre-assign the run id so live node progress is visible while
             # this item executes (start_run runs synchronously here)
-            item["run_id"] = uuid.uuid4().hex[:12]
+            item["run_id"] = (uuid.uuid5(uuid.NAMESPACE_URL, f"{batch_id}:{item['index']}").hex[:20]
+                              if state.get("session") else uuid.uuid4().hex[:12])
         try:
+            # A crash after Run completion must leave an ID recovery can reconcile.
+            with _lock:
+                _persist_batch(state)
             runner.start_run(graph, record, background=False,
                              gray_zone=state.get("gray_zone"),
                              run_id=item["run_id"], batch_id=batch_id,
-                             session_started_at=state.get("created_at"),
+                             session_started_at=state.get("session_started_at") or state.get("created_at"),
+                             **({"session": state["session"]} if state.get("session") else {}),
                              **({"llm_batch_size": state["llm_batch_size"]} if state.get("llm_batch_size") else {}))
             run = runner.get_run(item["run_id"]) or {}
+            if run.get("persistence_error"):
+                raise OSError(run["persistence_error"])
             with _lock:
                 item["status"] = run.get("status", "failed")
                 item["error"] = run.get("error")
@@ -400,11 +418,12 @@ def resume_batch(batch_id: str, graph: dict) -> dict:
 
     The records that succeeded are kept, with their scores; the ones that
     were cancelled, interrupted by a restart, or failed are run again, in
-    their original order, on the workflow as it is now and the memory as it
-    is now. A stepped sample's remaining steps therefore read what its
+    their original order, on the saved workflow snapshot and retained memory. A stepped sample's remaining steps therefore read what its
     earlier steps wrote — which is why the memory must not be reset between
     stopping and resuming.
     """
+    recovered_scores = []
+    reconciled = False
     with _lock:
         state = _batches.get(batch_id)
         if state is None:
@@ -415,6 +434,9 @@ def resume_batch(batch_id: str, graph: dict) -> dict:
             return {"resumed": False, "reason": "batch is still running"}
         if state.get("graph_id") and graph.get("id") and state["graph_id"] != graph.get("id"):
             return {"resumed": False, "reason": "batch belongs to another workflow"}
+        graph = copy.deepcopy((state.get("execution_snapshot") or {}).get("graph") or graph)
+        # Workflow renames move storage but do not change the saved execution plan.
+        graph["id"] = state.get("graph_id") or graph.get("id")
         streaming = bool(state.get('streaming'))
         unread = streaming and not state.get('collection_complete')
         chunks = None
@@ -424,8 +446,19 @@ def resume_batch(batch_id: str, graph: dict) -> dict:
                 chunks = resume_chunks(graph, state)
             except Exception as exc:
                 return {"resumed": False, "reason": str(exc)}
+        # A Run may finish before the batch checkpoint is written. Keep that work.
+        for item in state.get('items', []):
+            if item.get('status') == 'success' or not item.get('run_id'):
+                continue
+            run = runner._read_run(item['run_id']) or {}
+            if run.get('status') == 'success' and not run.get('persistence_error'):
+                reconciled = True
+                item.update(status='success', error=None, retryable=False,
+                            output_summary=_summarize(json.dumps(run.get('result'), default=str)))
+                if state.get('metric'):
+                    recovered_scores.append((item, run.get('result')))
         todo = unfinished(state)
-        if not todo and chunks is None:
+        if not todo and chunks is None and not reconciled and not state.get('session'):
             return {"resumed": False, "reason": "nothing left to run"}
         kept = len(state.get("items") or []) - len(todo)
         # Finished steps that come after a step being run again: their
@@ -445,6 +478,8 @@ def resume_batch(batch_id: str, graph: dict) -> dict:
         _batches[batch_id] = state
         pairs = [(item, json.loads((BATCHES_DIR / item['input_file']).read_text()) if item.get('input_file') else item.get('inputs') or {}) for item in todo]
         workers = max(1, min(int(state.get("workers") or 2), MAX_WORKERS))
+    for item, result in recovered_scores:
+        _score_item(state, item, result)
     _persist_batch(state)
     if streaming:
         from .stream_batch import resume_stream
@@ -539,8 +574,7 @@ def mark_interrupted() -> int:
                 item["status"] = "failed"
                 item["error"] = "Interrupted by a server restart."
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+            write_json(path, data)
             marked += 1
         except OSError:
             continue
@@ -549,11 +583,25 @@ def mark_interrupted() -> int:
 
 def _persist_batch(state: dict) -> None:
     BATCHES_DIR.mkdir(parents=True, exist_ok=True)
+    data = {k: v for k, v in state.items() if k != "persistence_error"}
     try:
-        with open(BATCHES_DIR / f"{state['batch_id']}.json", "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2, ensure_ascii=False, default=str)
-    except OSError:
-        pass
+        write_json(BATCHES_DIR / f"{state['batch_id']}.json", data)
+        state.pop("persistence_error", None)
+    except OSError as exc:
+        state["persistence_error"] = f"Could not save batch: {exc}"
+        raise
+
+
+def retry_persistence(batch_id):
+    with _lock:
+        state = _batches.get(batch_id)
+        if state is None:
+            return False
+        try:
+            _persist_batch(state)
+            return True
+        except OSError:
+            return False
 
 
 def apply_review_outcome(run_id: str, review: dict) -> None:

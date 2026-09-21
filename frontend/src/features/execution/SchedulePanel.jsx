@@ -124,8 +124,8 @@ export default function SchedulePanel({ open, graphId, onClose }) {
         </div>
 
         <p className="muted small">
-          Runs this workflow on a timer, whether or not anything changed. Each fire
-          is an ordinary run: it appears in run history and costs what a run costs.
+          Runs the saved workflow on a timer. A Python DataLoader processes all configured
+          records in batches; each occurrence finishes only after the whole batch succeeds.
         </p>
 
         {on && !schedule.needs_resume && (
@@ -188,9 +188,11 @@ export default function SchedulePanel({ open, graphId, onClose }) {
           </select></div>
         <div className="field"><label htmlFor="sched-time-input">Scheduled time input (optional)</label>
           <input id="sched-time-input" value={timeInput} onChange={e => setTimeInput(e.target.value)} placeholder="Input field to receive the original scheduled timestamp" />
-          <p className="muted small">Use this field in your DataLoader to select the correct period during catch-up.</p></div>
+          <p className="muted small">Your Dataset receives this field in config. The original scheduled timestamp is also available as config.run_context.scheduled_at; use it to select the period during catch-up.</p></div>
         {schedule?.scheduled && <div className="chat-note">
           <div>Experiment: {schedule.experiment_id || 'existing schedule'} · Memory is retained between occurrences.</div>
+          {schedule.uses_saved_workflow && <div>Uses the workflow saved when this schedule was created. To use canvas changes, remove this schedule and create a new one.</div>}
+          {schedule.in_flight?.kind === 'batch' && <div>Current batch: {schedule.in_flight.run_id}</div>}
           <div>Next planned time: {schedule.next_fire || 'not set'}</div>
           {schedule.last_completed_due && <div>Last completed period: {schedule.last_completed_due}</div>}
           {schedule.needs_resume && <div className="chat-error">Recovery needed: {schedule.last_error}</div>}

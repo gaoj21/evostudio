@@ -113,7 +113,7 @@ function BatchRows({ batches, onOpenBatch, onResumeBatch, picked, onPick }) {
         <button
           type="button"
           className="run-row-resume"
-          title="Run the records that did not finish; the finished ones are kept."
+          title="Continue with the saved workflow when available; finished records are kept."
           onClick={() => onResumeBatch(batch)}
         >
           {resumeLabel(batch)}
