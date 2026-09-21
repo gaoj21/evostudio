@@ -85,3 +85,14 @@ def test_static_interface_validates_factory_and_reference_name(preview_client):
     config['code'] += '\ndef build_dataset(resource): return None'
     result = client.post('/api/dataloaders/preview', json={**config,'input_mode':'reference','reference_field':'_dataloader'})
     assert result.status_code == 422
+
+
+def test_explicit_sampling_can_detect_fields_even_if_declaration_is_invalid(preview_client, monkeypatch):
+    client, rid = preview_client
+    code = 'OUTPUT_SCHEMA = [{"name":"wrong","type":"invalid"}]\ndef build_dataset(resource): pass'
+    monkeypatch.setattr(dataloaders, 'raw_records', lambda *a, **kw: ([{'actual':3}], {}))
+    config = {'loader':'python','resource_id':rid,'code':code}
+    assert client.post('/api/dataloaders/preview', json=config).status_code == 422
+    sampled = client.post('/api/dataloaders/preview', json={**config,'preview_mode':'sample'})
+    assert sampled.status_code == 200, sampled.text
+    assert sampled.json()['fields'][0]['name'] == 'actual'

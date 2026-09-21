@@ -69,3 +69,16 @@ class OtherDataset:
 ])
 def test_ambiguous_or_invalid_dataset_entrypoint_is_rejected(code):
     with pytest.raises(ValueError): describe(code)
+
+
+def test_describe_distinguishes_declared_sampled_and_invalid_outputs():
+    missing = describe(CODE)
+    assert missing['output_schema_available'] is False
+    assert 'Sample 5' in missing['output_status']
+    declared = describe('OUTPUT_SCHEMA = [{"name":"value","type":"int"}]\n' + CODE)
+    assert declared['output_schema_available'] is True
+    assert declared['outputs'][0]['name'] == 'value'
+    invalid = describe('OUTPUT_SCHEMA = [{"name":"value","type":"invalid"}]\n' + CODE)
+    assert invalid['output_schema_available'] is False
+    assert 'types' in invalid['output_schema_error']
+    assert invalid['inputs'] == missing['inputs']  # sampling inputs still usable

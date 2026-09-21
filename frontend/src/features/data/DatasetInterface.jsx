@@ -37,11 +37,11 @@ export default function DatasetInterface({code, values, onChange, onSchema, disa
   </section>;
 }
 
-export function DatasetOutputs({fields}) {
+export function DatasetOutputs({fields, mode}) {
   return <section aria-label="Dataset output interface"><h4>Outputs · one workflow record</h4>
-    {!fields?.length ? <p className="muted small">Preview with your inputs to identify outputs before connecting downstream nodes.</p> : <>
+    {!fields?.length ? <p className="muted small">Apply OUTPUT_SCHEMA or sample records to identify outputs before connecting downstream nodes.</p> : <>
       <table><thead><tr><th>Field</th><th>Type</th><th>Nullable</th><th>Example</th></tr></thead><tbody>{fields.map(f=><tr key={f.name}><td>{f.name}</td><td>{f.type}</td><td>{f.nullable?'Yes':'No'}</td><td><code style={{overflowWrap:'anywhere'}}>{JSON.stringify(f.sample)?.slice(0,160) ?? '—'}</code></td></tr>)}</tbody></table>
-      <p className="muted small">These fields are applied to the canvas output ports. Map them to downstream node inputs. Types describe the previewed data.</p>
+      <p className="muted small">These fields are applied to the canvas output ports. Map them to downstream node inputs. {mode === 'declared' ? 'Types come from OUTPUT_SCHEMA and have not been verified against data.' : 'Sampled fields may not cover every record in the dataset.'}</p>
     </>}
   </section>;
 }

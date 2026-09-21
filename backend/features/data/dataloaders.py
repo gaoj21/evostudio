@@ -376,7 +376,7 @@ def preview(config: dict = Body(...)):
             # Reading a code contract must not depend on resources or Run settings.
             code = config.get('code') or ''
             describe(code)
-            fields = declared_outputs(code)
+            fields = None if sample_requested else declared_outputs(code)
             if fields is not None and not sample_requested:
                 if config.get('input_mode') == 'reference':
                     field = config.get('reference_field') or 'reference_data'

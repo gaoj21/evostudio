@@ -75,9 +75,19 @@ def describe(code, entrypoint="build_dataset", provided=None):
             elif params[key]['origin']=='config':
                 params[key]['required'] |= required
                 if params[key]['type']=='any' and field['type']!='any': params[key].update(type=field['type'],default=default)
+    output_info = {}
+    if entrypoint == 'build_dataset':
+        try:
+            fields = declared_outputs(code)
+            output_info = {'outputs': fields or [], 'output_schema_available': fields is not None,
+                           'output_status': 'Declared OUTPUT_SCHEMA; no code was executed.' if fields is not None else
+                           'No OUTPUT_SCHEMA declared. Sample 5 records to detect and apply outputs.'}
+        except (ValueError, TypeError) as exc:
+            output_info = {'output_schema_available': False, 'output_schema_error': str(exc),
+                           'output_status': 'Fix OUTPUT_SCHEMA or sample records to detect outputs.'}
     return {'entrypoint':entrypoint, 'code_hash':hashlib.sha256(code.encode()).hexdigest(),'inputs':list(params.values()),
             'provided_inputs':sorted(reserved - {'config'}), 'warnings':sorted(set(warnings)),
-            'outputs':[], 'output_status':'Run a preview with your inputs to infer output fields.'}
+            'outputs':[], 'output_status':'Run a preview with your inputs to infer output fields.', **output_info}
 
 
 def arguments(code, values, entrypoint="build_dataset", provided=None):

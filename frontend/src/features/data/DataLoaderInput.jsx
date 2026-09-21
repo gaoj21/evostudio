@@ -78,12 +78,12 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
   const apiSource = config.loader === 'source' && !!config.source_config?.type && sourceTypes !== null && !sourceTypes[config.source_config.type]?.local;
   return <section aria-label="DataLoader">
     {apiSource && <p role="status" className="muted small" data-testid="api-source-note">This Input reads an API source. A batch run collects it first, in the background, over the whole configured range; the collected records are saved as a data resource. To preprocess them in code, choose that resource in a PyTorch Dataset Input.</p>}
-    {config.loader !== 'source' && <><div className="field"><label htmlFor="loader-resource">1. Data resource</label><select id="loader-resource" value={config.resource_id || ''} disabled={busy} onChange={e => selectResource(e.target.value)}><option value="">Select uploaded files</option>{resources.map(r => <option key={r.id} value={r.id}>{r.name} · {r.files.length} files</option>)}</select></div>
+    {config.loader !== 'source' && <><div className="field"><label htmlFor="loader-resource">Data resource</label><select id="loader-resource" value={config.resource_id || ''} disabled={busy} onChange={e => selectResource(e.target.value)}><option value="">Select uploaded files</option>{resources.map(r => <option key={r.id} value={r.id}>{r.name} · {r.files.length} files</option>)}</select></div>
     <input hidden ref={files} type="file" multiple onChange={e => {upload(e.target.files); e.target.value='';}} />
     <input hidden ref={folder} type="file" webkitdirectory="" multiple onChange={e => {upload(e.target.files); e.target.value='';}} />
     <div className="input-actions"><button disabled={busy} onClick={() => files.current.click()}>Upload files</button><button disabled={busy} onClick={() => folder.current.click()}>Upload folder</button></div></>}
     {resources.find(r=>r.id===config.resource_id)?.root && <div className="field"><label>Dataset folder path</label><input readOnly value={resources.find(r=>r.id===config.resource_id).root}/><button type="button" onClick={async()=>{try{await navigator.clipboard.writeText(resources.find(r=>r.id===config.resource_id).root);}catch{setError('Copy the path from the field above.');}}}>Copy path</button><small className="muted">Uploaded files are visible under Workspace → datasets.</small></div>}
-    <h4>2. PyTorch Dataset</h4>
+    <h4>PyTorch Dataset</h4>
     {legacy ? <div role="status"><p className="muted small">This saved Input uses an older reader. It will keep working until you replace it with your Dataset code. Replacement clears old reader, preprocessing and output-field settings; include that processing in your code.</p><button disabled={busy} onClick={()=>{
       const {reader_tool,transform_tool,transform_scope,field_mapping,record_path,source_config,...kept}=config;
       version.current += 1; setPreview(null);
@@ -102,14 +102,18 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
       {['offset'].map(key=><div className="field" key={key}><label htmlFor={`loader-${key}`}>{key==='offset'?'Skip records':'Record limit (0 = all)'}</label><NumberInput id={`loader-${key}`} type="number" min={0} value={config[key] ?? 0} onChange={e=>update({[key]:Number(e.target.value)})}/></div>)}
       {field('group_by','Sequential group field','Optional')}{field('order_by','Order within group','Optional')}
     </details>
-    <button type="button" className="primary" disabled={busy || codeDirty || (!legacy && !config.code?.trim())} onClick={()=>inspect()}>{busy ? 'Inspecting…' : '3. Read output interface'}</button>
-    {!legacy && <button disabled={busy || codeDirty || !inputSchema || !config.resource_id} onClick={()=>inspect('sample')}>Sample 5 records (runs code)</button>}
-    <p className="muted small">Read output interface uses OUTPUT_SCHEMA only, without loading data. Sampling explicitly runs your Dataset with a 30-second limit.</p>
+    <button type="button" className="primary" disabled={busy || codeDirty || (!legacy && (!inputSchema || inputSchema.output_schema_available === false))} onClick={()=>inspect()}>{busy ? 'Inspecting…' : 'Apply OUTPUT_SCHEMA (no execution)'}</button>
+    {!legacy && <button disabled={busy || codeDirty || !inputSchema || !config.resource_id} onClick={()=>inspect('sample')}>Sample 5 records (detect outputs)</button>}
+    <p className="muted small">Both actions apply output fields to the canvas. OUTPUT_SCHEMA reads an explicit declaration; sampling detects fields from actual records and runs your Dataset with a 30-second limit.</p>
+    {!legacy && inputSchema?.output_schema_available === false && <p role="status" className="muted small">
+      {inputSchema.output_schema_error ? `OUTPUT_SCHEMA is invalid: ${inputSchema.output_schema_error}` : 'This code has no OUTPUT_SCHEMA declaration.'}
+      {' '}Use “Sample 5 records” to detect and apply outputs. You do not need both actions.
+    </p>}
     <div ref={resultRef} aria-live="polite">
     {error && <p role="alert">{String(error)}</p>}
     {preview && <><p role="status">{preview.fields.length} output field(s) applied to this node. {' '}{preview.preview_mode==='declared' ? 'Output schema read from code. Dataset was not loaded; runtime values have not been verified.' : preview.preview_mode==='sample' ? `Interface inferred from up to ${preview.sample_limit} sampled records. This is not a full dataset scan or record count.` : `${preview.raw_records} raw → ${preview.output_records} output records`}</p>{preview.preview?.length > 0 && <JsonView value={preview.preview} />}</>}
     </div>
-    <DatasetOutputs fields={preview?.fields || config.output_schema}/>
+    <DatasetOutputs fields={preview?.fields || config.output_schema} mode={preview?.preview_mode || config.output_schema_mode}/>
     {config.resource_id && <details className="input-disclosure"><summary>Manage resource</summary><button onClick={() => update({resource_id:''})}>Detach from this Input</button><button disabled={busy} onClick={async () => {if (!window.confirm('Delete these uploaded files? Saved workflow references must be detached first.')) return; try {await api.deleteDataResource(config.resource_id);setResources(r => r.filter(x => x.id !== config.resource_id));update({resource_id:''});} catch(e){setError(e.body?.detail || e.message);}}}>Delete resource</button></details>}
   </section>;
 }

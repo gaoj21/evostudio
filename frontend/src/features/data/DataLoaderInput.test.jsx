@@ -5,13 +5,14 @@ import {describe,it,expect,vi,beforeEach} from 'vitest';
 import DataLoaderInput from './DataLoaderInput.jsx';
 import {api} from '../../api.js';
 vi.mock('../../api.js',()=>({api:{listDataResources:vi.fn(),listCustomTools:vi.fn(),uploadDataResource:vi.fn(),previewDataLoader:vi.fn(),deleteDataResource:vi.fn(),attachDataResource:vi.fn(),listSourceTypes:vi.fn(),inspectDataLoaderCode:vi.fn()}}));
-beforeEach(()=>{vi.clearAllMocks();api.inspectDataLoaderCode.mockResolvedValue({inputs:[],warnings:[]});api.listDataResources.mockResolvedValue({resources:[{id:'data',name:'Folder',files:[{path:'a.json'}]}]});api.listCustomTools.mockResolvedValue({tools:[]});api.listSourceTypes.mockResolvedValue({source_types:[{type:'http_api'},{type:'user_dataset',local:true},{type:'project_feed',local:true,project:'demo'}]});});
+beforeEach(()=>{vi.clearAllMocks();api.inspectDataLoaderCode.mockResolvedValue({inputs:[],warnings:[],output_schema_available:true});api.listDataResources.mockResolvedValue({resources:[{id:'data',name:'Folder',files:[{path:'a.json'}]}]});api.listCustomTools.mockResolvedValue({tools:[]});api.listSourceTypes.mockResolvedValue({source_types:[{type:'http_api'},{type:'user_dataset',local:true},{type:'project_feed',local:true,project:'demo'}]});});
 describe('DataLoader input',()=>{
  it('reads declared fields and applies them to the canvas',async()=>{
   const onChange=vi.fn();const fields=[{name:'amount',type:'int',required:false}];
   api.previewDataLoader.mockResolvedValue({fields,preview_mode:'declared',sample_count:0,preview:[],snapshot:null});
   render(<DataLoaderInput config={{type:'dataloader',loader:'python',code:'def build_dataset(resource): pass',resource_id:'data',n:0}} onChange={onChange}/>);
-  await userEvent.click(screen.getByText('3. Read output interface'));
+  await waitFor(()=>expect(screen.getByText('Apply OUTPUT_SCHEMA (no execution)')).toBeEnabled());
+  await userEvent.click(screen.getByText('Apply OUTPUT_SCHEMA (no execution)'));
   expect(await screen.findByText(/1 output field\(s\) applied to this node/)).toBeTruthy();
   expect(onChange).toHaveBeenCalledWith(expect.objectContaining({preview_snapshot:null,output_schema_mode:'declared'}),fields);
  });
@@ -31,7 +32,7 @@ it('mounts a historical dataset before selecting it for an unsaved canvas',async
  const onChange=vi.fn();
  render(<DataLoaderInput config={{loader:'python'}} getGraph={()=>({id:'task'})} onChange={onChange}/>);
  await screen.findByText('Folder · 1 files');
- await userEvent.selectOptions(screen.getByLabelText('1. Data resource'),'data');
+ await userEvent.selectOptions(screen.getByLabelText('Data resource'),'data');
  await waitFor(()=>expect(api.attachDataResource).toHaveBeenCalledWith('data','task'));
  await waitFor(()=>expect(onChange).toHaveBeenCalledWith(expect.objectContaining({resource_id:'data'}),[]));
 });
@@ -72,9 +73,9 @@ it('keeps the editor open and shows applied outputs after the parent updates', a
  const {container}=render(<StatefulInput/>);
  const codeDisclosure=screen.getByText('Dataset code').closest('details');
  expect(codeDisclosure.open).toBe(true);
- const button=screen.getByRole('button',{name:'3. Read output interface'});
- // Static inspection does not require a resource or form initialization.
- expect(button).toBeEnabled();
+ const button=screen.getByRole('button',{name:'Apply OUTPUT_SCHEMA (no execution)'});
+ // Static inspection does not require a resource.
+ await waitFor(()=>expect(button).toBeEnabled());
  await userEvent.click(button);
  expect(await screen.findByText(/1 output field\(s\) applied/)).toBeVisible();
  expect(screen.getByTestId('canvas-fields')).toHaveTextContent('amount');
@@ -91,8 +92,24 @@ it('shows a persistent error when the server returns no fields', async()=>{
  api.previewDataLoader.mockResolvedValue({fields:[],preview:[],preview_mode:'declared'});
  const onChange=vi.fn();
  render(<DataLoaderInput config={{loader:'python',code:'def build_dataset(resource): pass'}} onChange={onChange}/>);
- await userEvent.click(screen.getByRole('button',{name:'3. Read output interface'}));
+ await waitFor(()=>expect(screen.getByRole('button',{name:'Apply OUTPUT_SCHEMA (no execution)'})).toBeEnabled());
+ await userEvent.click(screen.getByRole('button',{name:'Apply OUTPUT_SCHEMA (no execution)'}));
  expect(await screen.findByRole('alert')).toHaveTextContent('No output fields were found');
  expect(onChange).not.toHaveBeenCalled();
- expect(screen.getByRole('button',{name:'3. Read output interface'})).toBeEnabled();
+ expect(screen.getByRole('button',{name:'Apply OUTPUT_SCHEMA (no execution)'})).toBeEnabled();
+});
+
+
+it('explains missing declarations and lets sampling apply outputs directly', async()=>{
+ api.inspectDataLoaderCode.mockResolvedValue({inputs:[],warnings:[],output_schema_available:false});
+ const fields=[{name:'text',type:'str',nullable:false}];
+ api.previewDataLoader.mockResolvedValue({fields,preview:[{text:'hello'}],preview_mode:'sample',sample_count:1,sample_limit:5});
+ const onChange=vi.fn();
+ render(<DataLoaderInput config={{loader:'python',resource_id:'data',code:'def build_dataset(resource): pass'}} onChange={onChange}/>);
+ expect(await screen.findByText(/This code has no OUTPUT_SCHEMA declaration/)).toHaveTextContent('You do not need both actions');
+ expect(screen.getByRole('button',{name:'Apply OUTPUT_SCHEMA (no execution)'})).toBeDisabled();
+ await userEvent.click(screen.getByRole('button',{name:'Sample 5 records (detect outputs)'}));
+ expect(api.previewDataLoader).toHaveBeenCalledWith(expect.objectContaining({preview_mode:'sample'}));
+ expect(onChange).toHaveBeenCalledWith(expect.objectContaining({output_schema:fields,output_schema_mode:'sample'}),fields);
+ expect(screen.getByRole('cell',{name:'text'})).toBeVisible();
 });
