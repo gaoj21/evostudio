@@ -4,16 +4,16 @@ import userEvent from '@testing-library/user-event';
 import {describe,it,expect,vi,beforeEach} from 'vitest';
 import DataLoaderInput from './DataLoaderInput.jsx';
 import {api} from '../../api.js';
-vi.mock('../../api.js',()=>({api:{listDataResources:vi.fn(),listCustomTools:vi.fn(),uploadDataResource:vi.fn(),previewDataLoader:vi.fn(),deleteDataResource:vi.fn(),attachDataResource:vi.fn(),listSourceTypes:vi.fn()}}));
-beforeEach(()=>{vi.clearAllMocks();api.listDataResources.mockResolvedValue({resources:[{id:'data',name:'Folder',files:[{path:'a.json'}]}]});api.listCustomTools.mockResolvedValue({tools:[]});api.listSourceTypes.mockResolvedValue({source_types:[{type:'http_api'},{type:'user_dataset',local:true},{type:'project_feed',local:true,project:'demo'}]});});
+vi.mock('../../api.js',()=>({api:{listDataResources:vi.fn(),listCustomTools:vi.fn(),uploadDataResource:vi.fn(),previewDataLoader:vi.fn(),deleteDataResource:vi.fn(),attachDataResource:vi.fn(),listSourceTypes:vi.fn(),inspectDataLoaderCode:vi.fn()}}));
+beforeEach(()=>{vi.clearAllMocks();api.inspectDataLoaderCode.mockResolvedValue({inputs:[],warnings:[]});api.listDataResources.mockResolvedValue({resources:[{id:'data',name:'Folder',files:[{path:'a.json'}]}]});api.listCustomTools.mockResolvedValue({tools:[]});api.listSourceTypes.mockResolvedValue({source_types:[{type:'http_api'},{type:'user_dataset',local:true},{type:'project_feed',local:true,project:'demo'}]});});
 describe('DataLoader input',()=>{
- it('previews prepared records and updates typed output fields',async()=>{
+ it('reads declared fields and applies them to the canvas',async()=>{
   const onChange=vi.fn();const fields=[{name:'amount',type:'int',required:false}];
-  api.previewDataLoader.mockResolvedValue({fields,raw_records:3,output_records:2,preview:[{amount:1}],snapshot:'fixed'});
-  render(<DataLoaderInput config={{type:'dataloader',resource_id:'data',n:0}} onChange={onChange}/>);
+  api.previewDataLoader.mockResolvedValue({fields,preview_mode:'declared',sample_count:0,preview:[],snapshot:null});
+  render(<DataLoaderInput config={{type:'dataloader',loader:'python',code:'def build_dataset(resource): pass',resource_id:'data',n:0}} onChange={onChange}/>);
   await userEvent.click(screen.getByText('3. Read output interface'));
-  expect(await screen.findByText('3 raw → 2 output records')).toBeTruthy();
-  expect(onChange).toHaveBeenCalledWith(expect.objectContaining({preview_snapshot:'fixed'}),fields);
+  expect(await screen.findByText(/1 output field\(s\) applied to this node/)).toBeTruthy();
+  expect(onChange).toHaveBeenCalledWith(expect.objectContaining({preview_snapshot:null,output_schema_mode:'declared'}),fields);
  });
  it('shows only the PyTorch editor with a directory upload picker',async()=>{
   const {container}=render(<DataLoaderInput config={{loader:'python'}} onChange={vi.fn()}/>);
@@ -42,7 +42,7 @@ describe('DataLoader input settings',()=>{
   const field=screen.getByLabelText('Seconds allowed per batch');
   expect(field).toHaveValue(120);
   await userEvent.clear(field);await userEvent.type(field,'600');
-  expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({batch_timeout:600}),[]);
+  expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({batch_timeout:600}),undefined);
  });
  it('says an API-backed Input is collected first and saved as a resource',async()=>{
   render(<DataLoaderInput config={{loader:'source',source_config:{type:'http_api',url:'https://x'}}} onChange={vi.fn()}/>);
@@ -57,4 +57,42 @@ describe('DataLoader input settings',()=>{
    unmount();
   }
  });
+});
+
+
+it('keeps the editor open and shows applied outputs after the parent updates', async()=>{
+ const fields=[{name:'amount',type:'float',required:true,nullable:false}];
+ api.previewDataLoader.mockResolvedValue({fields,preview:[],preview_mode:'declared',sample_count:0,snapshot:null});
+ function StatefulInput() {
+   const [config,setConfig]=React.useState({type:'dataloader',loader:'python',code:'OUTPUT_SCHEMA = []\ndef build_dataset(resource): pass',read_batch_size:4});
+   const [outputs,setOutputs]=React.useState([]);
+   return <><DataLoaderInput config={config} onChange={(next,fields)=>{setConfig(next);if(fields)setOutputs(fields);}}/>
+     <output data-testid="canvas-fields">{outputs.map(f=>f.name).join(',')}</output></>;
+ }
+ const {container}=render(<StatefulInput/>);
+ const codeDisclosure=screen.getByText('Dataset code').closest('details');
+ expect(codeDisclosure.open).toBe(true);
+ const button=screen.getByRole('button',{name:'3. Read output interface'});
+ // Static inspection does not require a resource or form initialization.
+ expect(button).toBeEnabled();
+ await userEvent.click(button);
+ expect(await screen.findByText(/1 output field\(s\) applied/)).toBeVisible();
+ expect(screen.getByTestId('canvas-fields')).toHaveTextContent('amount');
+ expect(codeDisclosure.open).toBe(true);
+ expect(screen.getByRole('cell',{name:'amount'})).toBeVisible();
+ const size=screen.getByLabelText('Batch size');
+ await userEvent.clear(size);await userEvent.type(size,'8');
+ expect(screen.getByTestId('canvas-fields')).toHaveTextContent('amount');
+ expect(screen.getByRole('cell',{name:'amount'})).toBeVisible();
+ expect(container.querySelector('details').open).toBe(true);
+});
+
+it('shows a persistent error when the server returns no fields', async()=>{
+ api.previewDataLoader.mockResolvedValue({fields:[],preview:[],preview_mode:'declared'});
+ const onChange=vi.fn();
+ render(<DataLoaderInput config={{loader:'python',code:'def build_dataset(resource): pass'}} onChange={onChange}/>);
+ await userEvent.click(screen.getByRole('button',{name:'3. Read output interface'}));
+ expect(await screen.findByRole('alert')).toHaveTextContent('No output fields were found');
+ expect(onChange).not.toHaveBeenCalled();
+ expect(screen.getByRole('button',{name:'3. Read output interface'})).toBeEnabled();
 });

@@ -59,3 +59,29 @@ def test_missing_schema_never_falls_back_to_running_code(preview_client, monkeyp
     result=client.post('/api/dataloaders/preview',json={'loader':'python','resource_id':rid,'code':'def build_dataset(resource): raise RuntimeError("Never run")'})
     assert result.status_code==422
     assert 'OUTPUT_SCHEMA' in result.json()['detail']
+
+
+def test_static_interface_needs_no_dataset_or_valid_run_settings(preview_client, monkeypatch):
+    client, _ = preview_client
+    monkeypatch.setattr(dataloaders, 'raw_records', lambda *a, **kw: pytest.fail('Must not read data'))
+    code = '''OUTPUT_SCHEMA = [{"name":"amount","type":"float"}]
+def build_dataset(resource, path: str):
+    raise RuntimeError("No execution during interface inspection")
+'''
+    response = client.post('/api/dataloaders/preview', json={
+        'loader': 'python', 'code': code, 'read_batch_size': 0, 'batch_timeout': 0,
+        'reader_config': {}, 'preview_mode': 'interface'})
+    assert response.status_code == 200, response.text
+    assert response.json()['fields'] == [{'name':'amount','type':'float','required':True,'nullable':False}]
+    sample = client.post('/api/dataloaders/preview', json={
+        'loader': 'python', 'code': code, 'preview_mode': 'sample'})
+    assert sample.status_code == 422  # actual sampling still needs a resource
+
+
+def test_static_interface_validates_factory_and_reference_name(preview_client):
+    client, _ = preview_client
+    config = {'loader':'python','code':'OUTPUT_SCHEMA = [{"name":"a","type":"int"}]'}
+    assert client.post('/api/dataloaders/preview', json=config).status_code == 422
+    config['code'] += '\ndef build_dataset(resource): return None'
+    result = client.post('/api/dataloaders/preview', json={**config,'input_mode':'reference','reference_field':'_dataloader'})
+    assert result.status_code == 422

@@ -372,15 +372,21 @@ def preview(config: dict = Body(...)):
         graph, name = config.pop('_graph', None), config.pop('_node', None)
         sample_requested = config.pop('preview_mode', 'interface') == 'sample'
         if config.get('loader') == 'python':
-            from .dataset_interface import declared_outputs
-            validate(config)
-            fields = declared_outputs(config['code'])
+            from .dataset_interface import declared_outputs, describe
+            # Reading a code contract must not depend on resources or Run settings.
+            code = config.get('code') or ''
+            describe(code)
+            fields = declared_outputs(code)
             if fields is not None and not sample_requested:
                 if config.get('input_mode') == 'reference':
-                    fields = [{'name':config.get('reference_field') or 'reference_data','type':'list','required':True,'nullable':False}]
+                    field = config.get('reference_field') or 'reference_data'
+                    if not isinstance(field, str) or not field.strip() or field == '_dataloader':
+                        raise SourceError('Use a non-empty reference output name other than _dataloader.')
+                    fields = [{'name':field,'type':'list','required':True,'nullable':False}]
                 return {'fields':fields,'preview':[],'preview_mode':'declared','sample_count':0,'snapshot':None}
             if not sample_requested:
                 raise SourceError('Add a top-level OUTPUT_SCHEMA list to identify output fields without loading data. Alternatively, explicitly choose Sample 5 records to execute your Dataset (30-second limit).')
+            validate(config)
             if graph:
                 from .input_composition import references
                 if references(graph, {'name': name}):

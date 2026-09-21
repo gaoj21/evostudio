@@ -12,9 +12,23 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
   const [error, setError] = useState('');
   const [codeDirty,setCodeDirty] = useState(false);
   const [inputSchema,setInputSchema] = useState(null);
+  const [codeOpen, setCodeOpen] = useState(!config.output_schema?.length);
+  const resultRef = useRef(null);
   const legacy = config.loader !== 'python';
   const files = useRef(null), folder = useRef(null), version = useRef(0);
-  const update = patch => { version.current += 1; setPreview(null); if ('code' in patch) setInputSchema(null); onChange({...config, ...patch, preview_snapshot:null, output_schema:null}, []); };
+  const update = patch => {
+    version.current += 1; setPreview(null); setError('');
+    if ('code' in patch) setInputSchema(null);
+    const runtimeOnly = Object.keys(patch).every(key => ['read_batch_size','batch_timeout','n','offset','cache'].includes(key));
+    const declared = config.output_schema_mode === 'declared';
+    const changesShape = ['code','input_mode','reference_field','field_mapping','transform_tool'].some(key => key in patch);
+    const clearOutputs = changesShape || (!runtimeOnly && !declared);
+    onChange({...config, ...patch, preview_snapshot:null,
+      ...(clearOutputs ? {output_schema:null, output_schema_mode:null} : {})}, clearOutputs ? [] : undefined);
+  };
+  useEffect(() => {
+    if (preview || error) resultRef.current?.scrollIntoView?.({block:'nearest'});
+  }, [preview, error]);
   useEffect(() => {
     api.listDataResources().then(r => setResources(r.resources)).catch(e => setError(e.body?.detail || e.message));
   }, []);
@@ -53,7 +67,8 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
     try {
       const result = await api.previewDataLoader({...config,preview_mode:mode,...(getGraph ? {_graph:getGraph(),_node:nodeId} : {})});
       if (token !== version.current) return;
-      setPreview(result); onChange({...config, preview_snapshot: result.snapshot, input_schema:inputSchema, output_schema:result.fields}, result.fields);
+      if (!Array.isArray(result.fields) || !result.fields.length) throw new Error('No output fields were found. Add OUTPUT_SCHEMA with your record fields, or sample non-empty data.');
+      setPreview(result); onChange({...config, preview_snapshot: result.snapshot, input_schema:inputSchema, output_schema:result.fields, output_schema_mode:result.preview_mode}, result.fields);
     } catch(e) { if (token === version.current) setError(e.body?.detail || e.message); }
     finally { setBusy(false); }
   }
@@ -73,7 +88,7 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
       const {reader_tool,transform_tool,transform_scope,field_mapping,record_path,source_config,...kept}=config;
       version.current += 1; setPreview(null);
       onChange({...kept,loader:'python',code:DATASET_EXAMPLE},[]);
-    }}>Replace with PyTorch Dataset</button></div> : <details open={!config.output_schema?.length}><summary>Dataset code</summary><PythonDatasetEditor key={nodeId} onDirtyChange={setCodeDirty} code={config.code} onChange={code=>update({code})} disabled={busy}/></details>}
+    }}>Replace with PyTorch Dataset</button></div> : <details open={codeOpen} onToggle={e=>setCodeOpen(e.currentTarget.open)}><summary>Dataset code</summary><PythonDatasetEditor key={nodeId} onDirtyChange={setCodeDirty} code={config.code} onChange={code=>update({code})} disabled={busy}/></details>}
     <p className="muted small">Read and preprocess in build_dataset or Dataset.__getitem__. Studio handles batching and keeps the final partial batch.</p>
     <div className="field"><label htmlFor="loader-read_batch_size">Batch size</label><NumberInput id="loader-read_batch_size" type="number" min={1} max={1024} value={config.read_batch_size ?? 100} onChange={e=>update({read_batch_size:Number(e.target.value)})}/><small className="muted">Shared by data loading, workflow batches and native API batching.</small></div>
     <div className="field"><label htmlFor="loader-n">Sample count (0 = all records)</label><NumberInput id="loader-n" min={0} step={1} value={config.n ?? 0} onChange={e=>update({n:Number(e.target.value)})}/><small className="muted">Limits records at the reader before materialization. Dataset constructors must still use lazy loading for large files.</small></div>
@@ -87,12 +102,14 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
       {['offset'].map(key=><div className="field" key={key}><label htmlFor={`loader-${key}`}>{key==='offset'?'Skip records':'Record limit (0 = all)'}</label><NumberInput id={`loader-${key}`} type="number" min={0} value={config[key] ?? 0} onChange={e=>update({[key]:Number(e.target.value)})}/></div>)}
       {field('group_by','Sequential group field','Optional')}{field('order_by','Order within group','Optional')}
     </details>
-    <button className="primary" disabled={busy || codeDirty || (!legacy && !inputSchema) || (config.loader !== 'source' && !config.resource_id)} onClick={()=>inspect()}>{busy ? 'Inspecting…' : '3. Read output interface'}</button>
+    <button type="button" className="primary" disabled={busy || codeDirty || (!legacy && !config.code?.trim())} onClick={()=>inspect()}>{busy ? 'Inspecting…' : '3. Read output interface'}</button>
     {!legacy && <button disabled={busy || codeDirty || !inputSchema || !config.resource_id} onClick={()=>inspect('sample')}>Sample 5 records (runs code)</button>}
     <p className="muted small">Read output interface uses OUTPUT_SCHEMA only, without loading data. Sampling explicitly runs your Dataset with a 30-second limit.</p>
-    <DatasetOutputs fields={preview?.fields || config.output_schema}/>
+    <div ref={resultRef} aria-live="polite">
     {error && <p role="alert">{String(error)}</p>}
-    {preview && <><p role="status">{preview.preview_mode==='declared' ? 'Output schema read from code. Dataset was not loaded; runtime values have not been verified.' : preview.preview_mode==='sample' ? `Interface inferred from up to ${preview.sample_limit} sampled records. This is not a full dataset scan or record count.` : `${preview.raw_records} raw → ${preview.output_records} output records`}</p><JsonView value={preview.preview} /></>}
-    {config.resource_id && <details className="input-disclosure"><summary>Manage resource</summary><button onClick={() => {update({resource_id:''}); onChange({...config,resource_id:''},[]);}}>Detach from this Input</button><button disabled={busy} onClick={async () => {if (!window.confirm('Delete these uploaded files? Saved workflow references must be detached first.')) return; try {await api.deleteDataResource(config.resource_id);setResources(r => r.filter(x => x.id !== config.resource_id));onChange({...config,resource_id:''},[]);} catch(e){setError(e.body?.detail || e.message);}}}>Delete resource</button></details>}
+    {preview && <><p role="status">{preview.fields.length} output field(s) applied to this node. {' '}{preview.preview_mode==='declared' ? 'Output schema read from code. Dataset was not loaded; runtime values have not been verified.' : preview.preview_mode==='sample' ? `Interface inferred from up to ${preview.sample_limit} sampled records. This is not a full dataset scan or record count.` : `${preview.raw_records} raw → ${preview.output_records} output records`}</p>{preview.preview?.length > 0 && <JsonView value={preview.preview} />}</>}
+    </div>
+    <DatasetOutputs fields={preview?.fields || config.output_schema}/>
+    {config.resource_id && <details className="input-disclosure"><summary>Manage resource</summary><button onClick={() => update({resource_id:''})}>Detach from this Input</button><button disabled={busy} onClick={async () => {if (!window.confirm('Delete these uploaded files? Saved workflow references must be detached first.')) return; try {await api.deleteDataResource(config.resource_id);setResources(r => r.filter(x => x.id !== config.resource_id));update({resource_id:''});} catch(e){setError(e.body?.detail || e.message);}}}>Delete resource</button></details>}
   </section>;
 }
