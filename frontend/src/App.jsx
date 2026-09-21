@@ -1789,7 +1789,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
                   <span className={`node-status ${toneClass(describeBatch(batch.status, batch.counts || batchProgress).tone)}`}>
                     {describeBatch(batch.status, batch.counts || batchProgress).label}
                   </span>
-                  {` · ${batchProgress.done}/${batchProgress.total} done`}
+                  {` · ${batchProgress.done}/${batchProgress.total ?? '?'} done`}
                   {batchProgress.failed > 0 && ` · ${batchProgress.failed} failed`}
                   {batch.metric && ` · metric ${batch.metric}`}
                   {` · logs → ${graph?.output_dir || 'runs'}/<started-at>/nodes/<node>.jsonl`}
@@ -1857,8 +1857,17 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun } = {}) {
                   </div>
                 </div>
               )}
-              {(batch?.items || []).length === 0 && (
-                <p className="muted small">Waiting for the first record…</p>
+              {batch?.streaming && <p className="muted small">{batch.dataset_initialized
+                ? `Dataset total: ${batch.dataset_length ?? 'unknown (no __len__)'} · Selected for this run: ${batch.input_total ?? 'unknown'}`
+                : 'Initializing Dataset; total count is not available yet.'}</p>}
+              {batch?.polling_error && <p role="alert" className="chat-error">{batch.polling_error}</p>}
+              {batch?.error && <pre role="alert" className="chat-error">{batch.error}</pre>}
+              {(batch?.items || []).length === 0 && !batch?.error && (
+                <p className="muted small">{isSettled(BATCH_SETTLED, batch.status)
+                  ? 'No records were processed.'
+                  : batch.streaming
+                    ? `Preparing DataLoader / waiting for its first batch (${batch.batch_size || batch.source?.config?.read_batch_size || 100} records per batch). No workflow records have been submitted yet. Check Dataset initialization, preprocessing and file paths if this takes too long.`
+                    : 'Waiting for the first record…'}</p>
               )}
               {(batch?.items || []).map((it) => (
                 <div className="batch-item" key={it.index}>

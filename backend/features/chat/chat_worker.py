@@ -77,7 +77,11 @@ def main():
                 temporary.write_text(json.dumps(rows, ensure_ascii=False, allow_nan=False))
                 temporary.replace(directory / 'chunk.json')
                 while (directory / 'chunk.json').exists(): time.sleep(.05)
-            value = execute_python(payload, emit=emit)
+            def on_info(info):
+                temporary = directory / 'info.tmp'
+                temporary.write_text(json.dumps(info))
+                temporary.replace(directory / 'info.json')
+            value = execute_python(payload, emit=emit, on_info=on_info)
         elif kind == 'dataset_batches':
             from backend.features.data.torch_loader import RecordDataset, batches
             value = list(batches(RecordDataset(payload['records']), payload['batch_size']))

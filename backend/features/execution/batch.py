@@ -718,6 +718,10 @@ def _digest(state: dict) -> dict:
         # The one line an evaluation boils down to, for the history list.
         "evaluation": evaluation_headline(state.get("evaluations")),
         # A stream that stopped before reading everything can still be resumed.
+        "dataset_length": state.get("dataset_length"),
+        "input_total": state.get("input_total"),
+        "dataset_initialized": bool(state.get("dataset_initialized")),
+        "error": state.get("error"),
         "streaming": bool(state.get("streaming")),
         "unread": bool(state.get("streaming")) and not state.get("collection_complete"),
     }

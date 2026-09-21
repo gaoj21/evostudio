@@ -135,7 +135,14 @@ export function useExecutionSession({ graphId, onError, onClearSelection }) {
         setBatch(next);
         if (isSettled(BATCH_SETTLED, next.status)) setDrawerOpen(true);
       } catch (err) {
-        if (stopped || err?.status !== 404) return;
+        if (stopped) return;
+        if (err?.status !== 404) {
+          setBatch(current => current?.batch_id === batch.batch_id
+            ? {...current, polling_error: `Cannot refresh run status: ${err?.body?.detail || err?.message || 'connection failed'}. The displayed progress may be outdated; retrying automatically.`}
+            : current);
+          setDrawerOpen(true);
+          return;
+        }
         stopped = true;
         setBatch((current) => (current?.batch_id === batch.batch_id
           ? { ...current, status: 'lost' }
@@ -239,7 +246,8 @@ export function useExecutionSession({ graphId, onError, onClearSelection }) {
   const batchProgress = useMemo(() => {
     const items = batch?.items || [];
     return {
-      total: batch?.total ?? items.length,
+      total: batch?.streaming && !batch?.collection_complete
+        ? (batch.input_total ?? null) : (batch?.total ?? items.length),
       // A blocked step (its predecessor did not finish) is settled, and it
       // is not a success: it counts with the failures, so the badge's ✗ says
       // how many records a resume would have to run.

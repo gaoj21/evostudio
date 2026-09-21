@@ -37,7 +37,7 @@ def batches(dataset, batch_size):
 FILENAME = '<dataloader.py>'
 
 
-def execute_python(payload, emit=None):
+def execute_python(payload, emit=None, on_info=None):
     """Called in a killable worker, never exec user code in the API process.
 
     Anything the Dataset code raises comes back as a UserCodeError naming
@@ -45,12 +45,12 @@ def execute_python(payload, emit=None):
     from backend.features.user_code import TailBuffer, UserCodeError, explain
     output = TailBuffer()
     try:
-        return _execute_python(payload, emit, output)
+        return _execute_python(payload, emit, output, on_info)
     except Exception as exc:
         raise UserCodeError(explain(exc, payload['code'], output.getvalue(), FILENAME, 'Dataset code')) from exc
 
 
-def _execute_python(payload, emit, output):
+def _execute_python(payload, emit, output, on_info=None):
     from backend.features.data.dataset_interface import arguments
     values = arguments(payload['code'], payload.get('config') or {})
     namespace = {'__name__': 'studio_dataset'}
@@ -67,6 +67,15 @@ def _execute_python(payload, emit, output):
         if 'config' in signature.parameters: provided['config'] = values
         signature.bind(**provided)
         dataset = factory(**provided)
+        if on_info is not None:
+            try:
+                length = len(dataset)
+            except (TypeError, NotImplementedError):
+                length = None
+            selected = None if length is None else max(0, length - payload.get('offset', 0))
+            if selected is not None and payload.get('record_limit', 0):
+                selected = min(selected, payload['record_limit'])
+            on_info({'dataset_length': length, 'selected_records': selected})
         if emit is not None:
             offset, limit = payload.get('offset', 0), payload.get('record_limit', 0)
             iterator = (row for chunk in batches(dataset, 1 if offset or limit else payload['batch_size']) for row in chunk)

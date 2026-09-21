@@ -35,7 +35,8 @@ function statusClass(status, counts) {
 // "12 records · 9 ✓ · 3 stopped" — what the batch covered, before its score.
 export function describeBatch(batch) {
   const counts = batch.counts || {};
-  const parts = [`${batch.total ?? 0} record${batch.total === 1 ? '' : 's'}`];
+  const total = batch.streaming && batch.unread ? batch.input_total : batch.total;
+  const parts = [total == null && batch.streaming ? 'Total unknown' : `${total ?? 0} record${total === 1 ? '' : 's'}`];
   if (counts.success) parts.push(`${counts.success} ✓`);
   if (counts.failed) parts.push(`${counts.failed} ✗`);
   if (counts.cancelled) parts.push(`${counts.cancelled} stopped`);

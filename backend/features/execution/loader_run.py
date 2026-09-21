@@ -32,9 +32,9 @@ def chunk_source(graph, node, config, size, period, date_field, metric, label_ke
                 return None
             config['n'] -= skip
 
-    def chunks(cancelled):
+    def chunks(cancelled, on_info=None):
         refs = input_composition.snapshot(graph, node)
-        stream = dataset_stream.chunks({**config, 'reference_inputs': refs}, cancelled)
+        stream = dataset_stream.chunks({**config, 'reference_inputs': refs}, cancelled, on_info=on_info)
         try:
             for rows in period_chunks(stream, size, period, date_field):
                 read = len(rows)

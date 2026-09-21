@@ -11,7 +11,7 @@ from backend.api.sources import SourceError
 from . import data_resources, dataloaders
 
 
-def chunks(config, cancelled=lambda: False):
+def chunks(config, cancelled=lambda: False, on_info=None):
     dataloaders.validate(config)
     if config.get('loader') != 'python': raise SourceError('Streaming needs a Python Dataset.')
     if any(config.get(k) for k in ('transform_tool','field_mapping','group_by','order_by')) or config.get('input_mode') == 'reference':
@@ -33,9 +33,14 @@ def chunks(config, cancelled=lambda: False):
         # The DataLoader's own "time allowed per batch", as in a full read.
         allowed=dataloaders.batch_timeout(config)
         deadline=time.monotonic()+allowed
+        info_read = False
         try:
             while True:
                 if cancelled(): return
+                info = root/'info.json'
+                if not info_read and info.exists():
+                    info_read = True
+                    if on_info is not None: on_info(json.loads(info.read_text()))
                 chunk=root/'chunk.json'
                 if chunk.exists():
                     rows=dataloaders._object_rows(json.loads(chunk.read_text()))

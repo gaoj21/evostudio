@@ -109,3 +109,42 @@ def build_dataset(resource): return Rows()
         assert marker.read_text()=='2'
         assert next(stream)==[{'value':2},{'value':3}]
     finally: stream.close()
+
+
+def test_dataset_length_is_reported_before_first_record_and_respects_selection(setup):
+    _, graph = setup
+    graph['tasks'][0]['source'].update(code='''import time
+from torch.utils.data import Dataset
+class Rows(Dataset):
+    def __len__(self): return 17
+    def __getitem__(self, i):
+        time.sleep(60)
+        return {"value": i}
+def build_dataset(resource): return Rows()
+''', offset=2, n=4)
+    result = start(graph, graph['tasks'][0], {'workers':1})
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            state = batch.get_batch(result['batch_id'])
+            if state.get('dataset_initialized'): break
+            time.sleep(.05)
+        assert state.get('dataset_length') == 17, state
+        assert state.get('input_total') == 4
+        assert state['items'] == []  # no record or batch needed to get the count
+        assert batch._digest(state)['input_total'] == 4
+    finally:
+        batch.cancel_batch(result['batch_id'])
+        assert batch.wait_for(result['batch_id'], timeout=5)
+
+
+def test_unsized_dataset_reports_unknown_not_zero(setup):
+    _, graph = setup
+    from backend.features.data.dataset_stream import chunks
+    info = []
+    stream = chunks(graph['tasks'][0]['source'], on_info=info.append)
+    try:
+        assert next(stream) == [{'value':0},{'value':1}]
+        assert info == [{'dataset_length':None, 'selected_records':None}]
+    finally:
+        stream.close()

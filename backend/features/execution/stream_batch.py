@@ -72,7 +72,16 @@ def _run(batch_id, graph, workers, chunks, rerun=()):
             _release(rerun)
             batch._persist_batch(state)
         if chunks is not None and not state.get('cancel_requested'):
-            iterator = chunks(lambda: state.get('cancel_requested', False))
+            def on_info(info):
+                with batch._lock:
+                    state['dataset_length'] = info.get('dataset_length')
+                    remaining = info.get('selected_records')
+                    state['input_total'] = None if remaining is None else state.get('records_read', 0) + remaining
+                    state['dataset_initialized'] = True
+                    batch._persist_batch(state)
+            import inspect
+            options = {'on_info': on_info} if 'on_info' in inspect.signature(chunks).parameters else {}
+            iterator = chunks(lambda: state.get('cancel_requested', False), **options)
             _consume(batch_id, graph, iterator, workers)
         elif chunks is None:
             state['collection_complete'] = True

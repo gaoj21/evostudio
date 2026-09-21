@@ -91,3 +91,28 @@ describe('execution session', () => {
     expect(result.current.runStarting).toBe(false);
   });
 });
+
+it('surfaces polling failures instead of silently preserving running zero, then clears on recovery', async()=>{
+  api.getBatch.mockRejectedValueOnce(new Error('Failed to fetch'));
+  const {result}=setup();
+  act(()=>result.current.beginBatch('batch-1'));
+  await waitFor(()=>expect(result.current.batch?.polling_error).toContain('Failed to fetch'));
+  expect(result.current.drawerOpen).toBe(true);
+  await waitFor(()=>expect(result.current.batch?.status).toBe('completed'),{timeout:3500});
+  expect(result.current.batch?.polling_error).toBeUndefined();
+});
+
+it('uses Dataset length before any batch records arrive',async()=>{
+  api.getBatch.mockResolvedValue({batch_id:'batch-1',status:'running',streaming:true,collection_complete:false,total:0,input_total:40,items:[]});
+  const {result}=setup();
+  act(()=>result.current.beginBatch('batch-1'));
+  await waitFor(()=>expect(result.current.batchProgress.total).toBe(40));
+  expect(result.current.batchProgress.done).toBe(0);
+});
+
+it('keeps the total unknown for a streaming Dataset without length',async()=>{
+  api.getBatch.mockResolvedValue({batch_id:'batch-1',status:'running',streaming:true,collection_complete:false,total:0,input_total:null,items:[]});
+  const {result}=setup();
+  act(()=>result.current.beginBatch('batch-1'));
+  await waitFor(()=>expect(result.current.batchProgress.total).toBeNull());
+});
