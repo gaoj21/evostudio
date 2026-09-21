@@ -521,9 +521,14 @@ def read_file(graph_id: str, relpath: str) -> dict:
     with target.open("rb") as stream:
         raw = stream.read(MAX_READ_BYTES + 1)
     truncated = len(raw) > MAX_READ_BYTES
-    text = raw[:MAX_READ_BYTES].decode("utf-8", errors="replace")
-    return {"path": relpath, "size": target.stat().st_size,
-            "truncated": truncated, "content": text, "readonly": mounted is not None, "absolute_path":str(target.resolve())}
+    import codecs
+    try:
+        text = codecs.getincrementaldecoder("utf-8")().decode(raw[:MAX_READ_BYTES], final=not truncated)
+        binary = "\x00" in text
+    except UnicodeDecodeError:
+        text, binary = "", True
+    return {"path": relpath, "size": target.stat().st_size, "binary": binary,
+            "truncated": truncated, "content": "" if binary else text, "readonly": mounted is not None, "absolute_path":str(target.resolve())}
 
 
 MAX_WRITE_BYTES = 10 * 1024 * 1024
@@ -552,6 +557,32 @@ def write_file(graph_id: str, relpath: str, content: bytes) -> dict:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(content)
     return {"path": relpath, "size": target.stat().st_size}
+
+
+def upload_file(graph_id: str, relpath: str, stream) -> dict:
+    """Copy uploads in bounded chunks; publish only complete files, without overwriting."""
+    import os
+    import shutil
+    import tempfile
+
+    _refuse_if_memory(relpath, "write")
+    if not relpath or relpath.endswith("/"):
+        raise WorkspaceError(f"Invalid file path: {relpath!r}")
+    target = _resolve_in_workspace(graph_id, relpath)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".upload-", delete=False) as out:
+            temp = Path(out.name)
+            shutil.copyfileobj(stream, out, length=1024 * 1024)
+        try:
+            os.link(temp, target)
+        except FileExistsError:
+            raise WorkspaceError(f"{relpath!r} already exists. Choose another path or delete the existing file first.")
+        return {"path": relpath, "size": target.stat().st_size, "absolute_path": str(target)}
+    finally:
+        if temp is not None:
+            temp.unlink(missing_ok=True)
 
 
 def make_dir(graph_id: str, relpath: str) -> dict:

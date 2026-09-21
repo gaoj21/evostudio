@@ -230,7 +230,10 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
   const editAfterLoad = useRef(null);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderPath, setNewFolderPath] = useState('files/new-folder');
-  const uploadRef = useRef(null);
+  const uploadRef = useRef(null), folderUploadRef = useRef(null);
+  const [destination, setDestination] = useState('files');
+  const [uploading, setUploading] = useState(false);
+  const [notice, setNotice] = useState('');
 
   const load = () => {
     if (!graphId) return Promise.resolve();
@@ -311,10 +314,12 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
   };
 
   const copyPath = async (path) => {
+    const resolved = files.find(f=>f.path===path)?.absolute_path || path;
     try {
-      await navigator.clipboard.writeText(files.find(f=>f.path===path)?.absolute_path || path);
+      await navigator.clipboard.writeText(resolved);
+      setNotice(`Copied: ${resolved}`);
     } catch {
-      setError(`Could not copy — the path is ${path}`);
+      setError(`Could not copy — the path is ${resolved}`);
     }
   };
 
@@ -339,23 +344,39 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
   ]);
 
   const upload = async (e) => {
-    const f = e.target.files?.[0];
+    const selectedFiles = Array.from(e.target.files || []);
     e.target.value = '';
-    if (!f) return;
-    setError(null);
+    if (!selectedFiles.length || uploading) return;
+    const directory = destination.trim().replace(/\/+$/, '');
+    if (!directory || directory.startsWith('/') || directory.split('/').includes('..')) {
+      setError('Enter a destination relative to Workspace, such as files/checkpoints.');
+      return;
+    }
+    setUploading(true); setError(null); setNotice('');
+    let completed = 0;
     try {
-      await api.uploadWorkspaceFile(graphId, f);
-      await load();
+      for (const f of selectedFiles) {
+        const path = `${directory}/${f.webkitRelativePath || f.name}`;
+        setNotice(`Uploading ${completed + 1}/${selectedFiles.length}: ${path}`);
+        await api.uploadWorkspaceFile(graphId, f, path);
+        completed += 1;
+      }
+      setNotice(`Uploaded ${completed} file(s) to ${directory}. Right-click a file or folder to copy its path.`);
+      setExpanded(current => new Set([...current, ...directory.split('/').map((_, i, parts) => parts.slice(0, i + 1).join('/'))]));
     } catch (err) {
-      setError(err?.body?.detail || err.message);
+      setNotice('');
+      setError(`${completed}/${selectedFiles.length} files uploaded. ${err?.body?.detail || err.message}`);
+    } finally {
+      await load();
+      setUploading(false);
     }
   };
 
   const pathTaken = (path) => files.some((f) => f.path === path);
   const openNewFile = () => {
     // Suggest a path that is free: the default must never be an existing file.
-    let path = 'files/notes.txt';
-    for (let i = 2; pathTaken(path); i += 1) path = `files/notes-${i}.txt`;
+    let path = `${destination.replace(/\/+$/, '')}/notes.txt`;
+    for (let i = 2; pathTaken(path); i += 1) path = `${destination.replace(/\/+$/, '')}/notes-${i}.txt`;
     setNewPath(path);
     setNewFileError(null);
     setNewFileOpen(true);
@@ -425,14 +446,19 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
         <button type="button" onClick={openNewFile} disabled={!graphId}>
           + New file
         </button>
-        <button type="button" onClick={() => setNewFolderOpen(true)} disabled={!graphId}>
+        <button type="button" onClick={() => {setNewFolderPath(`${destination.replace(/\/+$/, '')}/new-folder`);setNewFolderOpen(true);}} disabled={!graphId}>
           + New folder
         </button>
-        <button type="button" onClick={() => uploadRef.current?.click()} disabled={!graphId}>
-          ↑ Upload
+        <button type="button" onClick={() => uploadRef.current?.click()} disabled={!graphId || uploading}>
+          Upload files
         </button>
-        <input ref={uploadRef} type="file" style={{ display: 'none' }} onChange={upload} />
+        <button type="button" onClick={() => folderUploadRef.current?.click()} disabled={!graphId || uploading}>Upload folder</button>
+        <input aria-label="Upload files" ref={uploadRef} type="file" multiple style={{ display: 'none' }} onChange={upload} />
+        <input aria-label="Upload folder" ref={folderUploadRef} type="file" multiple webkitdirectory="" style={{ display: 'none' }} onChange={upload} />
       </div>
+      <div className="field"><label htmlFor="workspace-destination">Upload / create in</label><input id="workspace-destination" value={destination} disabled={uploading} onChange={e=>setDestination(e.target.value)} placeholder="files/checkpoints" /></div>
+      <p className="muted small">Manage datasets, checkpoints and configuration files here. Folder uploads preserve their structure. Copy a file or folder path from its right-click menu to use in DataLoader inputs.</p>
+      {notice && <p role="status" className="muted small">{notice}</p>}
       {error && <div className="muted small batch-error">{String(error)}</div>}
       <div className="ws-tree-wrap">
         <FileTree
@@ -461,7 +487,7 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
               {/* Memory is a view of a vector store, so there is no file to
                   edit — offering the button would only lead to a refusal. */}
               {file?.readonly && ' · read-only'}
-              {!editing && !file?.truncated && !file?.readonly && (
+              {!editing && !file?.truncated && !file?.readonly && !file?.binary && (
                 <button
                   type="button"
                   className="ws-edit-btn"
@@ -483,7 +509,7 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
                 </div>
               </>
             ) : (
-              <FileView file={file} pretty={pretty} />
+              file?.binary ? <p className="muted small">Binary file · {file.size} bytes. Copy its full path to use it in your DataLoader, or download it from the right-click menu.</p> : <FileView file={file} pretty={pretty} />
             )}
           </>
         ) : (

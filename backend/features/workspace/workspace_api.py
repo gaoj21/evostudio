@@ -46,12 +46,12 @@ def workspace_write_text(graph_id: str, body: dict = Body(...)):
 
 
 @router.post("/graphs/{graph_id}/workspace/upload")
-async def workspace_upload(graph_id: str, file: UploadFile, path: str = Query(default="")):
+def workspace_upload(graph_id: str, file: UploadFile, path: str = Query(default="")):
     """Upload any file; saved under files/ unless `path` overrides."""
     _check_graph(graph_id)
     rel = path or f"files/{file.filename}"
     try:
-        return workspace.write_file(graph_id, rel, await file.read())
+        return workspace.upload_file(graph_id, rel, file.file)
     except workspace.WorkspaceError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

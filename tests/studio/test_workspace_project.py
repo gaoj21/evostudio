@@ -401,3 +401,64 @@ class TestThroughTheWorkspaceApi:
                                  params={"path": "runs", "recursive": "true"})
         assert allowed.status_code == 200
         assert allowed.json()["files"] == 1
+
+class TestAuxiliaryUploads:
+    def test_large_checkpoint_is_streamed_and_path_is_usable(self, store):
+        import io
+        _, workspace = store
+        class BoundedStream(io.BytesIO):
+            def read(self, size=-1):
+                assert 0 < size <= 1024 * 1024
+                return super().read(size)
+        content = b'x' * (workspace.MAX_WRITE_BYTES + 1)
+        result = workspace.upload_file('probe', 'files/model/checkpoint.bin', BoundedStream(content))
+        from pathlib import Path
+        assert Path(result['absolute_path']).read_bytes() == content
+        assert result['size'] == len(content)
+        assert any(f.get('absolute_path') == result['absolute_path'] for f in workspace.tree('probe'))
+
+    def test_upload_preserves_existing_files_and_cleans_failed_copies(self, store):
+        import io
+        _, workspace = store
+        root = workspace.workspace_root('probe')
+        workspace.upload_file('probe', 'files/model.bin', io.BytesIO(b'original'))
+        with pytest.raises(workspace.WorkspaceError, match='already exists'):
+            workspace.upload_file('probe', 'files/model.bin', io.BytesIO(b'replacement'))
+        assert (root / 'files/model.bin').read_bytes() == b'original'
+        class BrokenStream:
+            def read(self, size):
+                raise OSError('Interrupted upload')
+        with pytest.raises(OSError):
+            workspace.upload_file('probe', 'files/partial.bin', BrokenStream())
+        assert not (root / 'files/partial.bin').exists()
+        assert not list(root.rglob('.upload-*'))
+
+    @pytest.mark.parametrize('path', ['../outside.bin', '/outside.bin', 'memory/a.bin', 'datasets/a.bin'])
+    def test_upload_respects_workspace_boundaries(self, store, path):
+        import io
+        _, workspace = store
+        with pytest.raises(workspace.WorkspaceError):
+            workspace.upload_file('probe', path, io.BytesIO(b'data'))
+
+    def test_binary_checkpoint_has_metadata_without_text_preview(self, store):
+        import io
+        _, workspace = store
+        workspace.upload_file('probe', 'files/model.pt', io.BytesIO(b'\x00\xffweights'))
+        result = workspace.read_file('probe', 'files/model.pt')
+        assert result['binary'] is True
+        assert result['content'] == ''
+        assert result['absolute_path'].endswith('/files/model.pt')
+
+    def test_http_upload_uses_streaming_writer(self, store, monkeypatch):
+        from fastapi.testclient import TestClient
+        from backend.api.app import app
+        graphs, workspace = store
+        monkeypatch.setattr(graphs, 'graph_exists', lambda _: True)
+        monkeypatch.setattr(workspace, 'write_file', lambda *a: pytest.fail('Upload must not use the bounded text writer'))
+        with TestClient(app) as client:
+            response = client.post('/api/graphs/probe/workspace/upload',
+                params={'path':'files/models/nested/weights.bin'},
+                files={'file':('weights.bin',b'\x00weights')})
+            assert response.status_code == 200, response.text
+            assert response.json()['size'] == 8
+            assert workspace.read_file('probe','files/models/nested/weights.bin')['binary']

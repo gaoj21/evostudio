@@ -257,3 +257,37 @@ describe('creating a file', () => {
     await waitFor(() => expect(document.querySelector('textarea.ws-editor')).not.toBeNull());
   });
 });
+
+it('uploads a folder preserving nested paths under the chosen destination', async()=>{
+  const user=setup();
+  api.uploadWorkspaceFile.mockResolvedValue({});
+  await user.clear(screen.getByLabelText('Upload / create in'));
+  await user.type(screen.getByLabelText('Upload / create in'),'files/checkpoints');
+  const weights=new File(['weights'],'model.bin');
+  Object.defineProperty(weights,'webkitRelativePath',{value:'model/nested/model.bin'});
+  const config=new File(['{}'],'config.json');
+  Object.defineProperty(config,'webkitRelativePath',{value:'model/config.json'});
+  await user.upload(screen.getByLabelText('Upload folder'),[weights,config]);
+  await waitFor(()=>expect(api.uploadWorkspaceFile).toHaveBeenCalledWith('probe',weights,'files/checkpoints/model/nested/model.bin'));
+  expect(api.uploadWorkspaceFile).toHaveBeenCalledWith('probe',config,'files/checkpoints/model/config.json');
+  expect(await screen.findByRole('status')).toHaveTextContent('Uploaded 2 file(s)');
+});
+
+it('reports partial uploads without hiding successful files', async()=>{
+  const user=setup();
+  api.uploadWorkspaceFile.mockResolvedValueOnce({}).mockRejectedValueOnce({body:{detail:'already exists'}});
+  await user.upload(screen.getByLabelText('Upload files'),[new File(['a'],'a.bin'),new File(['b'],'b.bin')]);
+  expect(await screen.findByText(/1\/2 files uploaded.*already exists/)).toBeVisible();
+  expect(screen.getByRole('button',{name:'Upload files'})).toBeEnabled();
+});
+
+it('shows checkpoint metadata and copy path without a text editor', async()=>{
+  const user=setup([{path:'model.pt',size:8,absolute_path:'/server/workspace/model.pt'}]);
+  api.getWorkspaceFile.mockResolvedValue({path:'model.pt',binary:true,size:8,content:''});
+  await user.click(await screen.findByText('model.pt'));
+  expect(await screen.findByText(/Binary file/)).toBeVisible();
+  expect(screen.queryByRole('button',{name:'Edit',exact:true})).not.toBeInTheDocument();
+  const clipboard=vi.spyOn(navigator.clipboard,'writeText').mockResolvedValue();
+  await user.click(screen.getByRole('button',{name:'Copy full path'}));
+  expect(clipboard).toHaveBeenCalledWith('/server/workspace/model.pt');
+});
