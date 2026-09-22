@@ -33,6 +33,13 @@ def batch_timeout(config):
     return int((config or {}).get('batch_timeout') or DEFAULT_BATCH_TIMEOUT)
 
 
+def preview_timeout(config):
+    value = config.get('preview_timeout', 120)
+    if isinstance(value, bool) or not isinstance(value, int) or not 10 <= value <= 3600:
+        raise SourceError('Sample time limit must be an integer between 10 and 3600 seconds.')
+    return value
+
+
 def api_backed(config):
     """A DataLoader whose reader is a remote API source: it must be collected
     first, outside any HTTP request, and never fetched as a side effect."""
@@ -159,7 +166,7 @@ def raw_records(config, sample_limit=None):
                 'resource':{**resource, 'root':str(root), 'files':entries},
                 'config':{**(config.get('reader_config') or {}), 'reference_inputs':config.get('reference_inputs') or {}},
                 'batch_size':config.get('read_batch_size', 100), 'sample_limit':sample_limit, 'offset':config.get('offset',0), 'record_limit':config.get('n',0)},
-                timeout=30 if sample_limit is not None else batch_timeout(config) * FULL_READ_BATCHES)
+                timeout=preview_timeout(config) if sample_limit is not None else batch_timeout(config) * FULL_READ_BATCHES)
         except Exception as exc:
             # The worker already told errors from the Dataset code in terms of
             # that code ("Dataset code line N: ..."); anything else is ours.
@@ -385,7 +392,7 @@ def preview(config: dict = Body(...)):
                     fields = [{'name':field,'type':'list','required':True,'nullable':False}]
                 return {'fields':fields,'preview':[],'preview_mode':'declared','sample_count':0,'snapshot':None}
             if not sample_requested:
-                raise SourceError('Add a top-level OUTPUT_SCHEMA list to identify output fields without loading data. Alternatively, explicitly choose Sample 1 record to execute your Dataset (30-second limit).')
+                raise SourceError('Add a top-level OUTPUT_SCHEMA list to identify output fields without loading data. Alternatively, explicitly choose Sample 1 record to execute your Dataset with its configured sample time limit.')
             validate(config)
             if graph:
                 from .input_composition import references

@@ -86,8 +86,13 @@ def main():
             from backend.features.data.torch_loader import RecordDataset, batches
             value = list(batches(RecordDataset(payload['records']), payload['batch_size']))
         elif kind == 'dataset':
+            def stage(message):
+                temporary = directory / 'stage.tmp'
+                temporary.write_text(message)
+                temporary.replace(directory / 'stage.txt')
+            stage('Importing PyTorch and Dataset runtime')
             from backend.features.data.torch_loader import execute_python
-            value = execute_python(payload)
+            value = execute_python(payload, on_stage=stage)
         elif kind == 'verify_tool':
             from backend.features.library.tool_verification import verify
             value = verify(payload['spec'])

@@ -86,7 +86,10 @@ def worker(kind, payload, on_stage=None, on_record=None, timeout=None):
         try:
             while process.poll() is None:
                 if timeout is not None and time.monotonic() - started > timeout:
-                    raise TimeoutError(f'{kind} worker exceeded {timeout} seconds')
+                    stage_path = root / 'stage.txt'
+                    stage = stage_path.read_text()[:500] if kind == 'dataset' and stage_path.exists() else None
+                    detail = f'. Last stage: {stage}. Check initialization/preprocessing or increase Sample time limit in Input.' if stage else ''
+                    raise TimeoutError(f'{kind} worker exceeded {timeout} seconds{detail}')
                 drain()
                 if control:
                     control.check()

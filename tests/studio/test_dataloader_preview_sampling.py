@@ -96,3 +96,46 @@ def test_explicit_sampling_can_detect_fields_even_if_declaration_is_invalid(prev
     sampled = client.post('/api/dataloaders/preview', json={**config,'preview_mode':'sample'})
     assert sampled.status_code == 200, sampled.text
     assert sampled.json()['fields'][0]['name'] == 'actual'
+
+
+def test_single_sample_never_scans_dataset_length(preview_client):
+    client, rid = preview_client
+    code = '''from torch.utils.data import Dataset
+class Rows(Dataset):
+    def __len__(self): raise RuntimeError("Length must not be scanned")
+    def __getitem__(self, index):
+        if index != 0: raise RuntimeError("Only one sample allowed")
+        return {"text":"first"}
+def build_dataset(resource): return Rows()
+'''
+    result=client.post('/api/dataloaders/preview',json={'loader':'python','resource_id':rid,'code':code,'preview_mode':'sample','read_batch_size':1024})
+    assert result.status_code == 200, result.text
+    assert result.json()['sample_count'] == 1
+    assert result.json()['preview'] == [{'text':'first'}]
+
+
+def test_sample_uses_its_own_time_limit(preview_client, monkeypatch):
+    from backend.features.chat import chat_control
+    client,rid=preview_client
+    seen=[]
+    def worker(kind, payload, **kwargs):
+        seen.append(kwargs['timeout'])
+        return [{'x':1}]
+    monkeypatch.setattr(chat_control,'worker',worker)
+    config={'loader':'python','resource_id':rid,'code':'def build_dataset(resource): pass','preview_mode':'sample','batch_timeout':10}
+    assert client.post('/api/dataloaders/preview',json=config).status_code==200
+    assert client.post('/api/dataloaders/preview',json={**config,'preview_timeout':600}).status_code==200
+    assert seen == [120,600]
+    assert client.post('/api/dataloaders/preview',json={**config,'preview_timeout':0}).status_code==422
+
+
+def test_sample_timeout_names_initialization_stage():
+    from backend.features.chat import chat_control
+    code='''import time
+from torch.utils.data import Dataset
+def build_dataset(resource):
+    time.sleep(30)
+    return Dataset()
+'''
+    with pytest.raises(TimeoutError, match='Initializing Dataset'):
+        chat_control.worker('dataset', {'code':code,'resource':{},'config':{},'sample_limit':1,'batch_size':1}, timeout=5)

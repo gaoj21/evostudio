@@ -7,7 +7,7 @@ import contextlib
 import json
 import inspect
 from itertools import islice
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, IterableDataset, DataLoader
 
 
 class RecordDataset(Dataset):
@@ -37,7 +37,7 @@ def batches(dataset, batch_size):
 FILENAME = '<dataloader.py>'
 
 
-def execute_python(payload, emit=None, on_info=None):
+def execute_python(payload, emit=None, on_info=None, on_stage=None):
     """Called in a killable worker, never exec user code in the API process.
 
     Anything the Dataset code raises comes back as a UserCodeError naming
@@ -45,18 +45,19 @@ def execute_python(payload, emit=None, on_info=None):
     from backend.features.user_code import TailBuffer, UserCodeError, explain
     output = TailBuffer()
     try:
-        return _execute_python(payload, emit, output, on_info)
+        return _execute_python(payload, emit, output, on_info, on_stage)
     except Exception as exc:
         raise UserCodeError(explain(exc, payload['code'], output.getvalue(), FILENAME, 'Dataset code')) from exc
 
 
-def _execute_python(payload, emit, output, on_info=None):
+def _execute_python(payload, emit, output, on_info=None, on_stage=None):
     from backend.features.data.dataset_interface import arguments
     values = arguments(payload['code'], payload.get('config') or {})
     namespace = {'__name__': 'studio_dataset'}
     # Prints from a dataset should not corrupt the worker result protocol;
     # they are kept to explain a failure.
     with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+        if on_stage: on_stage('Executing Dataset code and importing its dependencies')
         exec(compile(payload['code'], FILENAME, 'exec'), namespace)
         factory = namespace.get('build_dataset')
         if not callable(factory):
@@ -66,6 +67,7 @@ def _execute_python(payload, emit, output, on_info=None):
         if 'resource' in signature.parameters: provided['resource'] = payload['resource']
         if 'config' in signature.parameters: provided['config'] = values
         signature.bind(**provided)
+        if on_stage: on_stage('Initializing Dataset (build_dataset / __init__)')
         dataset = factory(**provided)
         if on_info is not None:
             try:
@@ -90,8 +92,15 @@ def _execute_python(payload, emit, output, on_info=None):
             if buffer: emit(buffer); count += len(buffer)
             return {'records':count}
         if payload.get('sample_limit') is not None:
-            # Batch size one prevents fetching a full configured batch for preview.
-            records = [chunk[0] for chunk in islice(batches(dataset, 1), payload['sample_limit'])]
+            if on_stage: on_stage('Reading the sample record (__getitem__ / __iter__ and preprocessing)')
+            if not isinstance(dataset, Dataset):
+                raise ValueError('build_dataset must return a PyTorch Dataset or IterableDataset.')
+            # The default sequential sampler calls len(dataset), which may scan
+            # all files. Sampling needs only bounded indices, not dataset size.
+            loader = (batches(dataset, 1) if isinstance(dataset, IterableDataset) else
+                      DataLoader(dataset, batch_size=1, sampler=range(payload['sample_limit']),
+                                 num_workers=0, collate_fn=collate_records))
+            records = [chunk[0] for chunk in islice(loader, payload['sample_limit'])]
         else:
             offset, limit = payload.get('offset', 0), payload.get('record_limit', 0)
             # Select before materialization, without reading a full batch past the limit.

@@ -19,7 +19,7 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
   const update = patch => {
     version.current += 1; setPreview(null); setError('');
     if ('code' in patch) setInputSchema(null);
-    const runtimeOnly = Object.keys(patch).every(key => ['read_batch_size','batch_timeout','n','offset','cache'].includes(key));
+    const runtimeOnly = Object.keys(patch).every(key => ['read_batch_size','batch_timeout','preview_timeout','n','offset','cache'].includes(key));
     const declared = config.output_schema_mode === 'declared';
     const changesShape = ['code','input_mode','reference_field','field_mapping','transform_tool'].some(key => key in patch);
     const clearOutputs = changesShape || (!runtimeOnly && !declared);
@@ -98,13 +98,14 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
     <details className="input-disclosure"><summary>Advanced settings</summary>
       <label><input type="checkbox" checked={config.cache !== false} onChange={e=>update({cache:e.target.checked})}/> Reuse prepared data until code, configuration or files change</label>
       <div className="field"><label htmlFor="loader-batch_timeout">Seconds allowed per batch</label><NumberInput id="loader-batch_timeout" min={10} max={3600} step={1} value={config.batch_timeout ?? 120} onChange={e=>update({batch_timeout:Number(e.target.value)})}/><small className="muted">How long your Dataset may take to produce one batch before the run stops with an error (10–3600). Raise it when items do heavy work such as calling an API.</small></div>
+      <div className="field"><label htmlFor="loader-preview_timeout">Sample time limit (seconds)</label><NumberInput id="loader-preview_timeout" min={10} max={3600} step={1} value={config.preview_timeout ?? 120} onChange={e=>update({preview_timeout:Number(e.target.value)})}/><small className="muted">Includes Python imports, Dataset initialization and reading one record. Increase this for checkpoint or model loading.</small></div>
       {field('file_pattern','File pattern','*')}
       {['offset'].map(key=><div className="field" key={key}><label htmlFor={`loader-${key}`}>{key==='offset'?'Skip records':'Record limit (0 = all)'}</label><NumberInput id={`loader-${key}`} type="number" min={0} value={config[key] ?? 0} onChange={e=>update({[key]:Number(e.target.value)})}/></div>)}
       {field('group_by','Sequential group field','Optional')}{field('order_by','Order within group','Optional')}
     </details>
     {!legacy && <>
       <button type="button" className="primary" disabled={busy || codeDirty || !inputSchema || !config.resource_id} onClick={sampleOutputs}>{busy ? 'Sampling…' : 'Sample 1 record (detect outputs)'}</button>
-      <p className="muted small">Runs your Dataset to sample 1 record, then applies their field names and types to the canvas output ports. Execution has a 30-second limit.</p>
+      <p className="muted small">Runs your Dataset to sample 1 record, then applies their field names and types to the canvas output ports. Time limit: {config.preview_timeout ?? 120} seconds (adjust in Advanced settings). Dataset initialization still runs; sampling does not scan dataset length.</p>
     </>}
     <div ref={resultRef} aria-live="polite">
     {error && <p role="alert">{String(error)}</p>}
