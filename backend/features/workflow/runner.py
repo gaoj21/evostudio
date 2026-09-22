@@ -580,6 +580,8 @@ def _execute_run(run_id: str, graph_doc: dict, inputs: dict) -> None:
                 node = one.nodes[0]
                 framework_nodes.append(node)
                 agents[node.name] = _agent_for_node(agent_manager, node)
+                from backend.features.execution.token_usage import attach_model
+                attach_model(agents[node.name].llm, state)
                 if state.get('llm_batch_size'):
                     from backend.features.execution.provider_batch import attach_workflow_model
                     attach_workflow_model(agents[node.name].llm, state)

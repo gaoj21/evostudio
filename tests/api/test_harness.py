@@ -148,3 +148,14 @@ def test_selected_skill_is_in_model_instructions(local, monkeypatch):
     model = ScriptedModel(replies=[AIMessage(content='done')])
     harness.run_turn(local, {'skill_names':['analysis']}, 'skill-test', 'hello', lambda e: None, threading.Event(), model=model)
     assert any('Always distinguish evidence from guesses.' in str(m.content) for m in model.calls[0])
+
+
+def test_usage_counts_new_turn_only(local):
+    events=[]
+    first=ScriptedModel(replies=[AIMessage(content='first',usage_metadata={'input_tokens':10,'output_tokens':2,'total_tokens':12})])
+    harness.run_turn(local,{},'usage-session','hello',events.append,threading.Event(),model=first)
+    assert sum(e['content']['total_tokens'] for e in events if e['type']=='token_usage' and e['content']) == 12
+    events.clear()
+    second=ScriptedModel(replies=[AIMessage(content='second',usage_metadata={'input_tokens':15,'output_tokens':3,'total_tokens':18})])
+    harness.run_turn(local,{},'usage-session','again',events.append,threading.Event(),model=second)
+    assert sum(e['content']['total_tokens'] for e in events if e['type']=='token_usage' and e['content']) == 18

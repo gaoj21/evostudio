@@ -122,3 +122,20 @@ def test_copy_task_has_independent_identity_and_preserves_definition(client, mon
     assert graphs.load_graph(task['id'])['tasks'][0]['prompt'] != 'Changed'
     again = client.post(f'/api/projects/{p["id"]}/tasks/{task["id"]}/copy').json()
     assert again['id'] != copied['id']
+
+
+def test_assigning_legacy_task_preserves_chat_owner(client):
+    from backend.api import graphs
+    task=graphs.create_graph('Legacy chat owner','')
+    p=client.post('/api/projects',json={'name':'Project'}).json()
+    moved=client.put(f'/api/projects/{p["id"]}/tasks/{task["id"]}').json()
+    assert moved['task_id']==task['id']
+    renamed=graphs.rename_graph(moved['id'],'Renamed chat task')
+    assert renamed['task_id']==task['id']
+
+
+def test_renaming_unassigned_legacy_graph_retains_original_owner(client):
+    from backend.api import graphs
+    task=graphs.create_graph('Old chat owner','')
+    renamed=graphs.rename_graph(task['id'],'New chat owner')
+    assert renamed['task_id']==task['id']

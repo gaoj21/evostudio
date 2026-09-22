@@ -1,3 +1,4 @@
+import TokenUsage from '../../components/TokenUsage.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels';
 import { useLayoutMode } from '../../useLayoutMode.js';
@@ -96,6 +97,7 @@ export default function RunResultPage({ graphId, sourceNames = [], sequence = nu
     {error && <div role="alert" className="platform-error">{error} <button onClick={() => setRevision(v => v + 1)}>Retry</button></div>}
     {!result && !error && <p role="status">Loading result…</p>}
     {result && <>
+      <TokenUsage usage={result.token_usage}/>
       {result.error && <div role="alert" className="platform-error">{typeof result.error === 'string' ? result.error : JSON.stringify(result.error)}</div>}
       <EvaluatorReports reports={result.evaluations} />
       <details className="run-result-content result-input-data" aria-label="Input data" open><summary>Input data</summary>

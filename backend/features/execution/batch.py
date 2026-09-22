@@ -183,6 +183,10 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
             with _lock:
                 item["status"] = run.get("status", "failed")
                 item["error"] = run.get("error")
+                if run.get('token_usage'):
+                    from backend.features.execution.token_usage import add_usage
+                    add_usage(state.setdefault('token_usage', {}), run['token_usage'])
+                    item['token_usage'] = run['token_usage']
                 item["review_status"] = run.get("review_status")
                 item["attempts"] = item.get("attempts", 0) + 1
                 item["retryable"] = _retryable(item, run)
@@ -718,6 +722,7 @@ def _digest(state: dict) -> dict:
         # The one line an evaluation boils down to, for the history list.
         "evaluation": evaluation_headline(state.get("evaluations")),
         # A stream that stopped before reading everything can still be resumed.
+        "token_usage": state.get("token_usage"),
         "dataset_length": state.get("dataset_length"),
         "input_total": state.get("input_total"),
         "dataset_initialized": bool(state.get("dataset_initialized")),

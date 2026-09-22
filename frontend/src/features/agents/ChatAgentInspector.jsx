@@ -123,11 +123,15 @@ export default function ChatAgentInspector({ graphId, agent, onBack, onSave, sav
         <div className="field"><strong>Connected Memory</strong>{!agent.memories.length && <p>No Memory connected.</p>}{agent.memories.map(m => <div key={memoryId(m)}>{resources.find(r => r.id === memoryId(m))?.name || memoryNodes.find(n => n.id === memoryId(m))?.data.title || memoryId(m)} · {[m.read && 'Read', m.write && 'Write'].filter(Boolean).join(' / ')}</div>)}</div>
         <div aria-live="polite">{session?.messages.map((m, i) => <article className="agent-message" key={i}><strong>{m.role === 'user' ? 'You' : agent.name}</strong><div>{m.content}</div>{m.failed && <small>Previous attempt failed; not replayed.</small>}</article>)}</div>
         {session?.events.length > 0 && <details><summary>Execution activity ({session.events.length})</summary>{session.events.map((e, i) => <div className="agent-event" key={i}><strong>{e.type} {e.name || ''}</strong>{e.type === 'memory_read' && <span> · {e.hits} records{e.total_records != null ? ` / ${e.total_records} stored` : ''}{e.mode === 'browse' ? ' · overview preview' : ''}</span>}<pre>{JSON.stringify(e.args || e.items || e.content, null, 2)}</pre></div>)}</details>}
+        {session && <p className="muted small">{session.token_usage?.reported_calls
+          ? `Tokens (reported): ${session.token_usage.total_tokens} · input ${session.token_usage.input_tokens} / output ${session.token_usage.output_tokens} · this turn ${session.turn_token_usage?.total_tokens ?? 'unavailable'}`
+          : 'Token usage: not reported by the provider yet.'}{session.usage_unavailable && ' Some model calls did not report usage; totals are partial.'}</p>}
         {session?.error && <p role="alert">{session.error}</p>}
         {running && <p role="status">{session.status === 'stopping' ? 'Stopping after the current operation…' : 'Agent is running…'}</p>}
         <textarea aria-label="Message Chat Agent" rows={4} value={message} onChange={e => setMessage(e.target.value)} placeholder="Ask this Agent to investigate, use a tool, or recall a memory…" />
         <div className="memory-row"><button disabled={saving || busy || running || !message.trim()} onClick={() => action(async () => {
           const current = session || await api.createAgentSession(graphId, agent.id);
+          if (!session) replace(current);
           const result = await api.sendAgentMessage(graphId, agent.id, current.id, message);
           replace(result); setMessage('');
         })}>Send</button>{running && <button disabled={busy || session.status === 'stopping'} onClick={() => action(async () => replace(await api.stopAgentSession(graphId, agent.id, session.id)))}>Stop</button>}</div>

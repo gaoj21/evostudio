@@ -1,3 +1,5 @@
+import TokenUsage from './components/TokenUsage.jsx';
+import ResizableDrawer from './components/ResizableDrawer.jsx';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow,
@@ -1197,6 +1199,16 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
     setLocatingMemories(false);
   }, [locatingMemories, memoryNodes, fitView]);
   const canvasNodes = useMemo(() => [...displayNodes, ...memoryNodes, ...canvasAgents.nodes.map(n => ({ ...resourceGeometry(n, resourceMeasurements[n.id]), data: { ...n.data, onDelete: removeCanvasResource, runMode }, measured: resourceMeasurements[n.id], selected: n.id === selectedId }))], [displayNodes, memoryNodes, canvasAgents.nodes, selectedId, resourceMeasurements, removeCanvasResource, runMode]);
+  const fittedResourceGraph = useRef(null);
+  useEffect(() => {
+    if (!graph?.id || !canvasAgents.loaded || fittedResourceGraph.current === graph.id) return undefined;
+    const frame = requestAnimationFrame(() => {
+      fitView({padding:0.2, maxZoom:1});
+      fittedResourceGraph.current = graph.id;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [graph?.id, canvasAgents.loaded, canvasNodes, fitView]);
+
   // Runtime decoration only: never persist animation into workflow edges.
   const executionEdges = useMemo(() => {
     const active = runMode && ['running', 'cancelling'].includes((batch || run)?.status);
@@ -1758,7 +1770,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
         </div>
       )}
       {drawerOpen && (batch || (run && isSettled(RUN_SETTLED, run.status))) && (
-        <div className="drawer">
+        <ResizableDrawer>
           <div className="drawer-head">
             <div className="run-mode-tabs">
               {batch ? (
@@ -1858,6 +1870,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
                   </div>
                 </div>
               )}
+              <TokenUsage usage={batch?.token_usage}/>
               {batch?.streaming && <p className="muted small">{batch.dataset_initialized
                 ? `Dataset total: ${batch.dataset_length ?? 'unknown (no __len__)'} · Selected for this run: ${batch.input_total ?? 'unknown'}`
                 : 'Initializing Dataset; total count is not available yet.'}</p>}
@@ -1938,7 +1951,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
           ) : (
             <MemoryPanel graphId={graph?.id} />
           )}
-        </div>
+        </ResizableDrawer>
       )}
       <RunDialog
         open={activeOverlay === 'run'}

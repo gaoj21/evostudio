@@ -36,7 +36,7 @@ it('uploads Python, generates parameters and previews saved results without muta
  expect(api.inspectEvaluatorCode).not.toHaveBeenCalled();
  await userEvent.click(screen.getByText('Confirm code'));
  expect(await screen.findByLabelText(/threshold/)).toHaveValue(.5);
- await userEvent.click(screen.getByText('Preview evaluation interface'));
+ await userEvent.click(screen.getByText('Run evaluator and detect metrics'));
  expect(await screen.findByLabelText('Evolve objective')).toHaveValue('accuracy');
  expect(api.previewEvaluatorCode).toHaveBeenCalledWith('test',expect.objectContaining({batch_id:'saved-batch',evaluator:'quality'}));
  await waitFor(()=>expect(update).toHaveBeenLastCalledWith('quality',expect.objectContaining({evaluator:expect.objectContaining({code,metric:'accuracy'})})));

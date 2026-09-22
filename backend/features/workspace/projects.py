@@ -99,7 +99,7 @@ def assign_task(project_id: str, graph_id: str):
     if not re.fullmatch(r"[a-z0-9_-]+", graph_id): raise HTTPException(404, "Task not found")
     graph=graphs.load_graph(graph_id)
     if not graph:raise HTTPException(404,'Task not found')
-    return graphs.save_graph(graph_id,{**graph,'project_id':None if project_id == 'unassigned' else project_id,'task_id':graph.get('task_id') or uuid.uuid4().hex})
+    return graphs.save_graph(graph_id,{**graph,'project_id':None if project_id == 'unassigned' else project_id,'task_id':graph.get('task_id') or graph['id']})
 
 
 @router.delete('/{project_id}')

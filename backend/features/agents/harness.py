@@ -184,6 +184,9 @@ def run_turn(graph, settings, thread_id, message, emit, cancelled, model=None):
                 # Only emit events from this turn, not checkpoint history.
                 if msg in (previous.values or {}).get('messages', []): continue
                 if isinstance(msg, AIMessage):
+                    from backend.features.execution.token_usage import reported_usage
+                    usage = reported_usage(getattr(msg, 'usage_metadata', None) or (msg.response_metadata or {}).get('token_usage') or (msg.response_metadata or {}).get('usage'))
+                    emit({'type':'token_usage', 'content':usage, 'available':usage is not None})
                     for call in msg.tool_calls:
                         emit({'type': 'tool_call', 'name': call['name'], 'args': call['args']})
                     if msg.content and not msg.tool_calls:
@@ -228,6 +231,9 @@ async def run_workflow_node(task, inputs, state, recall):
     message += '\nReturn a JSON object with exactly these output fields: ' + json.dumps(outputs, ensure_ascii=False)
     event = threading.Event()
     def emit(item):
+        if item.get('type') == 'token_usage' and item.get('content'):
+            from backend.features.execution.token_usage import add_usage
+            add_usage(state.setdefault('token_usage', {}), item['content'])
         activity = state.setdefault('harness_events', {}).setdefault(task['name'], [])
         activity.append(item)
         del activity[:-200]

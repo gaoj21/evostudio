@@ -1,3 +1,4 @@
+import TokenUsage from '../../components/TokenUsage.jsx';
 import React, { useState } from 'react';
 import { describeRun, toneClass } from './runStates.js';
 import JsonView from '../../components/JsonView.jsx';
@@ -26,6 +27,7 @@ export default function RunOutcome({ run }) {
   const node = run.node_error || run.late_node_error;
   return (
     <div className="run-outcome">
+      <TokenUsage usage={run.token_usage}/>
       {state.note && <div className="muted small">{state.note}</div>}
       {run.finished_after_abandon && (
         <div className="muted small">

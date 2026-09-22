@@ -62,7 +62,19 @@ def graph_for(graph_id):
 
 
 def owner(graph):
-    return str(graph.get('task_id') or graph['id'])
+    scope = str(graph.get('task_id') or graph['id'])
+    legacy = str(graph['id'])
+    if scope != legacy:
+        # Older agents were stored under graph.id before project assignment
+        # introduced task_id. Move definitions and sessions together, retaining
+        # the old checkpoint namespace so conversation history still resumes.
+        with _lock, database() as db:
+            rows = db.execute('SELECT id, kind, parent, body FROM objects WHERE owner=?', (legacy,)).fetchall()
+            for id, kind, parent, body in rows:
+                value = json.loads(body)
+                if kind == 'session': value.setdefault('checkpoint_scope', legacy)
+                put(db, id, scope, kind, parent, value)
+    return scope
 
 
 @contextmanager
@@ -187,6 +199,13 @@ def create_session(graph_id: str, agent_id: str):
 
 
 def execution_error(exc):
+    if isinstance(exc, ModuleNotFoundError):
+        import sys
+        return f"Missing Python module: {exc.name}. Install it in the backend environment ({sys.executable}), then send again."
+    if isinstance(exc, ImportError):
+        return 'Chat Agent dependency/interface mismatch. The active LLM adapter must export get_agent_model(provider) returning a LangChain chat model with tool calling. Check backend package versions and adapter support.'
+    if isinstance(exc, NotImplementedError):
+        return 'The selected model adapter does not implement a capability required by Chat Agent, such as tool calling. Configure a compatible LangChain chat model.'
     text = str(exc).lower()
     if any(word in text for word in ('nodename', 'name resolution', 'disconnected', 'connection', 'timeout', 'timed out')):
         return 'Model service connection failed. Check the network/provider endpoint, then send again in this conversation.'
@@ -198,10 +217,17 @@ def _execute(graph, agent, session, event):
     def persist():
         with database() as db: put(db, sid, scope, 'session', aid, session)
     def emit(item):
+        if item.get('type') == 'token_usage':
+            if item.get('content'):
+                from backend.features.execution.token_usage import add_usage
+                add_usage(session.setdefault('token_usage', {}), item['content'])
+                add_usage(session.setdefault('turn_token_usage', {}), item['content'])
+            else:
+                session['usage_unavailable'] = True
         session['events'] = (session['events'] + [item])[-200:]
         persist()
     try:
-        thread_id = hashlib.sha256((f"{scope}:{aid}:{sid}" + (f":recovery:{session['generation']}" if session.get('generation') else '')).encode()).hexdigest()
+        thread_id = hashlib.sha256((f"{session.get('checkpoint_scope', scope)}:{aid}:{sid}" + (f":recovery:{session['generation']}" if session.get('generation') else '')).encode()).hexdigest()
         answer = harness.run_turn(graph, agent, thread_id, session['messages'][-1]['content'], emit, event)
         if event.is_set():
             session['status'] = 'stopped'
@@ -239,9 +265,10 @@ def send_message(graph_id: str, agent_id: str, session_id: str, body: TurnInput)
         validate_memories(graph, agent)
         # Validate credentials/adapters before accepting the turn. No model call.
         try: harness.make_model(agent.get('provider'))
-        except Exception: raise HTTPException(422, 'Model configuration is unavailable or unsupported. Check the selected provider.')
+        except (ImportError, NotImplementedError) as exc: raise HTTPException(422, execution_error(exc)) from exc
+        except Exception: raise HTTPException(422, 'Model configuration is unavailable or unsupported. Check the selected provider; Chat Agent requires get_agent_model(provider) and LangChain tool calling, in addition to workflow/batch support.')
         session['messages'].append({'role': 'user', 'content': body.message})
-        session.update(status='running', error=None, events=[])
+        session.update(status='running', error=None, events=[], turn_token_usage={}, usage_unavailable=False)
         put(db, session_id, owner(graph), 'session', agent_id, session)
         db.commit()
         event = threading.Event()

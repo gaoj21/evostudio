@@ -144,6 +144,9 @@ def rename_graph(graph_id: str, name: str) -> dict:
         ])
 
     with _lock:
+        # Legacy Chat Agents and sessions are keyed by the original graph ID.
+        # Keep that owner stable when the editable graph name/ID changes.
+        graph['task_id'] = graph.get('task_id') or graph_id
         graph["id"] = new_id
         graph["name"] = name
         _save(graph)

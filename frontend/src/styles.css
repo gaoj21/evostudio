@@ -3400,3 +3400,8 @@ button.run-badge:hover:not(:disabled) {
     opacity: 1;
   }
 }
+
+.drawer-resizer { height: 9px; flex-shrink: 0; cursor: ns-resize; touch-action: none; background: var(--border); }
+.drawer-resizer:hover, .drawer-resizer:focus-visible { background: var(--accent, #6877ef); }
+.drawer > .drawer-head { flex-shrink: 0; }
+.drawer > .memory-panel { min-height: 0; overflow-y: auto; flex: 1; }

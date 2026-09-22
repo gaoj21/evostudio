@@ -17,3 +17,9 @@
 ## 验证
 
 `.venv/bin/python -m pytest tests/api tests/studio -q`（从仓库根目录）
+
+## Usage and adapter diagnostics
+
+Canvas Chat requires `llm.get_agent_model(provider)` to return a LangChain chat model supporting tool calling; a workflow-only or `batch()` adapter is not sufficient. Missing imports are reported with the backend Python path, while arbitrary provider exceptions remain redacted.
+
+Provider usage from new AI messages is emitted as `token_usage` events and persisted as session totals and per-turn totals. Restored checkpoint history is excluded. Missing usage is unknown, not zero. Workflow harness nodes reuse these events. Standard workflow models are observed through their existing `_update_cost` response hook by `features/execution/token_usage.py`; adapters without this hook or usage metadata cannot provide counts. No model adapter source is modified. This is token reporting, not a price/billing estimate, and does not account for hidden provider retries or embedding calls without reported usage.

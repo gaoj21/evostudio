@@ -133,3 +133,18 @@ def test_tool_and_skill_settings_persist(client):
     assert res.status_code == 200
     loaded = client.get(root).json()['agents'][0]
     assert loaded['tools'] == ['double'] and loaded['skill_names'] == ['analysis']
+
+
+def test_legacy_owner_migration_preserves_agent_session_and_checkpoint_scope(client, monkeypatch):
+    root='/api/graphs/a/agents'
+    agent=client.post(root,json={}).json()
+    session=client.post(f'{root}/{agent["id"]}/sessions').json()
+    monkeypatch.setattr(api.graphs,'load_graph',lambda id:{'id':id,'task_id':'stable-task'} if id=='a' else None)
+    assert client.get(root).json()['agents'][0]['id']==agent['id']
+    restored=client.get(f'{root}/{agent["id"]}/sessions').json()['sessions'][0]
+    assert restored['id']==session['id']
+    assert restored['checkpoint_scope']=='a'
+    with api.database() as db:
+        assert db.execute('SELECT count(*) FROM objects WHERE owner=?',('a',)).fetchone()[0]==0
+        assert db.execute('SELECT count(*) FROM objects WHERE owner=?',('stable-task',)).fetchone()[0]==2
+    assert client.get(root).json()['agents'][0]['id']==agent['id']
