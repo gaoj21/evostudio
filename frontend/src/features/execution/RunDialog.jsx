@@ -719,6 +719,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
               {(collection.batches || []).length > 0 && <TokenUsage usage={collection.token_usage} running={collection.status === 'collecting'} />}
               {(collection.batches || []).map((item, index) => <div key={item.id}>Batch {index + 1} · {item.total} records · {item.status || 'running'}{tokenSuffix(item.token_usage, collection.status === 'collecting' && !BATCH_SETTLED.includes(item.status))} <button type="button" onClick={() => onBatchStart?.(item.id)}>View batch {index + 1}</button></div>)}
             </>}
+            {stoppingCollection && <p role="status" data-testid="collection-stopping">Stopping this collection: no further window is fetched and no further batch is started. A provider request already sent finishes on its own.</p>}
             {collection?.resource_name && <p className="muted small" data-testid="collection-resource">Saved as data resource “{collection.resource_name}”. To preprocess it in code, choose it as the data resource of a PyTorch Dataset Input; later runs reuse it without fetching again.</p>}
             {collection?.resource_error && <p className="muted small batch-error">{collection.resource_error}</p>}
             {collectionId && <>

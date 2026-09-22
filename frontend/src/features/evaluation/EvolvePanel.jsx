@@ -94,7 +94,7 @@ export default function EvolvePanel({ open, graphId, onClose, onApplied }) {
                   <div className="batch-item-head">
                     <span>{t.params?.mode === 'evaluate' ? 'Evaluation' : `Evolve · ${t.params?.preset || t.task_id}`}</span>
                     <span className={`node-status ${statusClass(t.status)}`}>
-                      {t.status === 'running' ? (t.stage || 'running') : t.status}
+                      {t.status === 'running' ? (t.stop_requested ? 'stopping' : t.stage || 'running') : t.status}
                     </span>
                   </div>
                   <div className="muted small">

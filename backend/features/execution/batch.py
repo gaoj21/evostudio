@@ -304,6 +304,15 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
 
 
 def _finish_batch(state, graph):
+    if state.get("cancel_requested"):
+        # A stopped batch has stopped, whatever its own evaluators still have
+        # to say about what ran. They get their own two minutes and a worker
+        # process; waiting for them left the batch reading `cancelling` — the
+        # Stop button disabled and saying "Stopping…" — for all of it. The
+        # report below is added to the same batch when it arrives.
+        with _lock:
+            state["status"] = _outcome(state)
+            _persist_batch(state)
     if state.get("metric"):
         from backend.api import evaluation
         with _lock:
@@ -386,7 +395,44 @@ def cancel_batch(batch_id: str) -> dict:
         except Exception:
             pass
     _persist_batch(snapshot)
+    # A record may be inside a call with no interruption point. The batch says
+    # it stopped either way, rather than after that call happens to return.
+    timer = threading.Timer(CANCEL_GRACE_SECONDS, _settle_uninterruptible, args=(batch_id,))
+    timer.daemon = True
+    timer.start()
     return {"cancelled": True, **counts}
+
+
+# How long a stop waits for the batch's own worker to wind it down before the
+# batch reports itself stopped. Each record checks for the stop before it
+# starts, so this is the length of one interruption point, not of a record.
+CANCEL_GRACE_SECONDS = 3.0
+
+
+def _settle_uninterruptible(batch_id: str) -> None:
+    """Report a stopped batch as stopped although a record is still in flight.
+
+    Its run cannot be taken back — the provider has the request — so the
+    record is settled as cancelled and says that what it had sent may still
+    be billed. If the run does come back with a result, the item takes it:
+    work that was paid for is not thrown away.
+    """
+    with _lock:
+        state = _batches.get(batch_id)
+        if state is None or state.get("status") != "cancelling":
+            return
+        for item in state.get("items") or []:
+            if item.get("status") in ("pending", "running"):
+                if item.get("status") == "running":
+                    item["error"] = ("Stopped by the user. This record's run could not be "
+                                     "interrupted, so it finishes in the background and "
+                                     "what it had already sent may still be billed.")
+                item["status"] = "cancelled"
+                state["cancelled_items"] = state.get("cancelled_items", 0) + 1
+        state["status"] = "cancelled"
+        state.pop("retry_note", None)
+        snapshot = dict(state)
+    _persist_batch(snapshot)
 
 
 RESUMABLE = ("cancelled", "interrupted", "completed_with_errors", "failed", "completed")
@@ -482,6 +528,13 @@ def resume_batch(batch_id: str, graph: dict) -> dict:
                 return {"resumed": False, "reason": "no such batch"}
         if state.get("status") in ("running", "cancelling"):
             return {"resumed": False, "reason": "batch is still running"}
+        worker = _threads.get(batch_id)
+        if worker is not None and worker.is_alive():
+            # A stopped batch may read `cancelled` while its last record is
+            # still inside a call that could not be interrupted. Resuming now
+            # would run two workers over one batch's items.
+            return {"resumed": False,
+                    "reason": "the last record of this batch has not finished stopping"}
         if state.get("graph_id") and graph.get("id") and state["graph_id"] != graph.get("id"):
             return {"resumed": False, "reason": "batch belongs to another workflow"}
         graph = copy.deepcopy((state.get("execution_snapshot") or {}).get("graph") or graph)

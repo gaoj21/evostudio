@@ -126,6 +126,9 @@ def run_turn(graph, settings, thread_id, message, emit, cancelled, model=None):
     def check():
         if cancelled.is_set(): raise RuntimeError('Execution stopped')
         if time.monotonic() > deadline: raise TimeoutError('Execution time limit reached')
+    # A turn stopped before its worker was free must not read memory, build an
+    # agent or reach the model at all.
+    check()
     class Limits(AgentMiddleware):
         def wrap_model_call(self, request, handler):
             check()

@@ -1102,6 +1102,11 @@ def stop_assistant(graph_id: str, request_id: str):
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     control.event.set()
+    # A server-side turn settles here rather than when its thread unwinds: the
+    # poller must not re-attach to it, and its answer is no longer wanted.
+    turn = turn_jobs.stop(graph_id, request_id)
+    if turn is not None:
+        return {"status": turn["status"], "turn": turn}
     return {"status": "stopped" if control.finished else "stopping"}
 
 

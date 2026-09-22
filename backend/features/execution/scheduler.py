@@ -37,6 +37,10 @@ class ScheduleError(Exception):
     """User-facing schedule validation error (HTTP 422)."""
 
 
+class _Paused(Exception):
+    """Stop or pause landed while an occurrence was being claimed."""
+
+
 def _path(graph_id: str) -> Path:
     return SCHEDULES_DIR / f"{graph_id}.json"
 
@@ -370,6 +374,8 @@ def _fire(graph_id, schedule, stop_event=None):
                 occurrence['inputs'][schedule['time_input']] = due
         occurrence.setdefault('session', schedule['session'])
         run_id = occurrence['run_id']
+        # What the claim overwrites, so a Stop can hand it back untouched.
+        claimed_from = {k: schedule.get(k) for k in ('in_flight', 'last_run_id', 'last_fire', 'fires')}
         schedule['in_flight'] = occurrence
         schedule['last_run_id'] = run_id
         schedule['last_fire'] = _now().isoformat()
@@ -378,11 +384,21 @@ def _fire(graph_id, schedule, stop_event=None):
         try:
             if graph_store.load_graph(graph_id) is None:
                 raise ScheduleError(f"Workflow '{graph_id}' no longer exists")
+            # Claiming an occurrence reads the workflow and its snapshot, which
+            # takes long enough for Stop or a pause to land in the middle of it.
+            # Checked here, immediately before dispatch: the old check was at
+            # the top of the claim, so a schedule paused during it still ran.
+            if stop_event is not None and stop_event.is_set():
+                raise _Paused()
             returned = launch(graph, occurrence['inputs'],
                               {**schedule, 'session': occurrence['session']}, occurrence)
             schedule['last_run_id'] = returned
             schedule['in_flight']['run_id'] = returned
             schedule['last_error'] = None
+        except _Paused:
+            # Give the claim back rather than start a run nobody is watching:
+            # the occurrence stays due and runs when the schedule resumes.
+            schedule.update(claimed_from)
         except Exception:
             schedule['needs_resume'] = True
             schedule['last_error'] = traceback.format_exc().strip().split('\n')[-1]

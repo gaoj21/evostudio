@@ -133,3 +133,25 @@ describe('stopping a batch', () => {
     expect(api.cancelBatch).toHaveBeenCalledWith('batch-other');
   });
 });
+
+describe('the Stop of a batch running out of sight', () => {
+  it('says the click landed instead of offering the same Stop again', async () => {
+    // It is still listed as live — a cancelling batch is still spending — so
+    // the only thing that can say Stop was taken is the button itself.
+    api.getBatch.mockResolvedValue({ batch_id: 'shown', status: 'completed', items: [] });
+    api.listBatches.mockResolvedValue({ batches: [{ batch_id: 'other', status: 'running' }] });
+    api.cancelBatch.mockResolvedValue({ cancelled: true, not_started: 3, interrupted: 0 });
+    const { result } = renderHook(() => useExecutionSession({ graphId: 'g' }));
+
+    await waitFor(() => expect(result.current.unattended).toBe('other'));
+    expect(result.current.unattendedStopping).toBe(false);
+    await act(async () => { await result.current.cancelBatch('other'); });
+
+    api.listBatches.mockResolvedValue({ batches: [{ batch_id: 'other', status: 'cancelling' }] });
+    await waitFor(() => expect(result.current.unattendedStopping).toBe(true), { timeout: 8000 });
+
+    api.listBatches.mockResolvedValue({ batches: [{ batch_id: 'other', status: 'cancelled' }] });
+    await waitFor(() => expect(result.current.unattended).toBeNull(), { timeout: 8000 });
+    expect(result.current.unattendedStopping).toBe(false);
+  }, 30000);   // the unattended listing is polled every five seconds
+});

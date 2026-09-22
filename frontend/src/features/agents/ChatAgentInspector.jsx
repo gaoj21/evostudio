@@ -146,7 +146,7 @@ export default function ChatAgentInspector({ graphId, agent, onBack, onSave, sav
           ? `Tokens (reported): ${session.token_usage.total_tokens} · input ${session.token_usage.input_tokens} / output ${session.token_usage.output_tokens} · this turn ${session.turn_token_usage?.total_tokens ?? 'unavailable'}`
           : 'Token usage: not reported by the provider yet.'}{session.usage_unavailable && ' Some model calls did not report usage; totals are partial.'}</p>}
         {session?.error && <p role="alert">{session.error}</p>}
-        {running && <p role="status">{session.status === 'stopping' ? 'Stopping after the current operation…' : 'Agent is running…'}</p>}
+        {running && <p role="status">{session.status === 'stopping' ? (session.stop_note || 'Stopping after the current operation…') : 'Agent is running…'}</p>}
         <textarea aria-label="Message Chat Agent" rows={4} value={message} onChange={e => setMessage(e.target.value)} placeholder="Ask this Agent to investigate, use a tool, or recall a memory…" />
         <div className="memory-row"><button disabled={saving || busy || running || !message.trim()} onClick={() => action(async () => {
           const current = session || await api.createAgentSession(graphId, agent.id);

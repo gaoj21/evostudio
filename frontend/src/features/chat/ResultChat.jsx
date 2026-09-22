@@ -4,7 +4,7 @@ import ChatSessions from './ChatSessions.jsx';
 import ChatActivity from './ChatActivity.jsx';
 import ChatComposer from './ChatComposer.jsx';
 import { useChatHistory, resultChatKey, newMessageId } from './chatSession.js';
-import { followTurn, loadPendingTurn, savePendingTurn, clearPendingTurn, turnOutcome } from './assistantTurns.js';
+import { followTurn, loadPendingTurn, savePendingTurn, clearPendingTurn, rememberStopped, wasStopped, turnOutcome } from './assistantTurns.js';
 import CopyButton from './CopyButton.jsx';
 import { api } from '../../api.js';
 
@@ -88,7 +88,9 @@ export default function ResultChat({ graphId, run }) {
     else if (api.runningAssistantTurns) {
       Promise.resolve(api.runningAssistantTurns(graphId, 'results')).then(r => {
         const running = r?.turns?.[0];
-        if (running) attach({ turnId: running.turn_id, sessionId: sessionsRef.current.activeId });
+        if (running && !wasStopped(resultChatKey(graphId), running.turn_id)) {
+          attach({ turnId: running.turn_id, sessionId: sessionsRef.current.activeId });
+        }
       }).catch(() => {});
     }
     return () => { cancelled = true; };
@@ -120,6 +122,7 @@ export default function ResultChat({ graphId, run }) {
     const turnId = cancellation.current.current?.id;
     if (await cancellation.stop()) {
       clearPendingTurn(store, turnId);
+      rememberStopped(store, turnId);
       busyRef.current = false; setBusy(false); setProgress('');
       setMessages(previous => [...previous, { id: newMessageId(), role: 'assistant', content: 'Stopped.', context, stopped: true }]);
     }

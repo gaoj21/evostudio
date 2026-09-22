@@ -951,7 +951,9 @@ def export_batch(batch_id: str, format: str = Query(default="csv")):
 
 @app.post("/api/batches/{batch_id}/cancel")
 def cancel_batch(batch_id: str):
-    """Stop a batch starting further items; in-flight items finish."""
+    """Stop a batch: no further items, and the ones in flight are stopped
+    where they are. A record inside a call that cannot be interrupted is
+    reported as stopped and says that what it sent may still be billed."""
     outcome = batch_store.cancel_batch(batch_id)
     if not outcome.get("cancelled") and outcome.get("reason") == "no such batch":
         raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found")

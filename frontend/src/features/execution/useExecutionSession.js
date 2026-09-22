@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { api } from '../../api.js';
-import { cancelOutcome, unattendedBatch } from './batchControl.js';
+import { cancelOutcome, unattendedState } from './batchControl.js';
 
 import { BATCH_SETTLED, RUN_SETTLED } from './runStates.js';
 
@@ -174,7 +174,7 @@ export function useExecutionSession({ graphId, onError, onClearSelection }) {
       try {
         const listed = await api.listBatches(graphId);
         if (!stopped) {
-          setUnattended(unattendedBatch(listed?.batches || listed, batch?.batch_id));
+          setUnattended(unattendedState(listed?.batches || listed, batch?.batch_id));
         }
       } catch {
         // This badge is a warning rather than a source of truth. Retry later.
@@ -287,6 +287,8 @@ export function useExecutionSession({ graphId, onError, onClearSelection }) {
     runStarting,
     setDrawerOpen,
     setDrawerTab,
-    unattended,
+    unattended: unattended?.batch_id ?? null,
+    // 'cancelling' keeps it listed as live: the badge must say the click landed.
+    unattendedStopping: unattended?.status === 'cancelling',
   };
 }

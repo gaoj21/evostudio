@@ -247,6 +247,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
     setDrawerOpen,
     setDrawerTab,
     unattended,
+    unattendedStopping,
   } = execution;
   // Remembers panel widths *and* collapsed state across reloads (localStorage).
   // A restored layout of 0 collapses the panel; `onResize` fires on mount via
@@ -1483,10 +1484,15 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
             <button
               type="button"
               className="run-badge run-stop"
-              title={`Batch ${unattended} is still running and is not the one shown here.`}
+              disabled={unattendedStopping}
+              title={unattendedStopping
+                ? `Batch ${unattended} was stopped; its records in flight are being interrupted.`
+                : `Batch ${unattended} is still running and is not the one shown here.`}
               onClick={() => cancelBatch(unattended)}
             >
-              {`stop batch ${unattended.slice(0, 8)} (still running)`}
+              {unattendedStopping
+                ? `stopping batch ${unattended.slice(0, 8)}…`
+                : `stop batch ${unattended.slice(0, 8)} (still running)`}
             </button>
           </div>
         )}

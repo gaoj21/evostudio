@@ -29,7 +29,11 @@ export function useChatCancellation(graphId) {
     return turn;
   }, [begin]);
   const isCurrent = useCallback(turn => current.current === turn, []);
-  const finish = useCallback(turn => { if (current.current === turn) current.current = null; }, []);
+  // Releasing the turn is what ends "Stopping…": until then the Stop button
+  // stays taken, so a second click cannot land on a turn already stopped.
+  const finish = useCallback(turn => {
+    if (current.current === turn) { current.current = null; setStopping(false); }
+  }, []);
   const stop = useCallback(async () => {
     const turn = current.current;
     if (!turn || stopping) return false;
@@ -41,10 +45,13 @@ export function useChatCancellation(graphId) {
       turn.controller.abort();
       return true;
     } catch (error) {
+      // The request never landed, so the turn is still going: Stop has to be
+      // clickable again rather than left as a disabled "Stopping…".
       turn.stopped = false;
+      setStopping(false);
       setStopError(String(error.body?.detail || error.message));
       return false;
-    } finally { setStopping(false); }
+    }
   }, [graphId, stopping]);
   return { current, begin, attachJob, isCurrent, finish, stop, stopping, stopError };
 }

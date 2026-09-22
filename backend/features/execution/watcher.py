@@ -34,6 +34,36 @@ DEBUG_MIN_INTERVAL_MINUTES = 0.2
 _watchers: dict[tuple[str, str], dict] = {}
 _lock = threading.Lock()
 
+# The watcher whose poll this thread is inside, so a fetch can be interrupted.
+_polling = threading.local()
+
+
+class WatchStopped(Exception):
+    """The watcher was stopped while it was polling."""
+
+
+def check_stop() -> None:
+    """Raise if the watcher running this poll has been stopped.
+
+    A poll is not one request: a source type walks record after record, and
+    some pause between them out of politeness to the service. Stop reported
+    the watcher gone and then kept fetching for as long as the poll took.
+    Studio's own fetchers call this between records; anything they call that
+    honours it is interrupted too.
+    """
+    stop = getattr(_polling, 'stop', None)
+    if stop is not None and stop.is_set():
+        raise WatchStopped()
+
+
+def _pause(seconds: float) -> None:
+    """Wait between two fetches of one poll, unless Stop arrives first."""
+    stop = getattr(_polling, 'stop', None)
+    if stop is None:
+        time.sleep(seconds)
+    elif stop.wait(seconds):
+        raise WatchStopped()
+
 
 def _utcnow() -> str:
     return datetime.now().astimezone().isoformat()
@@ -77,6 +107,7 @@ def _poll_plugin(node: dict, seen: dict, plugin: dict) -> list[dict]:
     key = plugin.get("watch_key")
     fresh = []
     for record in records:
+        check_stop()
         ident = str(record.get(key)) if key and record.get(key) not in (None, "") else hashlib.sha256(
             json.dumps(record, sort_keys=True, default=str).encode()).hexdigest()
         if ident in seen["seen"]:
@@ -124,7 +155,7 @@ def _poll_edgar(node: dict, seen: dict) -> list[dict]:
             continue
         if len(blocks) >= int(config.get("count") or 2):
             break
-        time.sleep(source_apis.EDGAR_PAUSE)
+        _pause(source_apis.EDGAR_PAUSE)
         text = source_apis._html_to_text(source_apis._fetch_submission_body(cik, adsh))
         items = sorted(set(m.lower() for m in source_apis._ITEM_HEADING_RE.findall(text)))
         blocks.append(f"[{fdate}] Form {form} (items: {', '.join(items)})\n"
@@ -193,6 +224,7 @@ def _watch_loop(graph: dict, node: dict, stop: threading.Event, state: dict) -> 
         if stop.is_set():
             break
         state["last_poll"] = _utcnow()
+        _polling.stop = stop
         try:
             # Poll into a copy: a fetch that fails halfway, or a run that
             # fails to start, must not mark its records as seen — they would
@@ -216,8 +248,14 @@ def _watch_loop(graph: dict, node: dict, stop: threading.Event, state: dict) -> 
             if records:
                 state["last_fire"] = state["last_poll"]
             state["last_error"] = None
+        except WatchStopped:
+            # Stop reached into the poll. The records it had already read stay
+            # unseen, so a later start runs them rather than skipping them.
+            break
         except Exception as e:
             state["last_error"] = str(e)[:500]
+        finally:
+            _polling.stop = None
     state["next_fire"] = None
 
 

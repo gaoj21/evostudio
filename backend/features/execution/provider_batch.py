@@ -9,6 +9,10 @@ PROVIDER = 'safechain'
 FLUSH_SECONDS = 0.05
 _lock = threading.Lock()
 _pending = {}
+# Buckets handed to ``llm.batch`` and not yet answered, per batch id. The API
+# takes a list and returns its results, so there is no job to call back; what
+# a stop can do is stop waiting for them, and say what that costs.
+_in_flight: dict[str, list] = {}
 # Batches the user stopped. Prompts waiting to be coalesced are the last place
 # new model calls can come from after a Stop: the flush timer fired regardless
 # of the batch's state, and records still winding down were allowed to queue
@@ -21,21 +25,25 @@ class BatchCancelled(Exception):
 
 
 def cancel(batch_id):
-    """Stop coalescing for a batch: drop what is queued, accept nothing new.
+    """Stop coalescing for a batch: drop what is queued, accept nothing new,
+    and stop waiting on what is already with the provider.
 
-    Requests already handed to ``llm.batch`` cannot be recalled — the API
-    takes a list of inputs and returns their results, with no job handle to
-    cancel — so they are paid for. What is still only queued here is not.
-    Returns how many queued requests were dropped.
+    Requests already handed to ``llm.batch`` cannot be recalled by Studio —
+    the API takes a list of inputs and returns their results, with no job
+    handle — unless the layer offers a cancel of its own (``llm.cancel_batch``),
+    which is used when it is there. Either way the records waiting on them are
+    released at once rather than holding the batch in `cancelling` until the
+    provider answers, and the result says how many were already sent, because
+    those may still be billed.
     """
     if not batch_id:
-        return {"dropped": 0}
+        return {"dropped": 0, "in_flight": 0}
     dropped = 0
     with _lock:
         _cancelled.add(batch_id)
         # Only buckets still waiting for their flush timer. A detached one is
         # already on its way to the provider and is owned by its dispatch
-        # thread; taking its futures here would race that thread.
+        # thread; its futures are released below instead.
         waiting = [(key, bucket) for key, bucket in _pending.items()
                    if isinstance(key[0], str) and key[0] == batch_id]
         for key, bucket in waiting:
@@ -44,7 +52,45 @@ def cancel(batch_id):
             for _value, future in bucket['requests']:
                 if future.cancel():
                     dropped += 1
-    return {"dropped": dropped}
+        sent = list(_in_flight.get(batch_id) or ())
+    in_flight = 0
+    for bucket in sent:
+        for _value, future in bucket['requests']:
+            if not future.done():
+                in_flight += 1
+                # The dispatch thread checks `done()` before it answers, so a
+                # result that does arrive is discarded rather than clashing.
+                future.set_exception(BatchCancelled(
+                    'This batch was stopped while this request was with the provider; '
+                    'its answer is not waited for.'))
+    outcome = {"dropped": dropped, "in_flight": in_flight}
+    if in_flight:
+        outcome["note"] = (f'{in_flight} request(s) were already sent to the provider and '
+                           f'may still be billed; nothing waits for their answers.')
+        cancel_at_provider = _provider_cancel()
+        if cancel_at_provider is not None:
+            try:
+                cancel_at_provider(PROVIDER)
+                outcome["provider_cancelled"] = True
+            except Exception as exc:
+                outcome["provider_cancelled"] = False
+                outcome["note"] += f' The provider refused the cancel: {exc}.'
+        else:
+            outcome["provider_cancelled"] = False
+    return outcome
+
+
+def _provider_cancel():
+    """The llm layer's own batch cancel, if it has one.
+
+    ``llm.batch`` returns results rather than a job, so there is nothing to
+    cancel through it. A layer that does support cancelling exposes
+    ``cancel_batch(provider)``; Studio uses it when it is there and says
+    plainly that it is not when it is not.
+    """
+    import llm
+    function = getattr(llm, 'cancel_batch', None)
+    return function if callable(function) else None
 
 
 def uncancel(batch_id):
@@ -87,6 +133,7 @@ def options(state):
 
 
 def _dispatch(key, bucket):
+    batch_id = key[0][0] if isinstance(key[0], tuple) else key[0]
     with _lock:
         if _pending.get(key) is not bucket:
             return
@@ -94,6 +141,9 @@ def _dispatch(key, bucket):
         bucket['timer'].cancel()
         requests = [(value, future) for value, future in bucket['requests']
                     if future.set_running_or_notify_cancel()]
+        if requests:
+            # Reachable by a stop for as long as the provider has them.
+            _in_flight.setdefault(batch_id, []).append(bucket)
     if not requests:
         return
     try:
@@ -110,6 +160,10 @@ def _dispatch(key, bucket):
         if not isinstance(results, (list, tuple)) or len(results) != len(requests):
             raise ValueError('llm.batch must return one result per input, in input order.')
         for (_, future), result in zip(requests, results):
+            # A stop may already have released this request: the answer came
+            # too late to be waited for, and is dropped rather than set.
+            if future.done():
+                continue
             if isinstance(result, Exception):
                 future.set_exception(result)
             else:
@@ -118,6 +172,13 @@ def _dispatch(key, bucket):
         for _, future in requests:
             if not future.done():
                 future.set_exception(exc)
+    finally:
+        with _lock:
+            waiting = [held for held in (_in_flight.get(batch_id) or []) if held is not bucket]
+            if waiting:
+                _in_flight[batch_id] = waiting
+            else:
+                _in_flight.pop(batch_id, None)
 
 
 def submit(messages, state, **kwargs):

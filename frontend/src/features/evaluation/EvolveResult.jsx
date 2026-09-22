@@ -110,7 +110,9 @@ export function TaskDetail({ task, onApplied, onStopped }) {
       <TokenUsage usage={task.token_usage} running={task.status === 'running'} />
       {task.status === 'running' && <div className="evolve-apply">
         <button type="button" onClick={stop} disabled={stopping || task.stop_requested}>{stopping || task.stop_requested ? 'Stopping…' : 'Stop'}</button>
-        <span className="muted small">Stops at the next record; nothing is applied.</span>
+        <span className="muted small">{stopping || task.stop_requested
+          ? 'Stopping at the next record or model call. A provider request already sent finishes on its own; nothing it answers is applied.'
+          : 'Stops at the next record; nothing is applied.'}</span>
       </div>}
       {task.status === 'stopped' && <p className="muted small" role="status">Stopped before it finished; nothing was applied.</p>}
       {task.status === 'interrupted' && <p className="muted small" role="status">Interrupted: the server restarted while this task was running. Start it again to get a result.</p>}

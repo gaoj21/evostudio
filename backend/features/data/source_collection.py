@@ -247,6 +247,20 @@ def execute_collection(job, graph, node, control, workers, metric, label_key):
         done.set()
         if consumer:
             consumer.join()
+        # The collection is over here. What follows is its verdict and a
+        # report over what ran, neither of which the stop may cut short: the
+        # report runs in a worker of its own, and that worker watching the
+        # same stop left the job reading `collecting` for ever.
+        chat_control.current.reset(token)
+        with _lock:
+            if errors:
+                job.update(status='failed', error=errors[0])
+            elif control.event.is_set():
+                job.update(status='cancelled', error='Stopped. Completed results are retained.'
+                           if streaming or prepared else 'Collection stopped. No workflow was started.')
+            else:
+                job['status'] = 'completed' if streaming or prepared else 'ready'
+            save(job)
         # Over whatever actually ran: a collection that was stopped part way
         # still produced batches, and their evaluator reports are what says
         # how that part went (a cancelled batch reports the same way).
@@ -261,16 +275,9 @@ def execute_collection(job, graph, node, control, workers, metric, label_key):
             except Exception as exc:
                 job['evaluation_error'] = str(exc)
         with _lock:
-            if errors:
-                job.update(status='failed', error=errors[0])
-            elif control.event.is_set():
-                job.update(status='cancelled', error='Stopped. Completed results are retained.' if streaming or prepared else 'Collection stopped. No workflow was started.')
-            else:
-                job['status'] = 'completed' if streaming or prepared else 'ready'
             save(job)
             _controls.pop(job['id'], None)
             _jobs.pop(job['id'], None)
-        chat_control.current.reset(token)
 
 
 @router.post('/api/graphs/{graph_id}/source-collections')

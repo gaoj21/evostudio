@@ -10,6 +10,7 @@ import json
 import copy
 import os
 import threading
+from contextlib import contextmanager
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -36,6 +37,50 @@ ENV_PATH = _REPO_ROOT / ".env"
 # the result is a circular-import error naming numpy.linalg, and Evolve
 # reported "missing optimizer package" for a package that was installed.
 import numpy  # noqa: E402,F401
+
+
+# ---------------------------------------------------------------------------
+# Stopping a task
+#
+# `stop_requested` on the task's state is the single flag. It is read at every
+# place a task can be interrupted: between records (`_stage`), between the
+# examples of an evaluation (`collate`) and — because dspy makes model calls
+# of its own, proposing instructions and bootstrapping demos, for minutes at a
+# time between those evaluations — before every model call the optimizer makes.
+# ---------------------------------------------------------------------------
+
+
+class EvolveStopped(BaseException):
+    """Raised inside a task the user stopped. A BaseException on purpose: the
+    framework evaluator catches Exception per example and would carry on."""
+
+
+def check_stop(state: dict) -> None:
+    if state.get("stop_requested"):
+        raise EvolveStopped()
+
+
+# The task the current thread is running, if any. One task per thread, so a
+# plain thread-local is the whole of it.
+_active = threading.local()
+
+
+@contextmanager
+def stoppable(state: dict):
+    """A block in which every model call dspy makes checks this task's Stop."""
+    previous = getattr(_active, "state", None)
+    _active.state = state
+    try:
+        yield
+    finally:
+        _active.state = previous
+
+
+def _check_active_stop() -> None:
+    state = getattr(_active, "state", None)
+    if state is not None:
+        check_stop(state)
+
 
 # --- dspy 3.3.0 compatibility shims
 # evoagentx's MiproOptimizer was written against an older dspy; bridge the
@@ -142,6 +187,9 @@ def _patched_lm_init(self, model, *args, **kwargs):
 
 
 def _patched_lm_forward(self, prompt=None, messages=None, **kwargs):
+    # The optimizer's own calls — instruction proposals, demo bootstrapping —
+    # go through here. Without this check Stop waited for the next evaluation.
+    _check_active_stop()
     response = self.eax_model.generate(prompt=prompt, messages=messages)
     return [response.content]
 
@@ -280,15 +328,6 @@ _tasks: dict[str, dict] = {}
 _lock = threading.Lock()
 
 
-class EvolveStopped(BaseException):
-    """Raised inside a task the user stopped. A BaseException on purpose: the
-    framework evaluator catches Exception per example and would carry on."""
-
-
-def check_stop(state: dict) -> None:
-    if state.get("stop_requested"):
-        raise EvolveStopped()
-
 _MAX_TEXT = 4000
 
 
@@ -356,7 +395,20 @@ def _attach_agents(agent_manager, state: dict) -> None:
             attach_model(agent.llm, state)
 
 
+def _finish(state: dict) -> None:
+    """Mark the task done — unless Stop arrived while the last step ran, in
+    which case what that step produced is not a result."""
+    check_stop(state)
+    state["status"] = "done"
+
+
 def _execute_evolve(task_id: str, graph_doc: dict, metric: str, params: dict, task_dir: Path) -> None:
+    """Run one task on this thread, with its Stop visible to the optimizer."""
+    with stoppable(_tasks[task_id]):
+        _run_task(task_id, graph_doc, metric, params, task_dir)
+
+
+def _run_task(task_id: str, graph_doc: dict, metric: str, params: dict, task_dir: Path) -> None:
     state = _tasks[task_id]
     try:
         if (params.get('source') or {}).get('type') == 'canvas':
@@ -364,7 +416,7 @@ def _execute_evolve(task_id: str, graph_doc: dict, metric: str, params: dict, ta
             records = [json.loads(line) for line in (task_dir / 'dataset.jsonl').read_text().splitlines() if line.strip()]
             state['execution_graph'] = graph_doc
             canvas_evolution.execute(state, graph_doc, records, params, lambda text: _stage(state, text))
-            state['status'] = 'done'
+            _finish(state)
             return
         if (params.get("source") or {}).get("type") in ("saved_batch", "saved_run"):
             from backend.api import saved_result_evolution as saved
@@ -375,6 +427,7 @@ def _execute_evolve(task_id: str, graph_doc: dict, metric: str, params: dict, ta
                 state['baseline'] = score_saved(graph_doc, records, params['evaluator'])
             else:
                 state["baseline"] = saved.evaluate(records, metric, params["source"])
+            check_stop(state)
             if params.get("mode") != "evaluate":
                 from backend.api import runner
                 _stage(state, "proposing prompts")
@@ -386,8 +439,11 @@ def _execute_evolve(task_id: str, graph_doc: dict, metric: str, params: dict, ta
                 hidden = [params.get("label_key"), evaluator_cfg.get("label_field")]
                 updated, diff, used = saved.propose(graph_doc, records, params["nodes"], llm, feedback=state["baseline"],
                                                     share_labels=bool(params.get("share_labels")), hidden_inputs=hidden)
+                # The proposal call was already sent when Stop arrived; it
+                # cannot be recalled, but what it answered is not applied.
+                check_stop(state)
                 state.update(optimized_graph=updated, diff=diff, validation_status="not_run", evidence_records=used)
-            state["status"] = "done"
+            _finish(state)
             return
         from backend.api import runner as runner_mod
         from evoagentx.agents.agent_manager import AgentManager
@@ -461,7 +517,7 @@ def _execute_evolve(task_id: str, graph_doc: dict, metric: str, params: dict, ta
         state["baseline"] = {"metrics": baseline, "records": _eval_records(evaluator)}
 
         if evaluation_only:
-            state["status"] = "done"
+            _finish(state)
             return
 
         optimizer = WorkFlowMiproOptimizer(
@@ -516,7 +572,7 @@ def _execute_evolve(task_id: str, graph_doc: dict, metric: str, params: dict, ta
             if t.get("name") in instructions:
                 t["prompt"] = instructions[t["name"]]
         state["optimized_graph"] = optimized_graph
-        state["status"] = "done"
+        _finish(state)
     except EvolveStopped:
         state["status"] = "stopped"
         state["error"] = None
@@ -666,6 +722,9 @@ def list_evolve_tasks(graph_id: str | None = None):
         {k: t.get(k) for k in (
             "task_id", "graph_id", "status", "stage", "error", "metric",
             "params", "created_at", "finished_at", "elapsed_seconds", "source", "token_usage",
+            # A task still running because Stop has not reached its next
+            # checkpoint yet is not simply "running"; the list says so too.
+            "stop_requested",
         )} | {
             "baseline_score": (t.get("baseline") or {}).get("metrics", {}).get("score"),
             "optimized_score": (t.get("optimized") or {}).get("metrics", {}).get("score"),

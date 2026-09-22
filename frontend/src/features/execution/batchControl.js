@@ -40,10 +40,13 @@ const LIVE = ['running', 'cancelling', 'pending'];
  * rather than the one that is *running*. That happened: thirteen clicks, none
  * of which reached the live batch, which carried on to the end.
  */
+export function unattendedState(listed, viewedId) {
+  return (listed || []).find(
+    (b) => LIVE.includes(b.status) && b.batch_id !== viewedId) || null;
+}
+
 export function unattendedBatch(listed, viewedId) {
-  const other = (listed || []).find(
-    (b) => LIVE.includes(b.status) && b.batch_id !== viewedId);
-  return other ? other.batch_id : null;
+  return unattendedState(listed, viewedId)?.batch_id ?? null;
 }
 
 

@@ -96,6 +96,18 @@ class ToolProcess:
     def alive(self):
         return self.process.poll() is None
 
+    def kill(self):
+        """End the worker now, and with it whatever the tool started.
+
+        `close` asks first and waits a couple of seconds for an answer, which
+        is right at the end of a run. A stop has nothing to wait for: the call
+        in flight is the thing being stopped.
+        """
+        with contextlib.suppress(OSError):
+            os.killpg(self.process.pid, signal.SIGKILL)
+        with contextlib.suppress(OSError):
+            self.stderr.close()
+
     def close(self):
         if self.process.poll() is None:
             with contextlib.suppress(OSError):
@@ -115,11 +127,21 @@ class ToolProcess:
 
 
 def once(load, request, timeout):
-    """Load a toolkit in a fresh worker, make one request, stop the worker."""
+    """Load a toolkit in a fresh worker, make one request, stop the worker.
+
+    The worker is registered with the run's scope while the call lasts, even
+    though it is not kept afterwards: a stop has to be able to reach the call
+    in flight, and the caller is blocked waiting for it.
+    """
     worker = ToolProcess(load, timeout)
+    active = current()
+    if active is not None:
+        active.track(worker)
     try:
         return worker.request(request, timeout)
     finally:
+        if active is not None:
+            active.release(worker)
         worker.close()
 
 
@@ -128,7 +150,17 @@ class Scope:
 
     def __init__(self):
         self.workers = {}
+        # Workers of one-off calls, held only while the call is in flight.
+        self.transient = set()
         self.lock = threading.Lock()
+
+    def track(self, worker):
+        with self.lock:
+            self.transient.add(worker)
+
+    def release(self, worker):
+        with self.lock:
+            self.transient.discard(worker)
 
     def request(self, load, request, timeout):
         key = hashlib.sha256(json.dumps(load, sort_keys=True, default=str).encode()).hexdigest()
@@ -146,6 +178,18 @@ class Scope:
             workers, self.workers = list(self.workers.values()), {}
         for worker in workers:
             worker.close()
+
+    def kill(self):
+        """Stop every worker of this scope at once, for a run being stopped.
+
+        The call waiting on a killed worker comes back as a failed tool call;
+        the run it belongs to is already being stopped and reads as stopped.
+        """
+        with self.lock:
+            workers = list(self.workers.values()) + list(self.transient)
+            self.workers, self.transient = {}, set()
+        for worker in workers:
+            worker.kill()
 
 
 _current = ContextVar('studio_tool_scope', default=None)

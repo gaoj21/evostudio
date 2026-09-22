@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { cancelOutcome, unattendedBatch, unfinishedCount, resumeLabel } from './batchControl.js';
+import { cancelOutcome, unattendedBatch, unattendedState, unfinishedCount, resumeLabel } from './batchControl.js';
 
 describe('cancelOutcome', () => {
   it('says a batch is stopping when the server agreed', () => {
@@ -121,5 +121,13 @@ describe('a stream that stopped before reading everything', () => {
   });
   it('offers nothing once the stream was read to the end and everything succeeded', () => {
     expect(resumeLabel({ status: 'succeeded', streaming: true, unread: false, total: 4, counts: { success: 4 } })).toBeNull();
+  });
+});
+
+describe('the state of the batch running out of sight', () => {
+  it('carries its status, so the badge can say the Stop click landed', () => {
+    const stopping = { batch_id: 'x', status: 'cancelling' };
+    expect(unattendedState([stopping], 'y')).toBe(stopping);
+    expect(unattendedState([{ batch_id: 'z', status: 'completed' }], 'y')).toBeNull();
   });
 });

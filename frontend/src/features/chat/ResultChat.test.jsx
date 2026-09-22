@@ -161,3 +161,24 @@ it('offers a copy button on questions and answers', async () => {
  fireEvent.click(screen.getByRole('button', { name: 'Copy answer' }));
  expect(writeText).toHaveBeenLastCalledWith('Twelve');
 });
+
+it('never re-attaches to a question the user stopped', async () => {
+ // The server settles a stopped turn at once, so its list of running turns no
+ // longer offers it. A reload racing that — or another tab — used to find the
+ // turn still listed and start watching the thing the user had just stopped.
+ localStorage.setItem('result-chat:g:page:pending-turn', JSON.stringify({ turnId: 'turn-stopped', sessionId: 'page', question: 'Slow?' }));
+ api.assistantTurn.mockResolvedValue({ turn_id: 'turn-stopped', status: 'running', elapsed: 8 });
+ api.stopAssistant.mockResolvedValue({ status: 'cancelled' });
+ const view = render(<ResultChat graphId="g" run={{ run_id: 'r' }}/>);
+ expect(await screen.findByText('Analyzing results… (8s)')).toBeInTheDocument();
+ fireEvent.click(screen.getByRole('button', { name: '■ Stop' }));
+ expect(await screen.findByText('Stopped.')).toBeInTheDocument();
+ view.unmount();
+
+ api.assistantTurn.mockClear();
+ api.runningAssistantTurns.mockResolvedValue({ turns: [{ turn_id: 'turn-stopped', status: 'running' }] });
+ render(<ResultChat graphId="g" run={{ run_id: 'r' }}/>);
+ expect(await screen.findByRole('button', { name: 'Send' })).toBeInTheDocument();
+ expect(screen.queryByText(/Analyzing results/)).not.toBeInTheDocument();
+ expect(api.assistantTurn).not.toHaveBeenCalled();
+});

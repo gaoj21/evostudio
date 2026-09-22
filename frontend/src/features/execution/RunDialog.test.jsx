@@ -627,7 +627,11 @@ describe('collect API inputs before batch execution', () => {
     await user.click(await screen.findByRole('button', { name: 'Collect data' }));
     await user.click(await screen.findByRole('button', { name: 'Stop collection' }));
     expect(api.stopSourceCollection).toHaveBeenCalledWith('g1', 'collection-2');
+    // The click is taken, and the button says so until the collection settles.
+    expect(screen.getByRole('button', { name: 'Stopping…' })).toBeDisabled();
+    expect(screen.getByTestId('collection-stopping')).toHaveTextContent(/no further window is fetched/);
     await screen.findByText('Collection stopped.', {}, { timeout: 2500 });
+    expect(screen.queryByTestId('collection-stopping')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Run batch' })).not.toBeInTheDocument();
     expect(api.runBatchCanvas).not.toHaveBeenCalled();
   });

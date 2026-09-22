@@ -196,6 +196,15 @@ describe('stopping and ending a task early', () => {
     await waitFor(() => expect(api.stopEvolve).toHaveBeenCalledWith('r1'));
     expect(onStopped).toHaveBeenCalledWith('r1');
     expect(view.getByRole('button', { name: 'Stopping…' })).toBeDisabled();
+    // What Stop reaches, and what it cannot: the request already sent.
+    expect(view.getByText(/A provider request already sent finishes on its own/)).toBeInTheDocument();
+  });
+
+  it('keeps Stop taken while the server reports the stop as requested', () => {
+    const { container } = render(<TaskDetail task={{ ...running, stop_requested: true }} onApplied={vi.fn()} />);
+    const view = within(container);
+    expect(view.getByRole('button', { name: 'Stopping…' })).toBeDisabled();
+    expect(view.getByText(/nothing it answers is applied/)).toBeInTheDocument();
   });
 
   it('reports a refusal to stop', async () => {

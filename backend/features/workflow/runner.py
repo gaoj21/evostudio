@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from llm import get_evoagentx_llm
 
 from backend.features.persistence import write_json
+from backend.features.chat import chat_control
 from backend.features.memory.identity import execution_snapshot
 from backend.features.memory.bindings import runtime_context
 from backend.api import memory_policy
@@ -45,6 +46,12 @@ _lock = threading.Lock()
 # full — on the user's money, while the batch reported it as interrupted.
 _pending_cancels: dict[str, float] = {}
 _PENDING_CANCEL_TTL = 600.0
+
+# How long a stop waits for the run's own loop to settle the run before saying
+# so itself. A cancelled task lands in milliseconds; a run still executing
+# after this is inside something with no interruption point — a tool call, a
+# request already with the provider — and must stop claiming to be in progress.
+_CANCEL_GRACE_SECONDS = 2.0
 
 
 def _utcnow() -> str:
@@ -164,10 +171,40 @@ def start_run(graph: dict, inputs: dict, background: bool = True, gray_zone=None
 
 def _execute_run_scoped(run_id: str, graph_doc: dict, inputs: dict) -> None:
     """One run, with its own custom-tool scope: a class toolkit keeps one
-    instance (one worker) for the whole run, and it ends with the run."""
+    instance (one worker) for the whole run, and it ends with the run.
+
+    The run also gets its own cancellation control, in effect for everything
+    it starts: every Studio worker process (an evaluator's Python, a Dataset
+    read, a preprocessing tool) watches the one in context and is killed with
+    its group when a stop sets it. Without that, `cancel_run` could stop the
+    node loop but not the subprocess the loop was waiting for.
+    """
     from backend.features.library import tool_sessions
-    with tool_sessions.scope():
-        _execute_run(run_id, graph_doc, inputs)
+    # A run started inside something that already has a stop of its own — an
+    # assistant turn, a sample — keeps that one: the run is that request's
+    # work, and one Stop has to cover both. A batch item's thread carries no
+    # such control, so each item gets its own.
+    outer = chat_control.current.get()
+    control = outer or chat_control.Control()
+    with _lock:
+        state = _runs.get(run_id) or {}
+        state["_control"] = control
+        # A stop that arrived before this run started belongs to this run: the
+        # node loop raises at its first node either way, and a borrowed
+        # control must not be set on the request's behalf.
+        if state.get("_cancel_requested") and outer is None:
+            control.event.set()
+    token = chat_control.current.set(control)
+    try:
+        with tool_sessions.scope() as scope:
+            with _lock:
+                state["_tool_scope"] = scope
+            _execute_run(run_id, graph_doc, inputs)
+    finally:
+        chat_control.current.reset(token)
+        with _lock:
+            state.pop("_tool_scope", None)
+            state.pop("_control", None)
 
 
 def _set_status(state: dict, status: str, **fields) -> None:
@@ -227,7 +264,62 @@ def cancel_run(run_id: str, *, expected: bool = False) -> dict:
         except RuntimeError:
             # The run settled between the check above and here.
             pass
+    # Everything this run started, not only its node loop: the worker holding
+    # a tool (and whatever that tool started) is killed with its group, and
+    # any other worker process watching the run's control ends itself.
+    control = state.get("_control")
+    if control is not None:
+        control.event.set()
+    scope = state.get("_tool_scope")
+    if scope is not None:
+        try:
+            scope.kill()
+        except Exception:
+            pass
+    # A tool call already in flight has no interruption point, so the loop may
+    # not come back for a while. The run says it stopped either way.
+    timer = threading.Timer(_CANCEL_GRACE_SECONDS, _settle_uninterruptible, args=(run_id,))
+    timer.daemon = True
+    timer.start()
     return {"cancelled": True}
+
+
+def _settle_uninterruptible(run_id: str) -> None:
+    """Report a stopped run as stopped although its thread is still in there.
+
+    The thread is inside a call that cannot be interrupted. It goes on to
+    finish, as an abandoned run does, and whatever verdict it reaches is kept
+    beside — not instead of — what the user was told.
+    """
+    with _lock:
+        state = _runs.get(run_id)
+        if (state is None or not state.get("_cancel_requested")
+                or state.get("status") != "running" or not state.get("_executing")):
+            return
+        state["_abandoned"] = True
+        state["status"] = "cancelled"
+        state["error"] = ("Stopped by the user. Part of this run could not be interrupted "
+                          "— a tool call, or a request already with the provider — so that "
+                          "part finishes in the background and may still be billed.")
+        for node in state.get("nodes") or []:
+            if node.get("status") == "running":
+                node["status"] = "cancelled"
+            elif node.get("status") == "pending":
+                node["status"] = "skipped"
+        snapshot = dict(state)
+    _persist_run(snapshot)
+
+
+def _stopped(state: dict) -> None:
+    """Record a run the user stopped: what was mid-flight is cancelled, what
+    had not started is skipped, and nothing is written to memory."""
+    _set_status(state, "cancelled", error="Stopped by the user before it finished.",
+                node_error=None, debug_error=None)
+    for node in state.get("nodes") or []:
+        if node.get("status") == "running":
+            node["status"] = "cancelled"
+        elif node.get("status") == "pending":
+            node["status"] = "skipped"
 
 
 def _cancel_on(loop, task) -> None:
@@ -668,41 +760,42 @@ def _execute_run(run_id: str, graph_doc: dict, inputs: dict) -> None:
                 state["review_id"] = review["review_id"]
         except Exception:
             state["memory_error"] = traceback.format_exc()
-    except asyncio.CancelledError:
-        # Stopped on request. The node that was mid-flight is marked so, the
-        # ones after it never started; nothing is written to memory.
-        _set_status(state, "cancelled", error="Stopped by the user before it finished.",
-                    node_error=None, debug_error=None)
-        for n in state.get("nodes") or []:
-            if n.get("status") == "running":
-                n["status"] = "cancelled"
-            elif n.get("status") == "pending":
-                n["status"] = "skipped"
+    except (asyncio.CancelledError, chat_control.Cancelled):
+        # Stopped on request — the loop, or a worker of the run's that the
+        # stop ended. The node mid-flight is marked so, the ones after it
+        # never started; nothing is written to memory.
+        _stopped(state)
     except Exception as e:
-        # The sentence first, the traceback beside it — not instead of it.
-        if isinstance(e, NodeError):
-            failure = dict(error=e.message, node_error=e.as_dict(), debug_error=traceback.format_exc())
+        # A failure while a stop is pending is that stop: what the node was
+        # waiting on — a tool's worker, a Dataset reader — was killed by it.
+        # A stopped run is not a failed run, and it remembers nothing either.
+        if state.get("_cancel_requested"):
+            _stopped(state)
         else:
-            failure = dict(error=f"{type(e).__name__}: {e}"[:500], node_error=None,
-                           debug_error=traceback.format_exc())
-        for n in state.get("nodes") or []:
-            if n.get("status") == "running":
-                n["status"] = "failed"
-        # Evaluators that run after each run see failed runs too: a failure is
-        # a result the user's evaluation code has to be able to count. Done
-        # before the status is published, as on success, so a client that
-        # stops polling at "failed" already finds the report.
-        try:
-            from backend.features.evaluation.evaluator_tools import evaluate_runs
-            state.setdefault('evaluations', {}).update(evaluate_runs(
-                graph_doc, [{**_public(state), 'status': 'failed', 'error': failure['error']}], timing={'run'}))
-        except Exception:
-            state.setdefault('evaluations_error', traceback.format_exc())
-        _set_status(state, "failed", **failure)
-        if graph is not None:
-            # A node set to remember failed runs too: what did complete has
-            # real outputs, and what went wrong is often the thing to keep.
-            _save_ltm(graph_doc, memories, graph, env, state, succeeded=False)
+            # The sentence first, the traceback beside it — not instead of it.
+            if isinstance(e, NodeError):
+                failure = dict(error=e.message, node_error=e.as_dict(), debug_error=traceback.format_exc())
+            else:
+                failure = dict(error=f"{type(e).__name__}: {e}"[:500], node_error=None,
+                               debug_error=traceback.format_exc())
+            for n in state.get("nodes") or []:
+                if n.get("status") == "running":
+                    n["status"] = "failed"
+            # Evaluators that run after each run see failed runs too: a failure is
+            # a result the user's evaluation code has to be able to count. Done
+            # before the status is published, as on success, so a client that
+            # stops polling at "failed" already finds the report.
+            try:
+                from backend.features.evaluation.evaluator_tools import evaluate_runs
+                state.setdefault('evaluations', {}).update(evaluate_runs(
+                    graph_doc, [{**_public(state), 'status': 'failed', 'error': failure['error']}], timing={'run'}))
+            except Exception:
+                state.setdefault('evaluations_error', traceback.format_exc())
+            _set_status(state, "failed", **failure)
+            if graph is not None:
+                # A node set to remember failed runs too: what did complete has
+                # real outputs, and what went wrong is often the thing to keep.
+                _save_ltm(graph_doc, memories, graph, env, state, succeeded=False)
     finally:
         persisted = _persist_run(state)
         if not persisted:
@@ -1281,8 +1374,12 @@ def get_run(run_id: str) -> dict | None:
         state = _runs.get(run_id)
         if state is not None:
             result = _public(state)
-            if state.get("_executing") and result.get("status") in ("success", "failed", "cancelled"):
+            if (state.get("_executing") and not state.get("_abandoned")
+                    and result.get("status") in ("success", "failed", "cancelled")):
                 # Completion includes Memory writes and the durable Run checkpoint.
+                # A run the user has walked away from — dropped, or stopped
+                # while inside something uninterruptible — is not waiting for
+                # any of that: its status is what it was told, from now on.
                 result["status"] = "running"
             return result
     return _read_run(run_id)

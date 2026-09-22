@@ -16,6 +16,29 @@ export function clearPendingTurn(storeKey, turnId) {
   try { if (!turnId || loadPendingTurn(storeKey)?.turnId === turnId) localStorage.removeItem(pendingKey(storeKey)); } catch { /* Nothing stored. */ }
 }
 
+// Turn ids this browser stopped. A stopped turn settles on the server at once,
+// so its list of running turns no longer offers it; this is what keeps a
+// remount that races that — or one in another tab — from picking it up again.
+const stoppedKey = storeKey => `${storeKey}:stopped-turns`;
+const STOPPED_KEPT = 20;
+
+export function rememberStopped(storeKey, turnId) {
+  if (!turnId) return;
+  try {
+    const kept = [turnId, ...loadStopped(storeKey).filter(id => id !== turnId)].slice(0, STOPPED_KEPT);
+    localStorage.setItem(stoppedKey(storeKey), JSON.stringify(kept));
+  } catch { /* The server's own list is the primary guard. */ }
+}
+function loadStopped(storeKey) {
+  try {
+    const kept = JSON.parse(localStorage.getItem(stoppedKey(storeKey)) || '[]');
+    return Array.isArray(kept) ? kept : [];
+  } catch { return []; }
+}
+export function wasStopped(storeKey, turnId) {
+  return !!turnId && loadStopped(storeKey).includes(turnId);
+}
+
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // Poll until the turn settles. Resolves null once `keepGoing()` is false: the

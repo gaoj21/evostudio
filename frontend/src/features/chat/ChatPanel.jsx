@@ -4,7 +4,7 @@ import ChatSessions from './ChatSessions.jsx';
 import ChatActivity from './ChatActivity.jsx';
 import ChatComposer from './ChatComposer.jsx';
 import { useChatHistory, chatHistoryKey, loadChatHistory, saveChatHistory, renameChatHistoryKey, newMessageId } from './chatSession.js';
-import { followTurn, loadPendingTurn, savePendingTurn, clearPendingTurn, turnOutcome } from './assistantTurns.js';
+import { followTurn, loadPendingTurn, savePendingTurn, clearPendingTurn, rememberStopped, wasStopped, turnOutcome } from './assistantTurns.js';
 import CopyButton from './CopyButton.jsx';
 import WorkflowRunCard from '../execution/WorkflowRunCard.jsx';
 import { api } from '../../api.js';
@@ -369,7 +369,9 @@ export default function ChatPanel({
       // Browser storage unavailable or cleared: ask the server what is running.
       Promise.resolve(api.runningAssistantTurns(graphId, 'canvas')).then(r => {
         const running = r?.turns?.[0];
-        if (running) attach({ turnId: running.turn_id, sessionId: sessionsRef.current.activeId, before: getGraphRef.current() });
+        if (running && !wasStopped(chatHistoryKey(graphId), running.turn_id)) {
+          attach({ turnId: running.turn_id, sessionId: sessionsRef.current.activeId, before: getGraphRef.current() });
+        }
       }).catch(() => {});
     }
     return () => { cancelled = true; };
@@ -480,6 +482,7 @@ export default function ChatPanel({
     const turnId = cancellation.current.current?.id;
     if (await cancellation.stop()) {
       clearPendingTurn(turnStore, turnId);
+      rememberStopped(turnStore, turnId);
       busyRef.current = false;
       setBusy(false);
       setProgress('');

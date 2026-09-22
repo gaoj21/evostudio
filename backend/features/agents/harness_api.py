@@ -14,6 +14,12 @@ from backend.api import graphs, harness, mem0_service, memory_resources
 from backend.api.studio_config import data_path
 
 router = APIRouter(prefix='/api/graphs/{graph_id}/agents', tags=['harness'])
+# What Stop can and cannot reach: the Agent loop is interrupted at its next
+# step, but a model or tool request the provider already accepted runs to its
+# end. Said once, here, so the UI can show it verbatim.
+STOP_NOTE = ('Stopping. The Agent stops at its next step; a model or tool request '
+             'already sent cannot be recalled and finishes on the server.')
+GONE_ERROR = 'Execution stopped. You can continue in this conversation.'
 _pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix='harness')
 _lock = threading.RLock()
 _running = {}
@@ -182,9 +188,10 @@ def list_sessions(graph_id: str, agent_id: str):
     with _lock:
         for row in rows:
             if row['id'] in _running and _running[row['id']].is_set():
-                row['status'] = 'stopping'
+                row.update(status='stopping', stop_note=STOP_NOTE)
             if row['status'] in ('running', 'stopping') and row['id'] not in _running:
-                row.update(status='failed', error='Server restarted during execution. You can continue in this conversation.')
+                row.update(status='failed', stop_note=None,
+                           error=row.get('error') or 'Server restarted during execution. You can continue in this conversation.')
     return {'sessions': sorted(rows, key=lambda s: s['created_at'], reverse=True)}
 
 
@@ -239,8 +246,9 @@ def _execute(graph, agent, session, event):
         logging.getLogger(__name__).exception('Deep Agent execution failed')
         session['status'] = 'stopped' if event.is_set() else 'failed'
         # Provider errors may contain request headers. Do not expose raw exceptions.
-        session['error'] = 'Execution stopped. You can continue in this conversation.' if event.is_set() else execution_error(exc)
+        session['error'] = GONE_ERROR if event.is_set() else execution_error(exc)
     finally:
+        session.pop('stop_note', None)     # it has settled; nothing is pending
         persist()
         with _lock: _running.pop(sid, None)
 
@@ -284,7 +292,14 @@ def stop_session(graph_id: str, agent_id: str, session_id: str):
         session = get(db, session_id, scope, 'session', agent_id)
         if session_id in _running:
             _running[session_id].set()
-            session['status'] = 'stopping'
+            session.update(status='stopping', stop_note=STOP_NOTE)
+        elif session['status'] in ('running', 'stopping'):
+            # Nothing is running it: the worker went with a restart or a crash.
+            # Handing 'running' back is what left Stop disabled over a session
+            # that was never going to settle.
+            session.update(status='failed', stop_note=None, error=session.get('error') or GONE_ERROR)
+        # Persisted, so the next reader agrees with what Stop just reported.
+        put(db, session_id, scope, 'session', agent_id, session)
     return session
 
 

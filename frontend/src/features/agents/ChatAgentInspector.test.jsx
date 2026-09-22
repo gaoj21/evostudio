@@ -47,3 +47,26 @@ it('returns to the running conversation when the Agent is reopened and lets mess
   await user.click(view.getByRole('button',{name:'Copy your message'}));
   expect(await navigator.clipboard.readText()).toBe('Investigate the outage');
 });
+
+it('says what Stop reached and what it cannot recall, and never offers Stop twice', async () => {
+  const {api} = await import('../../api.js');
+  const agent={id:'a3',name:'Runner',instructions:'Help',max_steps:20,timeout:300,memories:[]};
+  const note='Stopping. The Agent stops at its next step; a model or tool request already sent cannot be recalled and finishes on the server.';
+  const running={id:'s-stop',created_at:1,status:'running',messages:[{role:'user',content:'Do the long thing'}],events:[]};
+  api.agentSessions.mockResolvedValue({sessions:[running]});
+  api.stopAgentSession=vi.fn(async()=>({...running,status:'stopping',stop_note:note}));
+  const {container}=render(<ChatAgentInspector graphId="g" agent={agent} onBack={vi.fn()} onSave={vi.fn()} />);
+  const view=within(container), user=userEvent.setup();
+  expect(await view.findByText('Agent is running…')).toBeInTheDocument();
+  // The list keeps reporting it as stopping, as the server does until it settles.
+  api.agentSessions.mockResolvedValue({sessions:[{...running,status:'stopping',stop_note:note}]});
+  await user.click(view.getByRole('button',{name:'Stop'}));
+  expect(await view.findByText(note)).toBeInTheDocument();
+  expect(view.getByRole('button',{name:'Stop'})).toBeDisabled();
+
+  // It settled: the note goes with it and the conversation is usable again.
+  api.agentSessions.mockResolvedValue({sessions:[{...running,status:'stopped',error:'Execution stopped. You can continue in this conversation.'}]});
+  await waitFor(()=>expect(view.queryByText(note)).not.toBeInTheDocument(),{timeout:5000});
+  expect(view.queryByRole('button',{name:'Stop'})).toBeNull();
+  expect(view.getByRole('button',{name:'Send'})).toBeDisabled();  // no message typed yet
+});
