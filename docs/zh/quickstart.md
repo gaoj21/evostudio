@@ -8,7 +8,7 @@
 ```bash
 pip install git+https://github.com/EvoAgentX/EvoAgentX.git
 ```
-请参阅 [安装指南](./installation.md) 获取更多详细信息。
+请参阅 [安装指南](installation.md) 获取更多详细信息。
 
 ## API 密钥 和 LLM 设置
 
@@ -83,7 +83,7 @@ llm = OpenAILLM(config=openai_config)
 response = llm.generate(prompt="What is Agentic Workflow?")
 ```
 
-你可以在 [LLM 模块指南](./modules/llm.md) 中找到更多关于支持的 LLM 类型及其参数的详细信息。
+你可以在 [LLM 模块指南](modules/llm.md) 中找到更多关于支持的 LLM 类型及其参数的详细信息。
 
 ## 自动工作流生成与执行
 

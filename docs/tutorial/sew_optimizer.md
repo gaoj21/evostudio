@@ -74,7 +74,7 @@ The SEWOptimizer will evaluate the performance on the development set by default
 
 ### Step 3: Set Up the Evaluator
 
-The evaluator is responsible for assessing the performance of the workflow during optimization. For more detailed information about how to set up and use the evaluator, please refer to the [Benchmark and Evaluation Tutorial](./benchmark_and_evaluation.md).
+The evaluator is responsible for assessing the performance of the workflow during optimization. For more detailed information about how to set up and use the evaluator, please refer to the [Benchmark and Evaluation Tutorial](benchmark_and_evaluation.md).
 
 ```python
 def collate_func(example: dict) -> dict:

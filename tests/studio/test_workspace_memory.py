@@ -15,8 +15,8 @@ import pytest
 @pytest.fixture
 def remembering(studio_data, monkeypatch):
     """A workspace whose graph has two nodes with memory behind them."""
-    from studio.backend import memory_store
-    from studio.backend import workspace
+    from backend.api import memory_store
+    from backend.api import workspace
     monkeypatch.setattr(workspace, "WORKSPACE_DIR", studio_data / "workspace")
 
     entries = {
@@ -78,7 +78,7 @@ class TestItIsInTheTree:
         assert "memory/long-term/decide/001.json" in paths(workspace)
 
     def test_a_workflow_with_no_memory_has_no_folder(self, remembering, monkeypatch):
-        from studio.backend import memory_store
+        from backend.api import memory_store
         workspace, _ = remembering
         monkeypatch.setattr(memory_store, "list_agents", lambda gid: [])
         assert not any(p.startswith("memory") for p in paths(workspace))
@@ -86,7 +86,7 @@ class TestItIsInTheTree:
     def test_a_store_that_will_not_open_does_not_break_the_listing(
         self, remembering, monkeypatch
     ):
-        from studio.backend import memory_store
+        from backend.api import memory_store
         workspace, _ = remembering
         monkeypatch.setattr(memory_store, "list_entries",
                             lambda gid, agent: (_ for _ in ()).throw(RuntimeError("bad index")))
@@ -188,7 +188,7 @@ class TestDownloading:
         assert "memory/long-term/investigate/001.json" in inside
 
     def test_an_empty_memory_path(self, remembering, monkeypatch):
-        from studio.backend import memory_store
+        from backend.api import memory_store
         workspace, _ = remembering
         monkeypatch.setattr(memory_store, "list_agents", lambda gid: [])
         with pytest.raises(workspace.WorkspaceError) as raised:

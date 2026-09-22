@@ -32,4 +32,4 @@ jobs:
       run: uv sync --frozen --extra dev
 
     - name: Ruff
-      run: 'uv run ruff check --output-format=github evoagentx studio/backend'
+      run: 'uv run ruff check --output-format=github backend/evoagentx backend/api'

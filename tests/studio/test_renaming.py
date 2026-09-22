@@ -21,13 +21,13 @@ def body(name, **extra):
 @pytest.fixture
 def store(studio_data, monkeypatch):
     """The graph store, with every directory a rename touches redirected."""
-    from studio.backend import batch as batch_module
-    from studio.backend import graphs
-    from studio.backend import memory_store
-    from studio.backend import runner
-    from studio.backend import stm_store
-    from studio.backend import table_store
-    from studio.backend import workspace
+    from backend.api import batch as batch_module
+    from backend.api import graphs
+    from backend.api import memory_store
+    from backend.api import runner
+    from backend.api import stm_store
+    from backend.api import table_store
+    from backend.api import workspace
     monkeypatch.setattr(workspace, "WORKSPACE_DIR", studio_data / "workspace")
     monkeypatch.setattr(memory_store, "MEMORY_DIR", studio_data / "memory")
     monkeypatch.setattr(table_store, "TABLES_DIR", studio_data / "tables")
@@ -88,7 +88,7 @@ class TestTheIdFollowsTheName:
 
 class TestItsDataComesWithIt:
     def test_run_artifacts_follow(self, store):
-        from studio.backend import workspace
+        from backend.api import workspace
         created = store.create_graph("Untitled Workflow", "")
         artifact = workspace.files_dir(created["id"]) / "note.txt"
         artifact.parent.mkdir(parents=True, exist_ok=True)
@@ -101,7 +101,7 @@ class TestItsDataComesWithIt:
         assert not workspace.workspace_root(created["id"]).exists()
 
     def test_memory_stores_follow(self, store):
-        from studio.backend import memory_store
+        from backend.api import memory_store
         created = store.create_graph("Untitled Workflow", "")
         db = memory_store.store_dir(created["id"], "judge") / "memory.db"
         db.parent.mkdir(parents=True, exist_ok=True)
@@ -114,7 +114,7 @@ class TestItsDataComesWithIt:
         assert (memory_store.store_dir(saved["id"], "judge") / "memory.db").is_file()
 
     def test_table_memory_follows(self, store):
-        from studio.backend import table_store
+        from backend.api import table_store
         created = store.create_graph("Untitled Workflow", "")
         table_store.upsert(created["id"], "judge", "Acme", "2026-01-01",
                            {"outputs": {"verdict": "alert"}}, "now")
@@ -125,7 +125,7 @@ class TestItsDataComesWithIt:
         assert table_store.count(created["id"], "judge") == 0
 
     def test_short_term_memory_follows(self, store):
-        from studio.backend import stm_store
+        from backend.api import stm_store
         created = store.create_graph("Untitled Workflow", "")
         stm_store.append(created["id"], "morning", {"node": "judge"})
 
@@ -135,7 +135,7 @@ class TestItsDataComesWithIt:
         assert stm_store.recent(created["id"], "morning", 10) == []
 
     def test_run_history_follows(self, store):
-        from studio.backend import runner
+        from backend.api import runner
         created = store.create_graph("Untitled Workflow", "")
         runner._persist_run({"run_id": "r1", "graph_id": created["id"],
                              "status": "success", "nodes": [], "inputs": {}})
@@ -146,7 +146,7 @@ class TestItsDataComesWithIt:
         assert runner.list_runs(graph_id=created["id"]) == []
 
     def test_batch_history_follows(self, store):
-        from studio.backend import batch as batch_module
+        from backend.api import batch as batch_module
         created = store.create_graph("Untitled Workflow", "")
         batch_module._persist_batch({"batch_id": "b1", "graph_id": created["id"],
                                      "status": "completed", "items": [], "total": 0})
@@ -157,7 +157,7 @@ class TestItsDataComesWithIt:
             == ["b1"]
 
     def test_another_workflow_s_history_is_left_alone(self, store):
-        from studio.backend import runner
+        from backend.api import runner
         mine = store.create_graph("Untitled Workflow", "")
         theirs = store.create_graph("Other", "")
         runner._persist_run({"run_id": "r1", "graph_id": mine["id"],
@@ -170,7 +170,7 @@ class TestItsDataComesWithIt:
         assert [r["run_id"] for r in runner.list_runs(graph_id=theirs["id"])] == ["r2"]
 
     def test_a_run_still_in_memory_is_repointed(self, store):
-        from studio.backend import runner
+        from backend.api import runner
         created = store.create_graph("Untitled Workflow", "")
         runner._runs["r1"] = {"run_id": "r1", "graph_id": created["id"],
                               "status": "success", "nodes": []}
@@ -186,7 +186,7 @@ class TestItsDataComesWithIt:
 
 class TestWorkInProgress:
     def test_renaming_waits_for_a_running_run(self, store):
-        from studio.backend import runner
+        from backend.api import runner
         created = store.create_graph("Untitled Workflow", "")
         runner._runs["r1"] = {"run_id": "r1", "graph_id": created["id"],
                               "status": "running", "nodes": []}
@@ -198,7 +198,7 @@ class TestWorkInProgress:
         assert store.load_graph(created["id"]) is not None
 
     def test_renaming_waits_for_a_running_batch(self, store):
-        from studio.backend import batch as batch_module
+        from backend.api import batch as batch_module
         created = store.create_graph("Untitled Workflow", "")
         batch_module._batches["b1"] = {"batch_id": "b1", "graph_id": created["id"],
                                        "status": "running", "items": [], "total": 0,
@@ -208,7 +208,7 @@ class TestWorkInProgress:
             store.save_graph(created["id"], body("Supplier Risk"))
 
     def test_a_finished_run_does_not_block_it(self, store):
-        from studio.backend import runner
+        from backend.api import runner
         created = store.create_graph("Untitled Workflow", "")
         runner._runs["r1"] = {"run_id": "r1", "graph_id": created["id"],
                               "status": "success", "nodes": []}
@@ -221,7 +221,7 @@ class TestThroughTheApi:
     def client(self, store):
         from fastapi.testclient import TestClient
 
-        from studio.backend import app as studio_app
+        from backend.api import app as studio_app
         return TestClient(studio_app.app)
 
     def test_the_response_carries_the_new_id(self, client, store):
@@ -254,7 +254,7 @@ class TestThroughTheApi:
         assert all(n.startswith("supplier-risk/") for n in names)
 
     def test_a_rename_blocked_by_a_run_is_reported_not_swallowed(self, client, store):
-        from studio.backend import runner
+        from backend.api import runner
         created = store.create_graph("Untitled Workflow", "")
         runner._runs["r1"] = {"run_id": "r1", "graph_id": created["id"],
                               "status": "running", "nodes": []}

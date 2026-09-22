@@ -12,8 +12,8 @@ import threading
 
 import pytest
 
-from studio.backend import memory_policy
-from studio.backend import table_store
+from backend.api import memory_policy
+from backend.api import table_store
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     monkeypatch.setattr(table_store, "TABLES_DIR", tmp_path / "tables")
@@ -217,8 +217,8 @@ class TestWhatReachesThePrompt:
         assert block.index("v1") < block.index("v3")
 
     def test_a_run_that_names_no_subject_asks_nothing(self, store):
-        assert memory_policy.table_read(store, "g1", self.task, {"as_of": "2026-01-01"}) \
-            is None
+        with pytest.raises(memory_policy.bindings.BindingError, match="match binding 'company' is missing"):
+            memory_policy.table_read(store, "g1", self.task, {"as_of": "2026-01-01"})
 
     def test_a_recall_node_is_not_routed_to_a_table(self, store):
         plain = {"name": "summarise", "memory": {"retrieve": 3}}
@@ -273,3 +273,36 @@ class TestItRecoversRatherThanFailingQuietly:
         monkeypatch.setattr(store, "_WRITE_ATTEMPTS", 2)
         with pytest.raises(sqlite3.OperationalError):
             put(store, "Sleep Number", "2026-01-12", "never lands")
+
+
+class TestTheFileOnDiskDecides:
+    """The memo of opened files is a shortcut, never the truth.
+
+    A server that had opened a table, then had memory reset underneath it,
+    failed every later write with "unable to open database file" — from
+    inside runs that went on to report success. Nine runs of a measured
+    batch wrote nothing before anyone noticed.
+    """
+
+    def test_a_table_removed_underneath_a_live_process_is_rebuilt_on_write(self, store):
+        import shutil
+        put(store, "Sleep Number", "2026-01-12", "suppress")
+        shutil.rmtree(store.TABLES_DIR)          # what a reset does
+        put(store, "Sleep Number", "2026-01-19", "escalate")
+        assert verdicts(store.rows("g1", "decide", "Sleep Number")) == ["escalate"]
+
+    def test_a_table_removed_underneath_a_live_process_reads_as_empty(self, store):
+        import shutil
+        put(store, "Sleep Number", "2026-01-12", "suppress")
+        shutil.rmtree(store.TABLES_DIR)
+        assert store.rows("g1", "decide", "Sleep Number") == []
+        assert store.count("g1", "decide") == 0
+
+    def test_forget_scopes_to_one_graph(self, store):
+        put(store, "A", "2026-01-01", "x")
+        store.upsert("g2", "decide", "B", "2026-01-01", {"outputs": {}}, "t")
+        store.forget("g1")
+        assert str(store.path("g1", "decide")) not in store._ready
+        assert str(store.path("g2", "decide")) in store._ready
+        store.forget()
+        assert not store._ready

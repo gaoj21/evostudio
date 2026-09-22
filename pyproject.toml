@@ -17,6 +17,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "torch>=2.2",
     "overdue",
     "tenacity",
     "networkx>=3.3",
@@ -38,9 +39,11 @@ dependencies = [
 ]
 
 [project.scripts]
-evoagentx-studio = "studio.backend.app:main"
+evoagentx-studio = "backend.api.app:main"
 
 [project.optional-dependencies]
+harness = ["deepagents==0.7.13", "langgraph==1.2.11", "langgraph-checkpoint-sqlite==3.1.1", "langchain-litellm==0.7.1", "langchain-openai==1.6.1", "langchain-google-genai==4.3.7", "google-genai<2"]
+mem0 = ["mem0ai==2.0.20", "sentence-transformers", "ollama"]
 dev = [
     "pytest",
     "pytest-cov",
@@ -178,5 +181,13 @@ Homepage = "https://github.com/EvoAgentX/EvoAgentX"
 Documentation = "https://EvoAgentX.github.io/EvoAgentX/"
 Repository = "https://github.com/EvoAgentX/EvoAgentX"
 
+[tool.setuptools.package-dir]
+evoagentx = "backend/evoagentx"
+llm = "backend/llm"
+memory = "backend/memory"
+credit_risk = "projects/credit_risk"
+
 [tool.setuptools.packages.find]
-where = ["."]
+where = [".", "backend", "projects"]
+include = ["backend", "backend.api*", "evoagentx*", "llm*", "memory*", "credit_risk*", "projects"]
+exclude = ["credit_risk.dataset*", "credit_risk.output*"]

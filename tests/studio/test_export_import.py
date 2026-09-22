@@ -39,7 +39,7 @@ def sample_graph():
 
 
 def build(graph):
-    from studio.backend import export_api
+    from backend.api import export_api
     _, payload = export_api.build_project(graph)
     return zipfile.ZipFile(io.BytesIO(payload))
 
@@ -69,10 +69,13 @@ class TestGeneratedProject:
         assert "source_commit" in manifest and "source_dirty" in manifest
 
     def test_tasks_survive_as_python_literals(self, sample_graph):
-        from studio.backend import export_api
+        from backend.api import export_api
         code = export_api._graph_from_workflow_py(read(build(sample_graph), "workflow.py"))
         assert [t["name"] for t in code["tasks"]] == ["fetch", "summarize"]
-        assert code["edges"] == [{"source": "fetch", "target": "summarize"}]
+        # An edge travels with what crosses it: the mapping Studio compiled
+        # from the two nodes, not a bare pair for the framework to guess at.
+        assert code["edges"] == [{"source": "fetch", "target": "summarize",
+                                  "mappings": [{"from": "article", "to": "article"}]}]
 
     def test_requirements_add_memory_extras_only_when_used(self, sample_graph):
         plain = read(build(sample_graph), "requirements.txt")
@@ -89,24 +92,26 @@ class TestGeneratedProject:
 
 class TestRoundTrip:
     def test_import_restores_the_same_graph(self, sample_graph, studio_data):
-        from studio.backend import export_api
+        from backend.api import export_api
         _, payload = export_api.build_project(sample_graph)
         graph, tools, skills, notes = export_api._graph_from_upload("p.zip", payload)
 
         assert graph["goal"] == sample_graph["goal"]
         assert [t["name"] for t in graph["tasks"]] == ["fetch", "summarize"]
-        assert graph["edges"] == sample_graph["edges"]
+        # The import lands in the migrated form: explicit mappings on the edge.
+        assert graph["edges"] == [{"source": "fetch", "target": "summarize",
+                                   "mappings": [{"from": "article", "to": "article"}]}]
         assert any("source of truth" in note for note in notes)
 
     def test_bare_graph_json_is_accepted(self, sample_graph):
-        from studio.backend import export_api
+        from backend.api import export_api
         payload = json.dumps(sample_graph).encode("utf-8")
         graph, _, _, notes = export_api._graph_from_upload("graph.json", payload)
         assert [t["name"] for t in graph["tasks"]] == ["fetch", "summarize"]
         assert notes == []
 
     def test_bare_workflow_py_is_accepted(self, sample_graph):
-        from studio.backend import export_api
+        from backend.api import export_api
         source = read(build(sample_graph), "workflow.py")
         graph, _, _, notes = export_api._graph_from_upload("workflow.py",
                                                            source.encode("utf-8"))
@@ -114,14 +119,14 @@ class TestRoundTrip:
         assert all("x" in t for t in graph["tasks"])  # laid out from scratch
 
     def test_a_non_literal_workflow_py_falls_back(self, sample_graph):
-        from studio.backend import export_api
+        from backend.api import export_api
         source = read(build(sample_graph), "workflow.py")
         # Someone replaced the literal with something computed.
         broken = source.replace("TASKS = [", "TASKS = list([", 1)
         assert export_api._graph_from_workflow_py(broken) is None
 
     def test_unreadable_upload_is_refused(self):
-        from studio.backend import export_api
+        from backend.api import export_api
         from fastapi import HTTPException
 
         with pytest.raises(HTTPException) as raised:
@@ -131,7 +136,7 @@ class TestRoundTrip:
 
 class TestCodeWinsOnImport:
     def _merge(self, graph, code):
-        from studio.backend import export_api
+        from backend.api import export_api
         return export_api._merge_code_into_graph(graph, code)
 
     def test_code_edits_reach_the_canvas(self):
@@ -193,3 +198,14 @@ class TestCodeWinsOnImport:
         code = {"goal": "g", "edges": [], "tasks": [make_task("a", outputs=["x"])]}
         _, notes = self._merge(graph, code)
         assert not any("updated" in note for note in notes)
+
+
+def test_exported_memory_table_does_not_import_platform_backend():
+    graph = make_graph([make_task('a', inputs=['topic'], outputs=['x'], use_long_term_memory=True)], id='round-trip')
+    archive = build(graph)
+    source = read(archive, 'vendor/table_store.py')
+    assert 'backend.api' not in source
+    scope = {'__file__': '/tmp/export-check/table_store.py', '__name__': 'exported_table_store'}
+    exec(compile(source, scope['__file__'], 'exec'), scope)
+    assert scope['TABLES_DIR'].name == 'tables'
+    assert any(name.endswith('/llm/adapters/openai_compatible.py') for name in archive.namelist())

@@ -1,4 +1,4 @@
-"""Tests for the chat operation engine (studio/backend/chat_api.py).
+"""Tests for the chat operation engine (backend/api/chat_api.py).
 
 The engine applies a model's proposed edits to a canvas graph. It is the one
 place where an LLM's output mutates the user's workflow, so the behaviours that
@@ -19,7 +19,7 @@ from conftest import make_graph, make_task
 
 
 def apply(graph, operations, graph_id=None):
-    from studio.backend import chat_api
+    from backend.api import chat_api
     return chat_api.apply_operations(graph, operations, graph_id)
 
 
@@ -80,7 +80,7 @@ class TestFailureIsolation:
             {"op": "add_edge", "source": "a", "target": "b"},
         ])
         assert [t["name"] for t in result["graph"]["tasks"]] == ["a", "b"]
-        assert result["graph"]["edges"] == [{"source": "a", "target": "b"}]
+        assert result["graph"]["edges"] == [{"source": "a", "target": "b", "mappings": [{"from": "x", "to": "x"}]}]
         assert len(result["notes"]) == 2
 
     def test_unknown_operation_is_reported_not_raised(self):
@@ -118,17 +118,19 @@ class TestFailureIsolation:
 class TestSideEffectingOperations:
     def test_run_workflow_only_proposes(self, studio_data):
         """A run costs money and its tools touch the world: the user confirms."""
-        from studio.backend import graphs as graph_store
+        from backend.api import graphs as graph_store
         created = graph_store.create_graph("Runnable", "goal")
         graph = make_graph([make_task("a", inputs=["topic"], outputs=["x"])],
                            id=created["id"])
         result = apply(graph, [{"op": "run_workflow", "inputs": {"topic": "t"}}],
                        created["id"])
-        assert result["pending_run"] == {"inputs": {"topic": "t"}}
+        assert result["pending_run"]["inputs"] == {"topic": "t"}
+        assert result["pending_run"]["plan_id"]
+        assert result["pending_run"]["input_errors"] == []
         assert result["saved"] is False
 
     def test_save_graph_refuses_an_invalid_workflow(self, studio_data):
-        from studio.backend import graphs as graph_store
+        from backend.api import graphs as graph_store
         created = graph_store.create_graph("Broken", "goal")
         # Referencing a skill that does not exist fails validation.
         task = make_task("a", inputs=["topic"], outputs=["x"], skill_names=["ghost"])
@@ -138,7 +140,7 @@ class TestSideEffectingOperations:
         assert any("save_graph refused" in note for note in result["notes"])
 
     def test_create_skill_then_delete(self, studio_data):
-        from studio.backend import skills_api
+        from backend.api import skills_api
         result = apply(make_graph([]), [
             {"op": "create_skill", "spec": {"name": "tone", "description": "d",
                                             "content": "# Tone"}},
@@ -190,5 +192,151 @@ class TestReadOperations:
 
     def test_inspect_missing_node_is_a_note(self):
         result = apply(make_graph([]), [{"op": "inspect_node", "name": "ghost"}])
-        assert not result["observations"]
+        assert result["observations"][0]["op"] == "operation_error"
         assert any("ghost" in note for note in result["notes"])
+
+
+class TestGeneratedFlow:
+    def test_generation_normalizes_bare_edges_even_for_current_version_canvas(self, monkeypatch):
+        import copy, time
+        from backend.api import chat_api, graphs
+        tasks = [make_task('read', inputs=['file'], outputs=['rows']),
+                 make_task('clean', inputs=['rows'], outputs=['cleaned']),
+                 make_task('report', inputs=['cleaned'], outputs=['report'])]
+        generated = {'tasks': tasks, 'edges': [{'source': 'read', 'target': 'clean'}, {'source': 'clean', 'target': 'report'}, {'source': 'read', 'target': 'report'}]}
+        monkeypatch.setattr(chat_api, '_workflow_from_goal', lambda *a, **kw: copy.deepcopy(generated))
+        original = {'id': 'generation-test', 'flow_version': graphs.FLOW_VERSION, 'tasks': [], 'edges': []}
+        id = chat_api.start_generation(original, 'Read clean and report file data', 'generation-test')
+        for _ in range(100):
+            job = chat_api.generation_job('generation-test', id)
+            if job['status'] != 'running': break
+            time.sleep(.01)
+        assert job['status'] == 'done', job.get('error')
+        graph = job['graph']
+        assert graph['edges'][0]['mappings'] == [{'from': 'rows', 'to': 'rows'}]
+        assert graph['edges'][1]['mappings'] == [{'from': 'cleaned', 'to': 'cleaned'}]
+        assert graph['edges'][2]['control_only'] is True
+        bindings = graphs.compile_bindings(graph['tasks'], graph['edges'])
+        assert 'rows' in bindings['clean'] and 'cleaned' in bindings['report']
+        assert original['tasks'] == [] and 'mappings' not in generated['edges'][0]
+        import pytest
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException): chat_api.generation_job('another-task', id)
+
+    def test_invalid_explicit_mapping_is_not_replaced_to_force_success(self, monkeypatch):
+        import time
+        from backend.api import chat_api
+        monkeypatch.setattr(chat_api, '_workflow_from_goal', lambda *a, **kw: {
+            'tasks': [make_task('read', outputs=['rows']), make_task('clean', inputs=['rows'], outputs=['result'])],
+            'edges': [{'source': 'read', 'target': 'clean', 'mappings': [{'from': 'missing', 'to': 'rows'}]}]})
+        original = {'id': 'bad-generation', 'tasks': [], 'edges': []}
+        id = chat_api.start_generation(original, 'Generate an invalid mapping example', 'bad-generation')
+        for _ in range(100):
+            job = chat_api.generation_job('bad-generation', id)
+            if job['status'] != 'running': break
+            time.sleep(.01)
+        assert job['status'] == 'failed'
+        assert job['graph'] is None and job['draft_graph']['tasks']
+        assert original['tasks'] == []
+
+
+def test_chat_continues_with_add_update_and_delete_on_current_canvas(monkeypatch):
+    import json
+    from backend.api import chat_api, graphs
+    monkeypatch.setattr(graphs, 'graph_exists', lambda _: True)
+    graph = {'id': 'conversation', 'flow_version': graphs.FLOW_VERSION, 'tasks': [make_task('read', inputs=['file'], outputs=['rows'])], 'edges': []}
+    commands = [
+        [{'op': 'add_node', 'task': make_task('clean', inputs=['rows'], outputs=['cleaned'])}, {'op': 'add_edge', 'source': 'read', 'target': 'clean'}],
+        [{'op': 'update_node', 'name': 'clean', 'patch': {'description': 'Normalize and remove duplicates'}}],
+        [{'op': 'delete_node', 'name': 'clean'}],
+    ]
+    calls = []
+    def ask(messages):
+        calls.append(messages)
+        return json.dumps({'reply': 'Applied requested edit', 'operations': commands.pop(0)})
+    monkeypatch.setattr(chat_api, '_ask', ask)
+    history = []
+    for prompt in ['Add a cleaning step', 'Also remove duplicates there', 'Delete that step']:
+        result = chat_api.chat('conversation', {'graph': graph, 'message': prompt, 'history': history})
+        assert result['applied'] and result['errors'] == [], result
+        graph = result['graph']
+        graphs.validate_graph(graph)
+        history += [{'role': 'user', 'content': prompt}, {'role': 'assistant', 'content': result['reply']}]
+    assert [t['name'] for t in graph['tasks']] == ['read'] and graph['edges'] == []
+    assert any(m.get('content') == 'Add a cleaning step' for m in calls[-1])
+    assert 'Normalize and remove duplicates' in calls[-1][0]['content']
+
+
+def test_chat_explicit_mapping_can_update_an_existing_connection():
+    from backend.api import chat_api
+    graph = make_graph([make_task('a', outputs=['x', 'y']), make_task('b', inputs=['z'], outputs=['result'])], edges=[('a', 'b')])
+    result = apply(graph, [{'op': 'add_edge', 'source': 'a', 'target': 'b', 'mappings': [{'from': 'y', 'to': 'z'}]}])
+    assert result['graph']['edges'] == [{'source': 'a', 'target': 'b', 'mappings': [{'from': 'y', 'to': 'z'}]}]
+    assert chat_api._validate(result['graph']) == []
+
+
+def test_chat_save_returns_new_identity_and_can_continue_after_rename(studio_data):
+    from backend.api import graphs, chat_api
+    graph = graphs.create_graph('Before chat rename', 'Goal')
+    graph = graphs.save_graph(graph['id'], {**graph, 'flow_version': graphs.FLOW_VERSION, 'tasks': [make_task('read', inputs=['input'], outputs=['rows'])], 'edges': []})
+    old_id = graph['id']
+    result = apply(graph, [{'op': 'set_name', 'name': 'After chat rename'}, {'op': 'save_graph'}, {'op': 'save_graph'}], old_id)
+    assert result['saved']
+    assert result['graph']['id'] != old_id
+    assert graphs.graph_exists(result['graph']['id']) and not graphs.graph_exists(old_id)
+    assert result['graph']['flow_version'] == graphs.FLOW_VERSION
+
+
+def test_saving_current_flow_does_not_restore_deleted_connection(studio_data):
+    from backend.api import graphs
+    graph = graphs.create_graph('Disconnected workflow', 'Goal')
+    graph = graphs.save_graph(graph['id'], {**graph, 'flow_version': graphs.FLOW_VERSION,
+        'tasks': [make_task('extract', outputs=['signals']), make_task('flag', inputs=['signals'], outputs=['alerts'])],
+        'edges': [{'source': 'extract', 'target': 'flag', 'mappings': [{'from': 'signals', 'to': 'signals'}]}]})
+    graph['edges'] = []
+    saved = graphs.save_graph(graph['id'], graph)
+    assert saved['edges'] == []
+    assert graphs.load_graph(graph['id'])['edges'] == []
+
+
+def test_chat_run_plan_and_partial_execution_use_current_settings():
+    from backend.api import graphs
+    graph = make_graph([make_task('read', inputs=['file'], outputs=['rows']), make_task('clean', inputs=['rows'], outputs=['cleaned'])], edges=[])
+    graph.update(id='g', flow_version=graphs.FLOW_VERSION)
+    graph['edges'] = [{'source': 'read', 'target': 'clean', 'mappings': [{'from': 'rows', 'to': 'rows'}]}]
+    planned = apply(graph, [{'op': 'plan_workflow', 'start_at': ['clean'], 'inputs': {}}], 'g')
+    plan = planned['observations'][0]['result']
+    assert plan['start_at'] == ['clean']
+    assert plan['input_errors'] and plan['inputs'][0]['name'] == 'rows'
+    proposed = apply(graph, [{'op': 'run_workflow', 'start_at': ['clean'], 'inputs': {'rows': 'some data'}}], 'g')['pending_run']
+    assert proposed['plan_id'] == plan['plan_id'] and not proposed['input_errors']
+
+
+def test_chat_cannot_read_or_stop_another_workflows_run(monkeypatch):
+    from backend.api import runner
+    monkeypatch.setattr(runner, 'get_run', lambda id: {'run_id': id, 'graph_id': 'foreign', 'status': 'running'})
+    cancelled = []
+    monkeypatch.setattr(runner, 'cancel_run', lambda id: cancelled.append(id))
+    for op in ['read_run', 'cancel_run']:
+        result = apply(make_graph([]), [{'op': op, 'run_id': 'foreign-run'}], 'current')
+        assert result['observations'][0]['op'] == 'operation_error'
+    assert cancelled == []
+
+
+def test_chat_workflow_configuration_and_panel_are_explicit():
+    result = apply(make_graph([]), [{'op': 'configure_workflow', 'patch': {'output_dir': 'reports'}}, {'op': 'open_panel', 'panel': 'runs'}], 'g')
+    assert result['graph']['output_dir'] == 'reports' and result['panel'] == 'runs'
+    rejected = apply(make_graph([]), [{'op': 'configure_workflow', 'patch': {'id': 'other'}}], 'g')
+    assert rejected['observations'][0]['op'] == 'operation_error'
+
+
+def test_schedule_configuration_validates_and_uses_saved_identity(studio_data, monkeypatch):
+    from backend.api import graphs, scheduler
+    graph = graphs.create_graph('Scheduled test', 'Goal')
+    graph = graphs.save_graph(graph['id'], {**graph, 'tasks': [make_task('work', inputs=['topic'], outputs=['result'])], 'edges': []})
+    called = []
+    monkeypatch.setattr(scheduler, 'set_schedule', lambda graph, config: called.append((graph['id'], config)) or {'scheduled': True})
+    missing = apply(graph, [{'op': 'set_schedule', 'schedule': {'mode': 'interval', 'interval_minutes': 60}}], graph['id'])
+    assert not called and missing['observations'][0]['op'] == 'operation_error'
+    valid = apply(graph, [{'op': 'set_schedule', 'schedule': {'mode': 'interval', 'interval_minutes': 60, 'inputs': {'topic': 'example'}}}], graph['id'])
+    assert valid['saved'] and called[0][1]['inputs'] == {'topic': 'example'}

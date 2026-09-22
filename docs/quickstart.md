@@ -10,7 +10,7 @@ This quickstart guide will walk you through the essential steps to set up and st
 ```bash
 pip install git+https://github.com/EvoAgentX/EvoAgentX.git
 ```
-Please refere to [Installation Guide](./installation.md) for more details about the installation. 
+Please refere to [Installation Guide](installation.md) for more details about the installation. 
 
 ## API Key & LLM Setup 
 
@@ -84,7 +84,7 @@ llm = OpenAILLM(config=openai_config)
 response = llm.generate(prompt="What is Agentic Workflow?")
 ```
 
-You can find more details about supported LLM types and their parameters in the [LLM module guide](./modules/llm.md).
+You can find more details about supported LLM types and their parameters in the [LLM module guide](modules/llm.md).
 
 
 ## Automatic WorkFlow Generation and Execution 

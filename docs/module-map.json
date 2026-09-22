@@ -1,0 +1,138 @@
+{
+  "backend": {
+    "workflow": [
+      "graphs",
+      "runner",
+      "run_plan"
+    ],
+    "execution": [
+      "batch",
+      "batch_compare",
+      "batch_export",
+      "scheduler",
+      "watcher",
+      "review"
+    ],
+    "chat": [
+      "chat_api",
+      "chat_engine",
+      "chat_control",
+      "chat_worker",
+      "result_chat",
+      "result_compute",
+      "model_json",
+      "agent_api"
+    ],
+    "agents": [
+      "harness",
+      "harness_api"
+    ],
+    "memory": [
+      "mem0_api",
+      "mem0_service",
+      "memory_api",
+      "memory_policy",
+      "memory_reset",
+      "memory_resources",
+      "memory_store",
+      "stm_store",
+      "table_store"
+    ],
+    "evaluation": [
+      "evolve_api",
+      "evaluation",
+      "evaluation_report",
+      "saved_result_evolution",
+      "evaluator_tools",
+      "canvas_evolution"
+    ],
+    "data": [
+      "datasets",
+      "sources",
+      "source_apis",
+      "source_collection",
+      "preprocess",
+      "data_resources",
+      "dataloaders",
+      "input_composition"
+    ],
+    "library": [
+      "skills_api",
+      "custom_tools",
+      "tools_registry",
+      "data_evaluation_tools"
+    ],
+    "workspace": [
+      "projects",
+      "workspace",
+      "workspace_api",
+      "project_import"
+    ]
+  },
+  "frontend": {
+    "agents": [
+      "ChatAgentInspector",
+      "ChatAgentNode",
+      "useCanvasAgents"
+    ],
+    "chat": [
+      "ChatActivity",
+      "ChatComposer",
+      "ChatPanel",
+      "ChatSessions",
+      "ResultChat",
+      "chatSession",
+      "useChatCancellation"
+    ],
+    "evaluation": [
+      "EvolvePanel",
+      "EvaluationTab",
+      "BatchCompare",
+      "EvaluatorInspector",
+      "EvaluatorReports"
+    ],
+    "memory": [
+      "Mem0Spaces",
+      "MemoryNode",
+      "MemoryPanel",
+      "MemoryResourceInspector",
+      "MemorySettings",
+      "memoryConnections"
+    ],
+    "execution": [
+      "RunDialog",
+      "RunOutcome",
+      "RunsPanel",
+      "SchedulePanel",
+      "WorkflowRunCard",
+      "RunResultPage",
+      "batchControl",
+      "runStates",
+      "useExecutionSession",
+      "inputFiles",
+      "runInputs"
+    ],
+    "library": [
+      "Palette",
+      "ToolsPanel"
+    ],
+    "workspace": [
+      "WorkspacePanel",
+      "workspaceTree",
+      "WorkspaceMenu",
+      "WorkspaceTreeUi"
+    ],
+    "canvas": [
+      "Inspector",
+      "SourceNode",
+      "TaskNode",
+      "ToolNode",
+      "convert",
+      "canvasHandles"
+    ],
+    "data": [
+      "DatasetInput",
+      "DataLoaderInput"
+    ]
+  }
+}

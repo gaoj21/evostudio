@@ -1,2 +1,0 @@
-"""EvoAgentX Studio application package."""
-

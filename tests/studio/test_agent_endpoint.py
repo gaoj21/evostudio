@@ -1,4 +1,4 @@
-"""Tests for the OpenAI-compatible agent endpoint (studio/backend/agent_api.py).
+"""Tests for the OpenAI-compatible agent endpoint (backend/api/agent_api.py).
 
 This is the one place outside software can talk to Studio, so what matters is
 that the contract holds for clients that were not written against it, and that
@@ -24,7 +24,7 @@ import pytest
 @pytest.fixture
 def agent(monkeypatch, tmp_path):
     """agent_api with a scripted LLM and an in-memory store."""
-    from studio.backend import agent_api
+    from backend.api import agent_api
     scripted = []
 
     def script(*replies):
@@ -94,7 +94,7 @@ class TestAgentLoop:
         assert ask(agent, "what is it?") == "42"
 
     def test_a_tool_result_comes_back_as_an_observation(self, agent, studio_data):
-        from studio.backend import skills_api
+        from backend.api import skills_api
         skills_api.save_skill({"name": "tone", "description": "d", "content": "Be brief."})
         agent.script(
             json.dumps({"tool": "load_skill", "args": {"name": "tone"}}),
@@ -169,7 +169,7 @@ class TestOpenAISurface:
     def client(self, agent, studio_data):
         from fastapi.testclient import TestClient
 
-        from studio.backend import app as studio_app
+        from backend.api import app as studio_app
         return TestClient(studio_app.app)
 
     def test_models_lists_the_agent(self, client):
@@ -233,7 +233,7 @@ class TestAccessKey:
     def client(self, agent, studio_data):
         from fastapi.testclient import TestClient
 
-        from studio.backend import app as studio_app
+        from backend.api import app as studio_app
         return TestClient(studio_app.app)
 
     def test_open_when_no_key_is_configured(self, client, agent, monkeypatch):

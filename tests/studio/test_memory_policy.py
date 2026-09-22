@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from studio.backend import memory_policy
+from backend.api import memory_policy
 def task(**extra):
     base = {
         "name": "judge",
@@ -443,7 +443,7 @@ class TestDatingTheTimeline:
                 self.entry("2025-12-01", "suppress", "2026-09-06 23:41:24")]
 
     def tracked(self, **extra):
-        return task(memory={"match": "company", "retrieve": 5, **extra})
+        return task(memory={"match": "company", "retrieve": 5, "time_filter": False, **extra})
 
     def test_ordered_by_the_period_it_covers(self):
         block = memory_policy.history_for(
@@ -492,7 +492,7 @@ class TestValidatingWhatIsRecorded:
             {"name": "decide", "inputs": [{"name": "company"}],
              "outputs": [{"name": "decision"}], "use_long_term_memory": True,
              "memory": {"context": ["window_ends"]}}, self._siblings())
-        assert errors and "no node in this workflow produces" in errors[0]
+        assert errors == []  # optional content does not create execution dependencies
 
     def test_dating_by_something_the_entry_will_not_carry(self):
         # It would silently fall back to the write time, which is the thing
@@ -501,7 +501,7 @@ class TestValidatingWhatIsRecorded:
             {"name": "decide", "inputs": [{"name": "company"}],
              "outputs": [{"name": "decision"}], "use_long_term_memory": True,
              "memory": {"at": "window_end"}}, self._siblings())
-        assert errors and "neither takes nor records" in errors[0]
+        assert errors == []  # metadata binding does not require storing the field
 
     def test_recording_it_makes_dating_by_it_valid(self):
         assert memory_policy.validate(
@@ -630,9 +630,9 @@ class TestTheCutoffSurvivesTheRealWiring:
         bare = memory_policy.with_context(self.task, node_inputs, None)
 
         assert "as_of" not in bare
-        leaked = memory_policy.history_for(
-            [self.entry("2026-04-16", "suppress LATER")], self.task, bare)
-        assert "LATER" in leaked      # no cutoff is available, so nothing is held back
+        with pytest.raises(memory_policy.bindings.BindingError, match="dated by 'as_of', which this run did not provide"):
+            memory_policy.history_for(
+                [self.entry("2026-04-16", "suppress LATER")], self.task, bare)
 
     def test_the_write_side_resolves_context_the_same_way(self):
         # If the two disagreed, entries would be dated by one rule and
@@ -762,3 +762,66 @@ class TestOneEntryPerSubject:
         assert memory_policy.history_for(
             [entry], self.task,
             {"company": "Sleep Number", "as_of": "2026-12-01"}) == ""
+
+
+
+class TestAContextFieldCanReachIntoAnOutput:
+    """`detection.source`: which source a detection came from is a key inside
+    the node's JSON answer, not a field of its own. A dotted context name
+    reaches in, so the memory row can record it — and later be read by it."""
+
+    task = {"name": "decide",
+            "memory": {"match": "company", "at": "as_of",
+                       "context": ["as_of", "detection.source"], "inputs": ["company"]}}
+
+    def test_a_key_inside_a_json_output_is_recorded(self):
+        run_data = {"company": "Acme", "as_of": "2026-01-01",
+                    "detection": json.dumps({"topic": "debt_default", "source": "8-K"})}
+        got = memory_policy.with_context(self.task, {"company": "Acme"}, run_data)
+        assert got["detection.source"] == "8-K"
+        assert got["as_of"] == "2026-01-01"
+
+    def test_it_is_written_into_the_row_and_read_back(self):
+        run_data = {"company": "Acme", "as_of": "2026-01-01",
+                    "detection": json.dumps({"source": "news"})}
+        payload = memory_policy.select(self.task, {"company": "Acme"},
+                                       {"decision": "alert"}, run_data=run_data)
+        assert payload["inputs"]["detection.source"] == "news"
+        row = memory_policy.table_write(self.task, payload)
+        assert row["payload"]["inputs"]["detection.source"] == "news"
+
+    def test_a_missing_key_is_absent_not_invented(self):
+        run_data = {"detection": json.dumps({"topic": "none"})}
+        assert "detection.source" not in memory_policy.with_context(self.task, {}, run_data)
+
+    def test_an_output_that_is_not_json_is_left_alone(self):
+        assert "detection.source" not in memory_policy.with_context(
+            self.task, {}, {"detection": "not json at all"})
+
+    def test_validation_asks_only_that_the_field_exist(self):
+        siblings = {"feed": {"name": "feed", "outputs": [{"name": "as_of"}]},
+                    "detect": {"name": "detect", "outputs": [{"name": "detection"}]},
+                    "decide": {**self.task, "inputs": [{"name": "company"}], "outputs": []}}
+        assert memory_policy.validate(siblings["decide"], siblings) == []
+        # The same node (with its inputs), only the context field is unknown.
+        # Optional context no longer invalidates the graph: it is skipped when
+        # recording and reported as a Memory note in the run.
+        bad = {**siblings["decide"],
+               "memory": {**self.task["memory"], "context": ["nothing.source"]}}
+        assert memory_policy.validate(bad, {**siblings, "decide": bad}) == []
+
+
+def test_read_only_can_keep_no_fields_and_never_selects_a_write():
+    node = task(memory={"write_enabled": False, "outputs": [], "inputs": []})
+    assert memory_policy.validate(node) == []
+    assert memory_policy.select(node, {"company": "A"}, {"verdict": "yes"}) is None
+
+
+@pytest.mark.parametrize('settings', [{"read_from": []}, {"read_enabled": False}])
+def test_table_recall_respects_empty_sources_and_disabled_reads(settings):
+    import asyncio
+    from unittest.mock import Mock
+    store = Mock()
+    node = task(memory={"match": "company", **settings})
+    assert asyncio.run(memory_policy.recall_async({}, node, {"company": "A"}, table=store)) == ""
+    store.before.assert_not_called()

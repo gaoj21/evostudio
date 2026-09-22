@@ -16,8 +16,8 @@ from conftest import make_graph, make_task
 
 @pytest.fixture
 def store(studio_data, monkeypatch):
-    from studio.backend import graphs
-    from studio.backend import workspace
+    from backend.api import graphs
+    from backend.api import workspace
     monkeypatch.setattr(workspace, "WORKSPACE_DIR", studio_data / "workspace")
     return graphs, workspace
 
@@ -71,8 +71,8 @@ class TestTheProjectLivesThere:
         assert "'name': 'second'" not in source
 
     def test_a_tool_the_workflow_stopped_using_is_cleared_out(self, store, monkeypatch):
-        from studio.backend import custom_tools
-        from studio.backend import tools_registry
+        from backend.api import custom_tools
+        from backend.api import tools_registry
         graphs, workspace = store
         monkeypatch.setattr(custom_tools, "TOOLS_DIR", studio := workspace.WORKSPACE_DIR.parent / "tools")
         custom_tools.save_custom_tool(custom_tools.validate_spec(
@@ -131,7 +131,7 @@ class TestTheProjectLivesThere:
         assert marker.stat().st_mtime_ns == before
 
     def test_it_is_rewritten_when_the_source_changes(self, store, monkeypatch):
-        from studio.backend import export_api
+        from backend.api import export_api
         graphs, workspace = store
         workspace.write_project(graph_with())
         marker = workspace.workspace_root("probe") / "vendor" / "evoagentx" / "__init__.py"
@@ -152,14 +152,15 @@ class TestTheProjectLivesThere:
 
 class TestItMatchesTheExport:
     def test_the_same_files_with_the_same_contents(self, store):
-        from studio.backend import export_api
+        from backend.api import export_api
         graphs, workspace = store
         graph = graph_with()
         workspace.write_project(graph)
         files, _vendor = export_api.project_files(graph)
 
         on_disk = [f for f in listing(workspace, "probe")
-                   if not f.startswith("vendor/") and f != workspace.VENDOR_STAMP]
+                   if not f.startswith("vendor/")
+                   and f not in (workspace.VENDOR_STAMP, workspace.GENERATED_MANIFEST)]
         files = {k: v for k, v in files.items() if not k.startswith("vendor/")}
         assert set(on_disk) == set(files)
         root = workspace.workspace_root("probe")
@@ -169,88 +170,88 @@ class TestItMatchesTheExport:
                 assert (root / rel).read_text(encoding="utf-8") == files[rel], rel
 
 
-class TestEveryNodeIsAnArtifact:
+class TestEveryNodeHasItsOwnLog:
+    """One file per node, appended to on every run — not a folder per run.
+
+    Open `decide.jsonl` and read every decision ever made, in order, each
+    with the inputs it was handed and the run it belonged to. The run-level
+    summary is appended to `runs.jsonl` the same way.
+    """
+
+    STARTED = "2026-09-01T10:20:30"          # local, naive: folder 20260901-102030
+
+    @classmethod
+    def state(cls, nodes, **extra):
+        return {"run_id": "r1", "status": "failed", "created_at": cls.STARTED,
+                "inputs": {"country": "Peru"}, "nodes": nodes,
+                "_node_io": {n["name"]: {"inputs": {"country": "Peru"}, "output": n.get("output")}
+                             for n in nodes}, **extra}
+
     @staticmethod
-    def state(nodes, **extra):
-        return {"run_id": "r1", "status": "failed", "created_at": "2026-09-01",
-                "inputs": {"country": "Peru"}, "nodes": nodes, **extra}
+    def lines(workspace, rel, folder="20260901-102030"):
+        path = workspace.workspace_root("probe") / "runs" / folder / rel
+        return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l]
 
-    def test_one_file_per_node_in_execution_order(self, store):
+    def test_each_node_gets_a_line_in_its_own_file(self, store):
         graphs, workspace = store
         workspace.write_run_artifacts("probe", self.state([
             {"name": "first", "status": "completed", "output": {"capital": "Lima"}},
             {"name": "second", "status": "failed", "output": None},
         ]))
 
-        files = listing(workspace, "probe")
-        assert "runs/r1/nodes/01-first.json" in files
-        assert "runs/r1/nodes/02-second.json" in files
+        first = self.lines(workspace, "nodes/first.jsonl")
+        assert len(first) == 1
+        assert first[0]["inputs"] == {"country": "Peru"}
+        assert first[0]["output"] == {"capital": "Lima"}
+        assert first[0]["run_id"] == "r1"
+        assert self.lines(workspace, "nodes/second.jsonl")[0]["status"] == "failed"
+        assert self.lines(workspace, "runs.jsonl")[0]["status"] == "failed"
+        assert not (workspace.workspace_root("probe") / "runs" / "r1").exists()
 
-    def test_a_node_that_finished_before_the_failure_keeps_its_output(self, store):
+    def test_the_records_of_one_batch_share_a_folder_and_append(self, store):
+        # Two records of the same batch: same session start, same folder,
+        # each appending its line to the node's file.
         graphs, workspace = store
-        workspace.write_run_artifacts("probe", self.state([
-            {"name": "first", "status": "completed", "output": {"capital": "Lima"}},
-            {"name": "second", "status": "failed", "output": None},
-        ]))
+        for run_id, d in (("r1", 1), ("r2", 2)):
+            workspace.write_run_artifacts("probe", {
+                **self.state([{"name": "decide", "status": "completed", "output": {"d": d}}]),
+                "run_id": run_id, "batch_id": "batch-9", "created_at": "2026-09-01T10:20:3" + str(d),
+                "session_started_at": "2026-09-01T10:19:00"})
 
-        # The run failed, which is exactly when the steps that did work matter.
-        first = json.loads((workspace.workspace_root("probe")
-                            / "runs/r1/nodes/01-first.json").read_text())
-        assert first == {"name": "first", "status": "completed",
-                         "output": {"capital": "Lima"}}
+        decide = self.lines(workspace, "nodes/decide.jsonl", folder="20260901-101900")
+        assert [(l["run_id"], l["output"]["d"]) for l in decide] == [("r1", 1), ("r2", 2)]
+        assert decide[1]["batch_id"] == "batch-9"
+        assert [l["run_id"] for l in self.lines(workspace, "runs.jsonl", folder="20260901-101900")] == ["r1", "r2"]
 
-    def test_the_order_is_readable_past_nine_nodes(self, store):
+    def test_a_separate_press_of_run_gets_its_own_folder(self, store):
         graphs, workspace = store
-        workspace.write_run_artifacts("probe", self.state(
-            [{"name": f"n{i}", "status": "completed", "output": {}} for i in range(12)]))
+        workspace.write_run_artifacts("probe", self.state([{"name": "a", "status": "completed", "output": {}}]))
+        workspace.write_run_artifacts("probe", {**self.state([{"name": "a", "status": "completed", "output": {}}]),
+                                                "run_id": "r2", "created_at": "2026-09-02T08:00:00"})
+        folders = sorted(p.name for p in (workspace.workspace_root("probe") / "runs").iterdir())
+        assert folders == ["20260901-102030", "20260902-080000"]
 
-        files = [f for f in listing(workspace, "probe") if "/nodes/" in f]
-        # Zero-padded, so the files sort the way the nodes ran.
-        assert files[0].endswith("01-n0.json")
-        assert sorted(files) == files
-
-    def test_a_node_name_cannot_escape_the_run_folder(self, store):
-        graphs, workspace = store
-        workspace.write_run_artifacts("probe", self.state([
-            {"name": "../../escape", "status": "completed", "output": {}},
-        ]))
-
-        files = listing(workspace, "probe")
-        assert all(f.startswith("runs/r1/") for f in files)
-        assert "runs/r1/nodes/01-escape.json" in files
-
-    def test_re_running_replaces_the_previous_node_files(self, store):
+    def test_a_node_that_opted_out_keeps_its_output_off_disk(self, store):
         graphs, workspace = store
         workspace.write_run_artifacts("probe", self.state(
-            [{"name": "old", "status": "completed", "output": {}}]))
-        workspace.write_run_artifacts("probe", self.state(
-            [{"name": "new", "status": "completed", "output": {}}]))
-
-        files = [f for f in listing(workspace, "probe") if "/nodes/" in f]
-        assert files == ["runs/r1/nodes/01-new.json"]
-
-    def test_output_json_still_holds_the_whole_run(self, store):
-        graphs, workspace = store
-        workspace.write_run_artifacts("probe", self.state(
-            [{"name": "first", "status": "completed", "output": {"capital": "Lima"}}],
-            result={"blurb": "done"}))
-
-        whole = json.loads((workspace.workspace_root("probe")
-                            / "runs/r1/output.json").read_text())
-        assert whole["result"] == {"blurb": "done"}
-        assert [n["name"] for n in whole["nodes"]] == ["first"]
-
-    def test_a_node_that_opted_out_is_recorded_without_its_output(self, store):
-        graphs, workspace = store
-        workspace.write_run_artifacts("probe", self.state(
-            [{"name": "secret", "status": "completed", "output": {"k": "v"}}],
+            [{"name": "secret", "status": "completed", "output": {"key": "x"}}],
             _save_output_flags={"secret": False}))
+        assert self.lines(workspace, "nodes/secret.jsonl")[0]["output"] is None
 
-        node = json.loads((workspace.workspace_root("probe")
-                           / "runs/r1/nodes/01-secret.json").read_text())
-        assert node["status"] == "completed"
-        assert node["output"] is None
+    def test_a_node_name_cannot_escape_the_folder(self, store):
+        graphs, workspace = store
+        workspace.write_run_artifacts("probe", self.state(
+            [{"name": "../../escape", "status": "completed", "output": {}}]))
+        files = listing(workspace, "probe")
+        assert "runs/20260901-102030/nodes/escape.jsonl" in files
+        assert all(f.startswith("runs/") or "/" not in f or not f.startswith("..") for f in files)
 
+    def test_the_logs_are_files_in_the_workspace(self, store):
+        graphs, workspace = store
+        workspace.write_run_artifacts("probe", self.state([{"name": "a", "status": "completed", "output": {}}]))
+        files = listing(workspace, "probe")
+        assert "runs/20260901-102030/nodes/a.jsonl" in files
+        assert "runs/20260901-102030/runs.jsonl" in files
 
 class TestDownloading:
     """Getting things back out of the workspace.
@@ -294,12 +295,13 @@ class TestDownloading:
         import io
         import zipfile
 
-        name, media, blob = filled.download("probe", "runs/r1")
+        # The runs folder holds the trace now, not a folder per run.
+        name, media, blob = filled.download("probe", "runs")
         inside = zipfile.ZipFile(io.BytesIO(blob)).namelist()
 
-        assert name == "r1.zip" and media == "application/zip"
-        assert "r1/output.json" in inside
-        assert "r1/nodes/01-first.json" in inside
+        assert name == "runs.zip" and media == "application/zip"
+        assert any(n.endswith("/runs.jsonl") for n in inside)
+        assert any("/nodes/" in n for n in inside)
 
     def test_the_whole_workspace_comes_back_as_a_zip(self, filled):
         import io
@@ -310,7 +312,7 @@ class TestDownloading:
 
         assert name == "probe.zip"
         assert "probe/workflow.py" in inside
-        assert "probe/runs/r1/output.json" in inside
+        assert any(n.startswith("probe/runs/") and n.endswith("/runs.jsonl") for n in inside)
 
     def test_a_path_outside_the_workspace_is_refused(self, filled):
         with pytest.raises(filled.WorkspaceError):
@@ -365,7 +367,7 @@ class TestThroughTheWorkspaceApi:
     def client(self, store):
         from fastapi.testclient import TestClient
 
-        from studio.backend import app as studio_app
+        from backend.api import app as studio_app
         graphs, workspace = store
         graphs.create_graph("Probe", "")
         workspace.write_project(graph_with())
@@ -399,3 +401,64 @@ class TestThroughTheWorkspaceApi:
                                  params={"path": "runs", "recursive": "true"})
         assert allowed.status_code == 200
         assert allowed.json()["files"] == 1
+
+class TestAuxiliaryUploads:
+    def test_large_checkpoint_is_streamed_and_path_is_usable(self, store):
+        import io
+        _, workspace = store
+        class BoundedStream(io.BytesIO):
+            def read(self, size=-1):
+                assert 0 < size <= 1024 * 1024
+                return super().read(size)
+        content = b'x' * (workspace.MAX_WRITE_BYTES + 1)
+        result = workspace.upload_file('probe', 'files/model/checkpoint.bin', BoundedStream(content))
+        from pathlib import Path
+        assert Path(result['absolute_path']).read_bytes() == content
+        assert result['size'] == len(content)
+        assert any(f.get('absolute_path') == result['absolute_path'] for f in workspace.tree('probe'))
+
+    def test_upload_preserves_existing_files_and_cleans_failed_copies(self, store):
+        import io
+        _, workspace = store
+        root = workspace.workspace_root('probe')
+        workspace.upload_file('probe', 'files/model.bin', io.BytesIO(b'original'))
+        with pytest.raises(workspace.WorkspaceError, match='already exists'):
+            workspace.upload_file('probe', 'files/model.bin', io.BytesIO(b'replacement'))
+        assert (root / 'files/model.bin').read_bytes() == b'original'
+        class BrokenStream:
+            def read(self, size):
+                raise OSError('Interrupted upload')
+        with pytest.raises(OSError):
+            workspace.upload_file('probe', 'files/partial.bin', BrokenStream())
+        assert not (root / 'files/partial.bin').exists()
+        assert not list(root.rglob('.upload-*'))
+
+    @pytest.mark.parametrize('path', ['../outside.bin', '/outside.bin', 'memory/a.bin', 'datasets/a.bin'])
+    def test_upload_respects_workspace_boundaries(self, store, path):
+        import io
+        _, workspace = store
+        with pytest.raises(workspace.WorkspaceError):
+            workspace.upload_file('probe', path, io.BytesIO(b'data'))
+
+    def test_binary_checkpoint_has_metadata_without_text_preview(self, store):
+        import io
+        _, workspace = store
+        workspace.upload_file('probe', 'files/model.pt', io.BytesIO(b'\x00\xffweights'))
+        result = workspace.read_file('probe', 'files/model.pt')
+        assert result['binary'] is True
+        assert result['content'] == ''
+        assert result['absolute_path'].endswith('/files/model.pt')
+
+    def test_http_upload_uses_streaming_writer(self, store, monkeypatch):
+        from fastapi.testclient import TestClient
+        from backend.api.app import app
+        graphs, workspace = store
+        monkeypatch.setattr(graphs, 'graph_exists', lambda _: True)
+        monkeypatch.setattr(workspace, 'write_file', lambda *a: pytest.fail('Upload must not use the bounded text writer'))
+        with TestClient(app) as client:
+            response = client.post('/api/graphs/probe/workspace/upload',
+                params={'path':'files/models/nested/weights.bin'},
+                files={'file':('weights.bin',b'\x00weights')})
+            assert response.status_code == 200, response.text
+            assert response.json()['size'] == 8
+            assert workspace.read_file('probe','files/models/nested/weights.bin')['binary']

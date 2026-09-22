@@ -1,0 +1,20 @@
+[
+  {
+    "cik": "1465470",
+    "published_at": "2024-08-14",
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1465470/000149315224032357/form10-q.htm",
+    "publication_date_source": "https://www.sec.gov/Archives/edgar/data/1465470/000149315224032357/0001493152-24-032357-index.htm",
+    "title": "NaturalShrimp quarterly liquidity disclosure",
+    "summary": "NaturalShrimp reported about $2.926 million of loss attributable to common shareholders for the June quarter and a $39.417 million working-capital deficit. The filing expressed substantial doubt about continuing operations and dependence on further financing.",
+    "review_status": "primary_source_checked"
+  },
+  {
+    "cik": "768835",
+    "published_at": "2024-06-06",
+    "source_url": "https://www.sec.gov/Archives/edgar/data/768835/000076883524000046/exhibit992-eventtranscript.htm",
+    "publication_date_source": "dated_earnings_call_transcript",
+    "title": "Big Lots first-quarter earnings call",
+    "summary": "Big Lots reported first-quarter sales down 10.2%, an adjusted net loss of $132.3 million, cash of $44 million and long-term debt of $573.8 million. Management described a new $200 million term facility and efforts to preserve liquidity.",
+    "review_status": "primary_source_checked"
+  }
+]

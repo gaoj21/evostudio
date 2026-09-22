@@ -74,7 +74,7 @@ SEWOptimizer默认会在开发集上评估性能。请确保基准测试正确�
 
 ### 步骤3：设置评估器
 
-评估器负责在优化过程中评估工作流的性能。有关如何设置和使用评估器的更详细信息，请参阅[基准和评估教程](./benchmark_and_evaluation.md)。
+评估器负责在优化过程中评估工作流的性能。有关如何设置和使用评估器的更详细信息，请参阅[基准和评估教程](benchmark_and_evaluation.md)。
 
 ```python
 def collate_func(example: dict) -> dict:

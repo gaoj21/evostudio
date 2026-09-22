@@ -149,7 +149,7 @@ print(result.content.complexity)
 
 ## Prompt Template Usage
 
-The `CustomizeAgent` also supports using `PromptTemplate` for more flexible prompt templating. For detailed information about prompt templates and their advanced features, please refer to the [PromptTemplate Tutorial](./prompt_template.md).
+The `CustomizeAgent` also supports using `PromptTemplate` for more flexible prompt templating. For detailed information about prompt templates and their advanced features, please refer to the [PromptTemplate Tutorial](prompt_template.md).
 
 ### Simple Prompt Template
 

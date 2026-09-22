@@ -12,7 +12,7 @@ import pytest
 
 @pytest.fixture
 def batches(tmp_path, monkeypatch):
-    from studio.backend import batch as batch_module
+    from backend.api import batch as batch_module
     monkeypatch.setattr(batch_module, "BATCHES_DIR", tmp_path / "batches")
     batch_module._batches.clear()
     batch_module._threads.clear()
@@ -138,7 +138,7 @@ class TestHistoryEndpoint:
     def client(self, batches):
         from fastapi.testclient import TestClient
 
-        from studio.backend import app as studio_app
+        from backend.api import app as studio_app
         return TestClient(studio_app.app)
 
     def test_it_lists_the_workflow_s_batches(self, client, batches):

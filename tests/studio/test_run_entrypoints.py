@@ -50,7 +50,7 @@ def join_graph():
 
 class TestSubgraphFrom:
     def _cut(self, graph, start_at):
-        from studio.backend import graphs as graph_store
+        from backend.api import graphs as graph_store
         return graph_store.subgraph_from(graph["tasks"], graph["edges"], start_at)
 
     def test_no_start_returns_everything(self):
@@ -96,12 +96,12 @@ class TestSubgraphFrom:
         assert [t["name"] for t in tasks] == ["b", "c"]
 
     def test_only_unknown_names_is_an_error(self):
-        from studio.backend import graphs as graph_store
+        from backend.api import graphs as graph_store
         with pytest.raises(graph_store.GraphValidationError):
             self._cut(chain(), ["ghost"])
 
     def test_upstream_outputs_become_inputs_of_the_shortened_run(self):
-        from studio.backend import graphs as graph_store
+        from backend.api import graphs as graph_store
         tasks, edges = self._cut(chain(), ["b"])
         ordered = graph_store.topo_sort_tasks(tasks, edges)
         wanted = graph_store.compute_workflow_inputs(ordered, edges)
@@ -116,8 +116,8 @@ def save_tool(code):
     Nothing but the code: a tool is a documented function, so its name,
     description and parameters all come from it.
     """
-    from studio.backend import custom_tools
-    from studio.backend import tools_registry
+    from backend.api import custom_tools
+    from backend.api import tools_registry
     return custom_tools.save_custom_tool(
         custom_tools.validate_spec({"code": code}, tools_registry.builtin_names())
     )
@@ -125,13 +125,13 @@ def save_tool(code):
 
 class TestPreprocess:
     def test_no_preprocessor_passes_the_records_through(self, studio_data):
-        from studio.backend import preprocess
+        from backend.api import preprocess
         records = [{"a": 1}]
         assert preprocess.apply({}, records) is records
         assert preprocess.apply({"preprocess": "  "}, records) is records
 
     def test_records_are_transformed(self, studio_data):
-        from studio.backend import preprocess
+        from backend.api import preprocess
         save_tool('def clean(record: dict) -> dict:\n'
                   '    """Strip the whitespace off every text field."""\n'
                   '    return {k: v.strip() if isinstance(v, str) else v\n'
@@ -142,8 +142,8 @@ class TestPreprocess:
     def test_derived_fields_are_available_to_the_mapping(self, studio_data):
         """Preprocessing runs before records are matched to workflow inputs,
         which is what lets it produce the very field the mapping needs."""
-        from studio.backend import preprocess
-        from studio.backend import sources
+        from backend.api import preprocess
+        from backend.api import sources
         save_tool('def derive(record: dict) -> dict:\n'
                   '    """Copy `subject` into a `topic` field."""\n'
                   "    return {**record, 'topic': record['subject']}\n")
@@ -154,13 +154,13 @@ class TestPreprocess:
         assert mapped == [{"topic": "solar"}]
 
     def test_a_missing_preprocessor_refuses_the_run(self, studio_data):
-        from studio.backend import preprocess
+        from backend.api import preprocess
         with pytest.raises(preprocess.PreprocessError) as raised:
             preprocess.apply({"preprocess": "ghost"}, [{"a": 1}])
         assert "ghost" in str(raised.value)
 
     def test_a_preprocessor_must_take_exactly_one_record(self, studio_data):
-        from studio.backend import preprocess
+        from backend.api import preprocess
         save_tool('def two_params(record: dict, extra: str) -> dict:\n'
                   '    """Takes more than the one record a preprocessor gets."""\n'
                   '    return record\n')
@@ -171,7 +171,7 @@ class TestPreprocess:
     def test_a_non_object_result_refuses_the_run(self, studio_data):
         """Feeding the workflow something it cannot map would produce results
         that look fine and are wrong."""
-        from studio.backend import preprocess
+        from backend.api import preprocess
         save_tool('def bad(record: dict) -> str:\n'
                   '    """Return something that is not a record."""\n'
                   "    return 'just a string'\n")
@@ -180,7 +180,7 @@ class TestPreprocess:
         assert "must return an object" in str(raised.value)
 
     def test_a_failing_preprocessor_names_the_record(self, studio_data):
-        from studio.backend import preprocess
+        from backend.api import preprocess
         save_tool('def boom(record: dict) -> dict:\n'
                   '    """A preprocessor that always fails."""\n'
                   "    raise ValueError('nope')\n")
@@ -191,7 +191,7 @@ class TestPreprocess:
 
 class TestPreprocessIsPartOfTheWorkflow:
     def test_saving_keeps_the_preprocessor(self, studio_data):
-        from studio.backend import graphs as graph_store
+        from backend.api import graphs as graph_store
         created = graph_store.create_graph("With preprocess", "goal")
         body = {**make_graph([make_task("a", outputs=["x"])]),
                 "preprocess": "clean_record"}
@@ -201,7 +201,7 @@ class TestPreprocessIsPartOfTheWorkflow:
         assert graph_store.load_graph(saved["id"])["preprocess"] == "clean_record"
 
     def test_clearing_it_sticks(self, studio_data):
-        from studio.backend import graphs as graph_store
+        from backend.api import graphs as graph_store
         created = graph_store.create_graph("Clearable", "goal")
         base = make_graph([make_task("a", outputs=["x"])])
         first = graph_store.save_graph(created["id"], {**base, "preprocess": "clean_record"})
@@ -221,8 +221,8 @@ class TestPrefillFromEarlierRuns:
     def client(self, studio_data, monkeypatch):
         from fastapi.testclient import TestClient
 
-        from studio.backend import app as studio_app
-        from studio.backend import graphs as graph_store
+        from backend.api import app as studio_app
+        from backend.api import graphs as graph_store
         created = graph_store.create_graph("Prefill", "goal")
         saved = graph_store.save_graph(created["id"], chain())
         self.graph_id = saved["id"]
@@ -268,7 +268,7 @@ class TestPrefillFromEarlierRuns:
         """The newest run is usually the one that just failed — it produced some
         of the values and stopped, and taking it left the re-run one input
         short, which is exactly what made the re-run fail again."""
-        from studio.backend import graphs as graph_store
+        from backend.api import graphs as graph_store
         graph_store.save_graph(self.graph_id, join_graph())
         self.use_runs([
             {"run_id": "failed_just_now", "status": "failed", "inputs": {},

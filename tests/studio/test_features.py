@@ -1,4 +1,4 @@
-from studio.backend import features
+from backend.api import features
 
 
 def test_core_features_are_explicit_and_always_available():

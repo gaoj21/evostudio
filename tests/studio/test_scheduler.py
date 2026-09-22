@@ -13,7 +13,7 @@ import pytest
 
 @pytest.fixture
 def sched(tmp_path, monkeypatch):
-    from studio.backend import scheduler
+    from backend.api import scheduler
     monkeypatch.setattr(scheduler, "SCHEDULES_DIR", tmp_path / "schedules")
     scheduler._threads.clear()
     # Nothing in these tests should start a real thread.
@@ -61,7 +61,7 @@ class TestWhatItAccepts:
 
     def test_an_unknown_frequency(self, sched):
         with pytest.raises(sched.ScheduleError) as raised:
-            sched.validate({"mode": "weekly"})
+            sched.validate({"mode": "yearly"})
         assert "daily" in str(raised.value)
 
     def test_a_time_that_is_not_a_time(self, sched):
@@ -111,12 +111,12 @@ class TestSettingOne:
         assert out["fires"] == 7
         assert out["mode"] == "interval"
 
-    def test_pausing_leaves_it_in_place_with_no_next_fire(self, sched):
+    def test_pausing_preserves_the_due_cursor(self, sched):
         sched.set_schedule({"id": "g1"}, {"mode": "daily"})
         out = sched.set_schedule({"id": "g1"}, {"mode": "daily", "enabled": False})
 
         assert out["scheduled"] is True and out["enabled"] is False
-        assert out["next_fire"] is None
+        assert out["next_fire"] is not None
 
     def test_removing_it(self, sched):
         sched.set_schedule({"id": "g1"}, {"mode": "daily"})
@@ -131,7 +131,7 @@ class TestSettingOne:
 class TestFiring:
     @pytest.fixture
     def fired(self, sched, monkeypatch):
-        from studio.backend import graphs as graph_store
+        from backend.api import graphs as graph_store
         started = []
 
         def fake_start_run(graph, inputs, background=True, session=None, **kw):
@@ -173,7 +173,7 @@ class TestFiring:
 
     def test_a_fire_that_cannot_start_does_not_kill_the_schedule(self, sched,
                                                                  monkeypatch):
-        from studio.backend import graphs as graph_store
+        from backend.api import graphs as graph_store
         monkeypatch.setattr(graph_store, "load_graph", lambda gid: {"id": gid})
         monkeypatch.setattr(sched.runner, "start_run",
                             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no LLM")))
@@ -186,7 +186,7 @@ class TestFiring:
         assert stored["next_fire"]
 
     def test_a_deleted_workflow_is_reported_not_run(self, sched, monkeypatch):
-        from studio.backend import graphs as graph_store
+        from backend.api import graphs as graph_store
         monkeypatch.setattr(graph_store, "load_graph", lambda gid: None)
         sched.set_schedule({"id": "g1"}, {"mode": "daily"})
         sched._fire("g1", sched.load("g1"))
@@ -196,7 +196,7 @@ class TestFiring:
 
 class TestSurvivingARestart:
     def test_enabled_schedules_start_again(self, sched, monkeypatch):
-        from studio.backend import graphs as graph_store
+        from backend.api import graphs as graph_store
         started = []
         monkeypatch.setattr(sched, "_start_thread",
                             lambda graph, schedule: started.append(graph["id"]))
@@ -209,14 +209,14 @@ class TestSurvivingARestart:
         assert sorted(started) == ["g1", "g2"]
 
     def test_a_paused_schedule_stays_paused(self, sched, monkeypatch):
-        from studio.backend import graphs as graph_store
+        from backend.api import graphs as graph_store
         monkeypatch.setattr(graph_store, "load_graph", lambda gid: {"id": gid})
         sched.set_schedule({"id": "g1"}, {"mode": "daily", "enabled": False})
         assert sched.restore() == []
 
     def test_a_schedule_for_a_workflow_that_is_gone_is_skipped(self, sched,
                                                                monkeypatch):
-        from studio.backend import graphs as graph_store
+        from backend.api import graphs as graph_store
         monkeypatch.setattr(graph_store, "load_graph", lambda gid: None)
         sched.set_schedule({"id": "g1"}, {"mode": "daily"})
         assert sched.restore() == []
@@ -250,8 +250,8 @@ class TestThroughTheApi:
     def client(self, sched, studio_data):
         from fastapi.testclient import TestClient
 
-        from studio.backend import app as studio_app
-        from studio.backend import graphs
+        from backend.api import app as studio_app
+        from backend.api import graphs
         graphs.create_graph("Probe", "")
         return TestClient(studio_app.app)
 

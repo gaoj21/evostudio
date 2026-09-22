@@ -20,8 +20,8 @@
     - `description`：任务功能的详细描述
     - `inputs`：任务所需的输入参数列表，每个输入参数是 `Parameter` 类的实例
     - `outputs`：任务产生的输出参数列表，每个输出参数是 `Parameter` 类的实例
-    - `agents`（可选）：可以执行此任务的代理列表，每个代理应该是一个与 `agent_manager` 中代理名称匹配的**字符串**，或者是一个指定代理名称和配置的**字典**，该配置将用于在 `agent_manager` 中创建 `CustomizeAgent` 实例。有关代理配置的更多详细信息，请参阅[自定义代理](./customize_agent.md)文档。
-    - `action_graph`（可选）：`ActionGraph` 类的实例，其中每个动作都是 `Operator` 类的实例。有关动作图的更多详细信息，请参阅[动作图](./action_graph.md)文档。
+    - `agents`（可选）：可以执行此任务的代理列表，每个代理应该是一个与 `agent_manager` 中代理名称匹配的**字符串**，或者是一个指定代理名称和配置的**字典**，该配置将用于在 `agent_manager` 中创建 `CustomizeAgent` 实例。有关代理配置的更多详细信息，请参阅[自定义代理](customize_agent.md)文档。
+    - `action_graph`（可选）：`ActionGraph` 类的实例，其中每个动作都是 `Operator` 类的实例。有关动作图的更多详细信息，请参阅[动作图](action_graph.md)文档。
     - `status`：任务的当前执行状态（PENDING、RUNNING、COMPLETED、FAILED）
 
     !!! note 
@@ -78,7 +78,7 @@
 - `parse_func`（可选）：用于解析输出的自定义函数
 - `title_format`（可选）：当 `parse_mode` 为 "title" 时使用的标题格式，例如 "## {title}"
 
-与提示和解析相关的参数将用于在 `agent_manager` 中创建 `CustomizeAgent` 实例。有关代理配置的更多详细信息，请参阅[自定义代理](./customize_agent.md)文档。
+与提示和解析相关的参数将用于在 `agent_manager` 中创建 `CustomizeAgent` 实例。有关代理配置的更多详细信息，请参阅[自定义代理](customize_agent.md)文档。
 
 #### 内部转换为工作流图
 

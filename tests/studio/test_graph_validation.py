@@ -1,4 +1,4 @@
-"""Tests for canvas graph validation and derived state (studio/backend/graphs.py).
+"""Tests for canvas graph validation and derived state (backend/api/graphs.py).
 
 `validate_graph` is what stands between a canvas and a run that costs money, and
 `compute_workflow_inputs` decides what the run dialog asks for. Both are pure,
@@ -20,7 +20,7 @@ from conftest import make_graph, make_task
 
 
 def inputs_of(graph):
-    from studio.backend import graphs as graph_store
+    from backend.api import graphs as graph_store
     ordered = graph_store.topo_sort_tasks(graph["tasks"], graph["edges"])
     return graph_store.compute_workflow_inputs(ordered, graph["edges"])
 
@@ -71,7 +71,7 @@ class TestWorkflowInputs:
 
 class TestValidation:
     def test_a_sound_graph_validates(self, studio_data):
-        from studio.backend import graphs as graph_store
+        from backend.api import graphs as graph_store
         graph = make_graph(
             [make_task("a", outputs=["x"]), make_task("b", inputs=["x"], outputs=["y"])],
             edges=[("a", "b")],
@@ -81,15 +81,15 @@ class TestValidation:
         assert workflow_inputs == []
 
     def test_unknown_skill_is_rejected(self, studio_data):
-        from studio.backend import graphs as graph_store
+        from backend.api import graphs as graph_store
         graph = make_graph([make_task("a", outputs=["x"], skill_names=["ghost"])])
         with pytest.raises(graph_store.GraphValidationError) as raised:
             graph_store.validate_graph(graph)
         assert "ghost" in str(raised.value)
 
     def test_a_known_skill_passes_and_never_reaches_the_framework(self, studio_data):
-        from studio.backend import graphs as graph_store
-        from studio.backend import skills_api
+        from backend.api import graphs as graph_store
+        from backend.api import skills_api
         skills_api.save_skill({"name": "rubric", "description": "d", "content": "# R"})
         task = make_task("a", outputs=["x"], skill_names=["rubric"])
         graph_store.validate_graph(make_graph([task]))
@@ -97,7 +97,7 @@ class TestValidation:
 
     def test_tool_node_fed_by_an_llm_node_is_rejected(self, studio_data):
         """Tool nodes run before the graph, so they cannot consume its output."""
-        from studio.backend import graphs as graph_store
+        from backend.api import graphs as graph_store
         llm = make_task("a", outputs=["x"])
         tool = {"name": "t", "kind": "tool", "tool": "word_count",
                 "inputs": [{"name": "x", "type": "str", "description": "x",
@@ -111,7 +111,7 @@ class TestValidation:
 
 class TestTopologyHelpers:
     def test_topo_sort_follows_the_edges(self):
-        from studio.backend import graphs as graph_store
+        from backend.api import graphs as graph_store
         graph = make_graph(
             [make_task("c", inputs=["y"], outputs=["z"]),
              make_task("a", outputs=["x"]),
@@ -121,18 +121,24 @@ class TestTopologyHelpers:
         ordered = graph_store.topo_sort_tasks(graph["tasks"], graph["edges"])
         assert [t["name"] for t in ordered] == ["a", "b", "c"]
 
-    def test_parked_nodes_are_the_ones_with_no_edges(self):
-        from studio.backend import graphs as graph_store
+    def test_parked_is_now_an_explicit_flag_set_once_by_migration(self):
+        # The old rule — edgeless nodes are parked once the canvas has an
+        # edge — is applied exactly once, on migration, and written down.
+        from backend.api import graphs as graph_store
         graph = make_graph(
             [make_task("a", outputs=["x"]), make_task("b", inputs=["x"], outputs=["y"]),
              make_task("lonely", outputs=["z"])],
             edges=[("a", "b")],
         )
-        parked = graph_store.parked_task_names(graph["tasks"], graph["edges"])
-        assert parked == {"lonely"}
+        assert graph_store.parked_task_names(graph["tasks"], graph["edges"]) == set()
+        graph_store.migrate_flow(graph)
+        assert graph_store.parked_task_names(graph["tasks"], graph["edges"]) == {"lonely"}
+        # Wire it afterwards and it stays off until someone enables it.
+        graph["edges"].append({"source": "b", "target": "lonely", "control_only": True})
+        assert graph_store.parked_task_names(graph["tasks"], graph["edges"]) == {"lonely"}
 
     def test_auto_layout_columns_by_dependency_depth(self):
-        from studio.backend import graphs as graph_store
+        from backend.api import graphs as graph_store
         graph = make_graph(
             [make_task("a", outputs=["x"]), make_task("b", inputs=["x"], outputs=["y"]),
              make_task("c", inputs=["y"], outputs=["z"])],
@@ -144,7 +150,7 @@ class TestTopologyHelpers:
 
     def test_auto_layout_survives_a_cycle(self):
         """A cycle cannot be ordered by depth; it must not hang or raise."""
-        from studio.backend import graphs as graph_store
+        from backend.api import graphs as graph_store
         graph = make_graph(
             [make_task("a", inputs=["y"], outputs=["x"]),
              make_task("b", inputs=["x"], outputs=["y"])],

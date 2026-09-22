@@ -20,8 +20,8 @@ A `WorkFlowGraph` consists of several key components:
     - `description`: Detailed description of what the task does
     - `inputs`: List of input parameters required by the task, each input parameter is an instance of `Parameter` class. 
     - `outputs`: List of output parameters produced by the task, each output parameter is an instance of `Parameter` class. 
-    - `agents` (optional): List of agents that can execute this task, each agent should be a **string** that matches the name of the agent in the `agent_manager` or a **dictionary** that specifies the agent name and its configuration, which will be used to create a `CustomizeAgent` instance in the `agent_manager`.  Please refer to the [Customize Agent](./customize_agent.md) documentation for more details about the agent configuration. 
-    - `action_graph` (optional): An instance of `ActionGraph` class, where each action is an instance of the `Operator` class. Please refer to the [Action Graph](./action_graph.md) documentation for more details about the action graph. 
+    - `agents` (optional): List of agents that can execute this task, each agent should be a **string** that matches the name of the agent in the `agent_manager` or a **dictionary** that specifies the agent name and its configuration, which will be used to create a `CustomizeAgent` instance in the `agent_manager`.  Please refer to the [Customize Agent](customize_agent.md) documentation for more details about the agent configuration. 
+    - `action_graph` (optional): An instance of `ActionGraph` class, where each action is an instance of the `Operator` class. Please refer to the [Action Graph](action_graph.md) documentation for more details about the action graph. 
     - `status`: Current execution state of the task (PENDING, RUNNING, COMPLETED, FAILED).
 
     !!! note 
@@ -79,7 +79,7 @@ The `SequentialWorkFlowGraph` accepts a simplified input format that makes it ea
 - `parse_func` (optional): Custom function for parsing outputs
 - `title_format` (optional): Title format used when `parse_mode` is "title", e.g. "## {title}"
 
-The parameters related to prompts and parsing will be used to create a `CustomizeAgent` instance in the `agent_manager`. Please refer to the [Customize Agent](./customize_agent.md) documentation for more details about the agent configuration. 
+The parameters related to prompts and parsing will be used to create a `CustomizeAgent` instance in the `agent_manager`. Please refer to the [Customize Agent](customize_agent.md) documentation for more details about the agent configuration. 
 
 #### Internal Conversion to WorkFlowGraph
 

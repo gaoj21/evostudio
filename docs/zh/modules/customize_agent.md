@@ -151,7 +151,7 @@ print(result.content.complexity)
 
 ## 提示模板用法
 
-`CustomizeAgent` 还支持使用 `PromptTemplate` 进行更灵活的提示模板设计。有关提示模板及其高级功能的详细信息，请参阅[提示模板教程](./prompt_template.md)。
+`CustomizeAgent` 还支持使用 `PromptTemplate` 进行更灵活的提示模板设计。有关提示模板及其高级功能的详细信息，请参阅[提示模板教程](prompt_template.md)。
 
 ### 简单提示模板
 

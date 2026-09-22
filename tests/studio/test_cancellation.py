@@ -14,7 +14,7 @@ import pytest
 
 @pytest.fixture
 def batch_store(tmp_path, monkeypatch):
-    from studio.backend import batch as batch_module
+    from backend.api import batch as batch_module
     monkeypatch.setattr(batch_module, "BATCHES_DIR", tmp_path / "batches")
     batch_module._batches.clear()
     batch_module._threads.clear()
@@ -36,7 +36,7 @@ def slow_runner(monkeypatch, batch_store):
     Records which items actually started, which is the whole question: a
     cancelled batch must leave the rest untouched.
     """
-    from studio.backend import runner
+    from backend.api import runner
     started: list[dict] = []
     # One permit per item allowed through, so a test can let exactly as many
     # items run as it means to; without that the batch races to completion
@@ -44,7 +44,7 @@ def slow_runner(monkeypatch, batch_store):
     permits = threading.Semaphore(0)
 
     def fake_start_run(graph, inputs, background=True, gray_zone=None,
-                       run_id=None, start_at=None):
+                       run_id=None, start_at=None, **_kw):     # batch_id etc.
         started.append(inputs)
         assert permits.acquire(timeout=5)
         runner._runs[run_id] = {
@@ -89,7 +89,7 @@ class TestCancelBatch:
         assert _wait_until(lambda: len(started) == 2)
         outcome = batch_store.cancel_batch(batch_id)
         assert outcome["cancelled"] is True
-        assert outcome["still_running"] == 2
+        assert outcome["interrupted"] == 2
         assert outcome["not_started"] == 18
 
         allow(2)
@@ -137,7 +137,7 @@ class TestCancelBatch:
     def test_a_cancelled_evaluation_still_scores_what_it_covered(
         self, batch_store, slow_runner, monkeypatch
     ):
-        from studio.backend import evaluation
+        from backend.api import evaluation
         monkeypatch.setattr(evaluation, "score_one",
                             lambda metric, pred, label: {"score": 1.0})
         started, allow = slow_runner
@@ -189,10 +189,10 @@ class TestCancelBatch:
         batch_id = batch_store.start_batch(
             {"id": "g"}, [{"n": 1}], {"type": "manual"}, workers=1
         )
-        _await_status(batch_store, batch_id, "completed")
+        _await_status(batch_store, batch_id, "succeeded")
         outcome = batch_store.cancel_batch(batch_id)
         assert outcome["cancelled"] is False
-        assert "completed" in outcome["reason"]
+        assert "succeeded" in outcome["reason"]
 
     def test_an_unknown_batch_is_reported_as_such(self, batch_store):
         assert batch_store.cancel_batch("nope") == {
@@ -203,7 +203,7 @@ class TestCancelBatch:
 class TestAbandonRun:
     @pytest.fixture
     def runs(self, tmp_path, monkeypatch):
-        from studio.backend import runner
+        from backend.api import runner
         monkeypatch.setattr(runner, "RUNS_DIR", tmp_path / "runs")
         runner._runs.clear()
         return runner
@@ -273,8 +273,8 @@ class TestEndpoints:
     def client(self, batch_store, tmp_path, monkeypatch):
         from fastapi.testclient import TestClient
 
-        from studio.backend import app as studio_app
-        from studio.backend import runner
+        from backend.api import app as studio_app
+        from backend.api import runner
         monkeypatch.setattr(runner, "RUNS_DIR", tmp_path / "runs")
         runner._runs.clear()
         return TestClient(studio_app.app)
@@ -291,7 +291,7 @@ class TestEndpoints:
         body = res.json()
         assert body["cancelled"] is True
         assert body["not_started"] == 10
-        assert body["still_running"] == 2
+        assert body["interrupted"] == 2
 
         allow(2)
         _await_status(batch_store, batch_id, "cancelled")
@@ -308,13 +308,13 @@ class TestEndpoints:
         batch_id = batch_store.start_batch(
             {"id": "g"}, [{"n": 1}], {"type": "manual"}, workers=1
         )
-        _await_status(batch_store, batch_id, "completed")
+        _await_status(batch_store, batch_id, "succeeded")
         res = client.post(f"/api/batches/{batch_id}/cancel")
         assert res.status_code == 200
         assert res.json()["cancelled"] is False
 
     def test_abandoning_a_run(self, client, batch_store):
-        from studio.backend import runner
+        from backend.api import runner
         runner._runs["r1"] = {"run_id": "r1", "status": "running", "nodes": []}
         res = client.post("/api/runs/r1/abandon")
         assert res.status_code == 200
@@ -323,3 +323,83 @@ class TestEndpoints:
 
     def test_abandoning_an_unknown_run_is_a_404(self, client):
         assert client.post("/api/runs/nope/abandon").status_code == 404
+
+
+
+@pytest.fixture
+def stuck_engine(studio_data, monkeypatch):
+    """The real engine, with a model that never answers until cancelled."""
+    import asyncio
+    from evoagentx.models import LiteLLMConfig
+    from backend.api import runner, tools_registry
+
+    entered = threading.Event()
+
+    async def hanging_llm(agent, task, inputs, state):
+        entered.set()
+        await asyncio.sleep(60)          # a model call that would bill for a minute
+        return {o["name"]: "late" for o in task.get("outputs") or []}
+
+    class StubLLM:
+        config = LiteLLMConfig(model="deepseek/deepseek-chat", deepseek_key="test-only")
+
+    monkeypatch.setattr(runner, "execute_llm_node", hanging_llm)
+    monkeypatch.setattr(runner, "_make_llm", lambda: StubLLM())
+    monkeypatch.setattr(runner, "_prepare_ltm", lambda doc, ordered, inputs, state: ({}, ordered))
+    monkeypatch.setattr(runner, "_attach_ltm", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "_save_ltm", lambda *a, **k: None)
+    monkeypatch.setattr(tools_registry, "validate_tool_names", lambda names: None)
+    monkeypatch.setattr(tools_registry, "resolve_tools", lambda names, **kw: None)
+    return entered
+
+
+def _graph():
+    from conftest import make_graph, make_task
+    g = make_graph([make_task("a", inputs=["topic"], outputs=["x"]),
+                    make_task("b", inputs=["x"], outputs=["y"])], edges=[("a", "b")])
+    g["id"] = "stop-me"
+    return g
+
+
+class TestStopMeansStop:
+    """A record is no longer a framework call nobody can reach into."""
+
+    def test_a_running_run_is_interrupted_where_it_is(self, stuck_engine):
+        from backend.api import runner
+        run_id = runner.start_run(_graph(), {"topic": "t"})       # background thread
+        assert stuck_engine.wait(5), "the model call never started"
+        t0 = time.time()
+
+        assert runner.cancel_run(run_id) == {"cancelled": True}
+        assert _wait_until(lambda: runner.get_run(run_id)["status"] == "cancelled", 5)
+        assert time.time() - t0 < 5                              # not the 60s the call wanted
+
+        run = runner.get_run(run_id)
+        assert "Stopped by the user" in run["error"]
+        statuses = {n["name"]: n["status"] for n in run["nodes"]}
+        assert statuses == {"a": "cancelled", "b": "skipped"}
+
+    def test_a_settled_run_says_so_instead(self, stuck_engine):
+        from backend.api import runner
+        run_id = runner.start_run(_graph(), {"topic": "t"})
+        assert stuck_engine.wait(5)
+        runner.cancel_run(run_id)
+        assert _wait_until(lambda: runner.get_run(run_id)["status"] == "cancelled", 5)
+        assert runner.cancel_run(run_id) == {"cancelled": False, "reason": "run already cancelled"}
+
+    def test_stopping_a_batch_interrupts_its_running_records(self, stuck_engine, batch_store):
+        batch_id = batch_store.start_batch(_graph(), [{"topic": str(i)} for i in range(6)],
+                                           {"type": "manual"}, workers=2)
+        assert stuck_engine.wait(5)
+        assert _wait_until(lambda: sum(1 for i in batch_store.get_batch(batch_id)["items"]
+                                       if i["status"] == "running") == 2, 5)
+        t0 = time.time()
+
+        outcome = batch_store.cancel_batch(batch_id)
+        assert outcome["interrupted"] == 2
+        assert outcome["not_started"] == 4
+        _await_status(batch_store, batch_id, "cancelled")
+        assert time.time() - t0 < 5
+
+        counts = batch_store._digest(batch_store.get_batch(batch_id))["counts"]
+        assert counts == {"cancelled": 6}                        # nothing finished on its own

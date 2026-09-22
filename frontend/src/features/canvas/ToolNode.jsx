@@ -1,0 +1,34 @@
+import React from 'react';
+import { Handle, Position } from '@xyflow/react';
+
+export default function ToolNode({ id, data, selected }) {
+  const status = data.runStatus || null;
+  const cls = ['task-node', 'tool-node'];
+  if (selected) cls.push('selected');
+  if (status) cls.push(`run-${status}`);
+  return (
+    <div className={cls.join(' ')}>
+      <Handle type="target" position={Position.Left} />
+      {!data.runMode && (
+        <button
+          className="node-close nodrag"
+          title="Delete node"
+          onClick={(e) => {
+            e.stopPropagation();
+            data.onDelete && data.onDelete(id);
+          }}
+        >
+          ✕
+        </button>
+      )}
+      <div className="node-title">⚙ {id}</div>
+      <div className="node-desc">{data.kind === 'evaluator' ? `Evaluator · ${data.evaluator?.type || 'exact_match'}` : data.tool || 'tool'}</div>
+      {data.batchBadge && <div className="node-tools batch-badge">{data.batchBadge}</div>}
+      {status && <div className={`node-status status-${status}`}>{status}</div>}
+      {data.kind !== 'evaluator' && <Handle type="source" position={Position.Right} />}
+      <Handle type="target" id="t-in" position={Position.Top} className="handle-memory" />
+      {data.kind !== 'evaluator' && <Handle type="source" id="b-out" position={Position.Bottom} className="handle-memory" style={{ left: '38%' }} />}
+      <Handle type="target" id="b-in" position={Position.Bottom} className="handle-memory" style={{ left: '62%' }} />
+    </div>
+  );
+}
