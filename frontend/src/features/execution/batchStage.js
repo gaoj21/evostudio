@@ -57,12 +57,34 @@ export function nodeOrder(nodes, edges) {
   return rank;
 }
 
+/**
+ * How many records the running node has done, out of all read so far.
+ *
+ * Counted over the whole batch, like every other node's badge: `stage`
+ * counts only the DataLoader batch now running, so on its own it went back
+ * to 0/16 when the second batch came in while the node next to it read
+ * 16/32. The per-node aggregate is the whole-batch count; the stage is the
+ * fallback when there is none yet.
+ */
+export function stageCount(batch) {
+  const stage = batchStage(batch);
+  if (!stage) return null;
+  const p = batch?.node_progress?.[stage.node];
+  if (p) {
+    const total = p.completed + p.running + p.failed + p.pending;
+    if (total > 0) return { done: p.completed + p.failed, total };
+  }
+  return { done: stage.done ?? 0, total: stage.total ?? '?' };
+}
+
 // "node 3/8 · detect · 120/275" — where the batch is, in the terms it runs in.
 export function stageText(batch) {
   const stage = batchStage(batch);
   if (!stage) return null;
   const where = stage.index && stage.of ? `node ${stage.index}/${stage.of}` : 'node';
-  const wave = stage.total != null ? ` · ${stage.done ?? 0}/${stage.total}` : '';
+  const count = stageCount(batch);
+  const wave = count && (stage.total != null || batch?.node_progress?.[stage.node])
+    ? ` · ${count.done}/${count.total}` : '';
   return `${where} · ${stage.node}${wave}`;
 }
 
@@ -103,9 +125,10 @@ export function batchNodeStates(batch, nodes, edges) {
       return;
     }
     if (n.id === stage.node) {
+      const count = stageCount(batch);
       states[n.id] = {
         runStatus: 'running',
-        batchBadge: `${stageBadge(stage)}${p?.failed ? ` ·${p.failed}✗` : ''}${tokens(p?.token_usage)}`,
+        batchBadge: `${count.done}/${count.total}${p?.failed ? ` ·${p.failed}✗` : ''}${tokens(p?.token_usage)}`,
       };
       return;
     }

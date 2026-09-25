@@ -12,13 +12,23 @@ describe('a batch run node by node', () => {
     const states = batchNodeStates(batch, nodes, edges);
 
     expect(states.b).toMatchObject({ runStatus: 'running' });
-    expect(states.b.batchBadge).toContain('120/275');
+    expect(states.b.batchBadge).toContain('120/275');   // no aggregate for b yet: the stage
     expect(states.a.runStatus).toBe('failed');        // passed, with failures
     expect(states.c.runStatus).toBe('pending');
   });
 
   it('says where the batch is in node terms', () => {
     expect(stageText(batch)).toBe('node 2/3 · b · 120/275');
+  });
+
+  it('counts the running node over the whole batch, not just the DataLoader batch now running', () => {
+    // Second DataLoader batch of 16 just arrived: a has done the first 16.
+    const second = { mode: 'node', stage: { node: 'a', index: 1, of: 3, done: 0, total: 16 },
+      node_progress: { a: { completed: 16, running: 16, failed: 0, pending: 0 },
+        b: { completed: 16, running: 0, failed: 0, pending: 16 } } };
+
+    expect(batchNodeStates(second, nodes, edges).a.batchBadge).toMatch(/^16\/32/);
+    expect(stageText(second)).toBe('node 1/3 · a · 16/32');
   });
 
   it('orders nodes by the edges, not by the canvas list', () => {
