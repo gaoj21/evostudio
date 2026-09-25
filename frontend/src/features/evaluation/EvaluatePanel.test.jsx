@@ -147,50 +147,46 @@ describe('the pasted code is kept as a draft', () => {
   });
 });
 
-describe('the evaluators saved on the workflow', () => {
+describe('the workflow has one evaluation: this code', () => {
   beforeEach(() => {
-    api.graphEvaluators.mockResolvedValue({ evaluators: [
-      { name: 'quality', code: CODE, config: { field: 'answer' }, metric: 'score', timing: 'batch', enabled: true }] });
     api.saveGraphEvaluators.mockImplementation(async (id, list) => ({ evaluators: list }));
   });
 
-  it('saves the written code under a name, with timing and time limit', async () => {
-    api.graphEvaluators.mockResolvedValue({ evaluators: [] });
+  it('keeps confirmed code as the workflow evaluation, with no name to give', async () => {
     const onChanged = vi.fn();
     const { container } = render(<EvaluatePanel graphId="g1" onEvaluatorsChanged={onChanged} />);
     const view = within(container);
     const user = userEvent.setup();
     await withCode(view, user);
-    await user.type(view.getByLabelText('Name'), 'quality');
-    await user.selectOptions(view.getByLabelText('Run evaluation'), 'batch');
-    await user.click(view.getByRole('button', { name: 'Save as evaluator' }));
     await waitFor(() => expect(api.saveGraphEvaluators).toHaveBeenCalledWith('g1', [expect.objectContaining({
-      name: 'quality', code: CODE, timing: 'batch', timeout: 120, enabled: true })]));
+      name: 'evaluation', code: CODE, timing: 'manual', timeout: 120, enabled: true })]));
     expect(onChanged).toHaveBeenCalled();
-    expect(await view.findByText('quality')).toBeInTheDocument();
+    expect(view.queryByLabelText('Name')).toBeNull();
+    expect(view.queryByRole('button', { name: 'Save as evaluator' })).toBeNull();
+    expect(view.queryByText(/new evaluator/i)).toBeNull();
   });
 
-  it('lists, enables, edits and deletes them', async () => {
-    api.deleteGraphEvaluator.mockResolvedValue({ deleted: 'quality' });
+  it('opens with the kept code and its objective, and keeps the metric picked from a report', async () => {
+    api.graphEvaluators.mockResolvedValue({ evaluators: [
+      { name: 'evaluation', code: CODE, config: { field: 'answer' }, metric: '', direction: 'maximize', timing: 'manual', enabled: true }] });
+    api.previewGraphEvaluator.mockResolvedValue({ status: 'success', metrics: { score: 0.8, recall: 0.5 } });
     const { view, user } = open();
-    expect(await view.findByText('quality')).toBeInTheDocument();
-    await user.click(view.getByLabelText('Enable quality'));
-    await waitFor(() => expect(api.saveGraphEvaluators).toHaveBeenCalledWith('g1', [expect.objectContaining({ enabled: false })]));
-    await user.click(view.getByRole('button', { name: 'Edit' }));
-    expect(view.getByLabelText('Name')).toHaveValue('quality');
-    expect(view.getByLabelText('Python Evaluator code')).toHaveValue(CODE);
-    await user.click(view.getByRole('button', { name: 'Delete' }));
-    await waitFor(() => expect(api.deleteGraphEvaluator).toHaveBeenCalledWith('g1', 'quality'));
-    expect(await view.findByTestId('no-evaluators')).toBeInTheDocument();
-  });
-
-  it('runs a saved one by name on the chosen results', async () => {
-    api.runGraphEvaluator.mockResolvedValue({ status: 'success', metrics: { score: 1 }, objective: { metric: 'score' } });
-    const { view, user } = open();
-    await view.findByText('quality');
+    await waitFor(() => expect(view.getByLabelText('Python Evaluator code')).toHaveValue(CODE));
     await waitFor(() => expect(view.getByLabelText('Saved batch or run')).toHaveValue('batch:b1'));
-    await user.click(view.getByRole('button', { name: 'Run' }));
-    await waitFor(() => expect(api.runGraphEvaluator).toHaveBeenCalledWith('g1', { name: 'quality', batch_id: 'b1' }));
-    expect(await view.findByText(/quality · success · score 1/)).toBeInTheDocument();
+    await user.click(view.getByRole('button', { name: 'Preview' }));
+    await waitFor(() => expect(view.getByLabelText('Metric')).toHaveValue('score'));
+    await waitFor(() => expect(api.saveGraphEvaluators).toHaveBeenCalledWith('g1', [expect.objectContaining({
+      name: 'evaluation', metric: 'score', config: { field: 'answer' } })]));
+  });
+
+  it('leaves anything else saved on the workflow alone', async () => {
+    const other = { name: 'legacy', code: 'x', metric: 'm', enabled: true };
+    api.graphEvaluators.mockResolvedValue({ evaluators: [
+      { name: 'evaluation', code: CODE, config: {}, metric: 'score', direction: 'maximize', timeout: 120, enabled: true }, other] });
+    const { view, user } = open();
+    await waitFor(() => expect(view.getByLabelText('Python Evaluator code')).toHaveValue(CODE));
+    await withCode(view, user, CODE + '# changed\n');
+    await waitFor(() => expect(api.saveGraphEvaluators).toHaveBeenCalledWith('g1',
+      [other, expect.objectContaining({ name: 'evaluation', code: CODE + '# changed\n' })]));
   });
 });

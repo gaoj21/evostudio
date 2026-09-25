@@ -88,7 +88,7 @@ export default function EvolvePanel({ open, graphId, onClose, onApplied }) {
               + New run
             </button>
             <button type="button" className={view === 'evaluate' ? 'primary' : ''} onClick={() => { setView('evaluate'); setShowForm(false); setSelectedId(null); }} disabled={!graphId}>
-              Write evaluator
+              Evaluation code
             </button>
             {running > 0 && <div className="muted small">{running} running — you can close this window.</div>}
             <div className="evolve-task-list">

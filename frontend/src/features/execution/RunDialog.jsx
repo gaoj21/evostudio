@@ -743,8 +743,8 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
       />
       {error && <div className="muted small batch-error">{String(error)}</div>}
       <p className="muted small" data-testid="evaluation-note">
-        Evaluation runs the evaluators saved on this workflow (your own code), at the timing each one sets.
-        A finished batch can also be evaluated later from its Evaluation tab, without rerunning the workflow.
+        A run does not evaluate itself. Score a finished batch with the workflow&apos;s evaluation code in
+        Evaluation &amp; Evolve, or from its Evaluation tab, without rerunning the workflow.
       </p>
       <div className="field">
         <label htmlFor="model-execution">Model execution</label>

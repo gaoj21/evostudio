@@ -42,6 +42,11 @@ const EXAMPLES = [
 ];
 
 const DRAFT_DEBOUNCE_MS = 800;
+// A workflow has one evaluation: this code. It is kept under this name, which
+// the page never shows; a workflow saved with a differently named one keeps it.
+export const WORKFLOW_EVALUATION = 'evaluation';
+export const workflowEvaluation = (list) =>
+  (list || []).find((e) => e.name === WORKFLOW_EVALUATION) || (list || [])[0] || null;
 const message = (e) => e?.body?.detail || e?.message || String(e);
 const rows = (value, key) => (Array.isArray(value) ? value : value?.[key] || []);
 // A preview or run answers with the report, either bare or wrapped.
@@ -54,9 +59,10 @@ const metricNames = (result) => {
 };
 
 /**
- * Evaluation as code: write it here, read its parameters from the code
- * itself, try it on a saved batch or run, and keep the ones worth keeping on
- * the workflow. Nothing about evaluation lives on the canvas.
+ * Evaluation as code: paste or upload it here, read its parameters from the
+ * code itself, and try it on a saved batch or run. The workflow has one
+ * evaluation — this code — kept as it is confirmed; Evolve optimizes what it
+ * scores. Nothing about evaluation lives on the canvas.
  */
 export default function EvaluatePanel({ graphId, onEvaluatorsChanged }) {
   const [code, setCode] = useState('');            // confirmed code: what runs
@@ -72,10 +78,9 @@ export default function EvaluatePanel({ graphId, onEvaluatorsChanged }) {
   const [metric, setMetric] = useState('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
-  const [saved, setSaved] = useState([]);
+  const [kept, setKept] = useState(null);          // the workflow's evaluation, as last kept
+  const [others, setOthers] = useState([]);        // anything else saved on the workflow, left alone
   const [resources, setResources] = useState([]);
-  const [name, setName] = useState('');
-  const [timing, setTiming] = useState('manual');
   const [timeout, setTimeoutSeconds] = useState(120);
   const [direction, setDirection] = useState('maximize');
   const [labels, setLabels] = useState('');
@@ -88,28 +93,31 @@ export default function EvaluatePanel({ graphId, onEvaluatorsChanged }) {
 
   useEffect(() => { api.listDataResources().then((r) => setResources(rows(r, 'resources'))).catch(() => {}); }, []);
 
-  // ---- saved evaluators (they live on the workflow, not on a node) ----
-  const refreshSaved = useCallback(async () => {
-    if (!graphId) return;
-    try { setSaved(rows(await api.graphEvaluators(graphId), 'evaluators')); }
-    catch (e) { setError(message(e)); }
-  }, [graphId]);
-  useEffect(() => { refreshSaved(); }, [refreshSaved]);
-
   // ---- the draft: server copy wins, browser copy is the safety net ----
   useEffect(() => {
     let active = true;
     setRestored(false); setCode(''); setConfig({}); setIface(null); setReport(null); setMetric('');
     baseline.current = { code: '', config: {} }; unsaved.current = false;
     if (!graphId) return undefined;
+    setKept(null); setOthers([]);
     (async () => {
       let server = null;
+      let list = [];
       try { server = await api.evaluatorDraft(graphId); } catch { server = null; }
+      try { list = rows(await api.graphEvaluators(graphId), 'evaluators'); } catch (e) { setError(message(e)); }
       if (!active) return;
+      const current = workflowEvaluation(list);
+      setKept(current); setOthers(list.filter((e) => e !== current));
+      if (current) {
+        setMetric(current.metric || ''); setDirection(current.direction || 'maximize');
+        setTimeoutSeconds(current.timeout ?? 120); setLabels(current.labels?.resource_id || '');
+      }
+      // Pasted-but-unconfirmed code is newer than what was kept.
       const draft = newerDraft(server, readLocalDraft(graphId)) || {};
-      setCode(draft.code || ''); setConfig(draft.config || {}); setDraftSavedAt(draft.saved_at || null);
+      const start = draft.code ? draft : { code: current?.code || '', config: current?.config || {} };
+      setCode(start.code || ''); setConfig(start.config || {}); setDraftSavedAt(draft.saved_at || null);
       setDraftState(draft.code ? 'saved' : 'idle');
-      baseline.current = { code: draft.code || '', config: draft.config || {} };
+      baseline.current = { code: start.code || '', config: start.config || {} };
       setRestored(true);
     })();
     return () => { active = false; };
@@ -196,60 +204,41 @@ export default function EvaluatePanel({ graphId, onEvaluatorsChanged }) {
     try {
       const body = { code, config, ...(metric ? { metric } : {}), ...targetBody() };
       const result = persist ? await api.runGraphEvaluator(graphId, body) : await api.previewGraphEvaluator(graphId, body);
-      setReport(result); setReportLabel(name || (persist ? 'run' : 'preview'));
+      setReport(result); setReportLabel(persist ? 'run' : 'preview');
       const names = metricNames(result);
       if (names.length && !names.includes(metric)) setMetric(names[0]);
     } catch (e) { setError(message(e)); }
     finally { setBusy(''); }
   };
 
-  const runSaved = async (evaluator) => {
-    setBusy(`saved:${evaluator.name}`); setError(''); setReport(null);
-    try {
-      const result = await api.runGraphEvaluator(graphId, { name: evaluator.name, ...targetBody() });
-      setReport(result); setReportLabel(evaluator.name);
-    } catch (e) { setError(message(e)); }
-    finally { setBusy(''); }
-  };
-
-  const replace = async (list) => {
-    setError('');
-    try {
-      const answer = await api.saveGraphEvaluators(graphId, list);
-      const next = rows(answer, 'evaluators');
-      setSaved(next.length ? next : list);
-      onEvaluatorsChanged?.(next.length ? next : list);
-    } catch (e) { setError(message(e)); }
-  };
-
-  const saveEvaluator = async () => {
+  // ---- keep it: the confirmed code and its settings are the workflow's evaluation ----
+  useEffect(() => {
+    if (!graphId || !restored || !code.trim()) return undefined;
     const entry = {
-      name: name.trim(), code, config, metric: metric || '', direction, timing,
-      timeout: Number(timeout) || 120, labels: labels ? { resource_id: labels, loader: 'auto' } : null, enabled: true,
+      name: kept?.name || WORKFLOW_EVALUATION, code, config, metric: metric || '', direction,
+      timing: 'manual', timeout: Number(timeout) || 120,
+      labels: labels ? { resource_id: labels, loader: 'auto' } : null, enabled: true,
     };
-    await replace([...saved.filter((e) => e.name !== entry.name), entry]);
-  };
-
-  const remove = async (evaluator) => {
-    setError('');
-    try { await api.deleteGraphEvaluator(graphId, evaluator.name); }
-    catch (e) { setError(message(e)); return; }
-    const next = saved.filter((e) => e.name !== evaluator.name);
-    setSaved(next); onEvaluatorsChanged?.(next);
-  };
-
-  const edit = (evaluator) => {
-    setCode(evaluator.code || ''); setConfig(evaluator.config || {}); setIface(null); setReport(null);
-    setName(evaluator.name || ''); setMetric(evaluator.metric || ''); setTiming(evaluator.timing || 'manual');
-    setTimeoutSeconds(evaluator.timeout ?? 120); setDirection(evaluator.direction || 'maximize');
-    setLabels(evaluator.labels?.resource_id || '');
-  };
+    const same = kept && ['code', 'metric', 'direction', 'timeout'].every((k) => kept[k] === entry[k])
+      && JSON.stringify(kept.config || {}) === JSON.stringify(entry.config)
+      && (kept.labels?.resource_id || '') === (labels || '');
+    if (same) return undefined;
+    const timer = setTimeout(async () => {
+      try {
+        const answer = rows(await api.saveGraphEvaluators(graphId, [...others, entry]), 'evaluators');
+        const current = answer.find((e) => e.name === entry.name) || entry;
+        setKept(current);
+        onEvaluatorsChanged?.(answer.length ? answer : [...others, entry]);
+      } catch (e) { setError(message(e)); }
+    }, DRAFT_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [graphId, restored, code, config, metric, direction, timeout, labels, kept, others, onEvaluatorsChanged]);
 
   const metrics = useMemo(() => metricNames(report), [report]);
   const codeChanged = live !== code;
   const ready = !!graphId && !!code.trim() && !!selection && !codeChanged && !busy;
 
-  if (!graphId) return <p className="muted">Open a workflow to write an evaluator.</p>;
+  if (!graphId) return <p className="muted">Open a workflow to evaluate it.</p>;
 
   return <div className="evaluate-panel">
     <section>
@@ -259,7 +248,8 @@ export default function EvaluatePanel({ graphId, onEvaluatorsChanged }) {
       <p className="muted small" role="status" data-testid="draft-status">
         {draftState === 'saving' ? 'Saving draft…'
           : draftState === 'local' ? 'Draft kept in this browser only: the server copy could not be written.'
-          : draftSavedAt ? `Draft saved ${new Date(draftSavedAt).toLocaleString()}.`
+          : kept?.code && kept.code === code && !codeChanged ? 'This is the workflow\'s evaluation code. Evolve optimizes what it scores.'
+          : draftSavedAt ? `Draft saved ${new Date(draftSavedAt).toLocaleString()}. Confirm the code to make it the workflow's evaluation.`
           : 'Nothing pasted yet. Whatever you paste is kept as a draft, so you can leave to copy a path and come back.'}
         {' '}
         {(draftSavedAt || live.trim()) && <button type="button" className="link small" onClick={discardDraft}>Discard draft</button>}
@@ -295,54 +285,28 @@ export default function EvaluatePanel({ graphId, onEvaluatorsChanged }) {
       <h4>Report</h4>
       {metrics.length > 0 && <div className="field"><label htmlFor="evaluate-metric">Metric</label>
         <select id="evaluate-metric" value={metric} onChange={(e) => setMetric(e.target.value)}>
-          {!metrics.includes(metric) && <option value="">Choose the metric Evolve optimizes</option>}
+          {!metrics.includes(metric) && <option value="">{metric ? `${metric} (not in this report)` : 'Choose the metric Evolve optimizes'}</option>}
           {metrics.map((m) => <option key={m} value={m}>{m}</option>)}
         </select></div>}
       <EvaluatorReports reports={{ [reportLabel]: reportOf(report) }} />
     </section>}
 
-    <section>
-      <h4>4 · Keep it on this workflow</h4>
-      <div className="field"><label htmlFor="evaluate-name">Name</label>
-        <input id="evaluate-name" value={name} onChange={(e) => setName(e.target.value)} /></div>
-      <div className="field"><label htmlFor="evaluate-timing">Run evaluation</label>
-        <select id="evaluate-timing" value={timing} onChange={(e) => setTiming(e.target.value)}>
-          <option value="manual">Only when asked</option>
-          <option value="run">After each workflow run</option>
-          <option value="batch">After the entire batch</option>
-        </select></div>
-      <div className="field"><label htmlFor="evaluate-timeout">Time limit (seconds)</label>
-        <NumberInput id="evaluate-timeout" type="number" min={10} max={3600} step={1} value={timeout} onChange={(e) => setTimeoutSeconds(Number(e.target.value))} /></div>
+    <details className="evaluate-settings">
+      <summary>Settings</summary>
+      {!metrics.length && <div className="field"><label htmlFor="evaluate-objective">Metric Evolve optimizes</label>
+        <input id="evaluate-objective" value={metric} placeholder="Preview once to choose it from the report"
+          onChange={(e) => setMetric(e.target.value)} /></div>}
       <div className="field"><label htmlFor="evaluate-direction">Optimize direction</label>
         <select id="evaluate-direction" value={direction} onChange={(e) => setDirection(e.target.value)}>
           <option value="maximize">Maximize</option><option value="minimize">Minimize</option>
         </select></div>
-      <details><summary>Separate labels (optional)</summary>
-        <p className="muted small">Labels are passed as config.label_records (or a label_records parameter). Code decides how to match them.</p>
-        <div className="field"><label htmlFor="evaluate-labels">Label resource</label>
-          <select id="evaluate-labels" value={labels} onChange={(e) => setLabels(e.target.value)}>
-            <option value="">None</option>{resources.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-          </select></div></details>
-      <div className="input-actions">
-        <button type="button" className="primary" disabled={!name.trim() || !code.trim() || codeChanged} onClick={saveEvaluator}>Save as evaluator</button>
-      </div>
-      <p className="muted small">Saved evaluators are what Evolve chooses its objective from.</p>
-    </section>
-
-    <section>
-      <h4>Saved evaluators</h4>
-      {saved.length === 0 ? <p className="muted small" data-testid="no-evaluators">None yet. Write code above and save it.</p>
-        : <table className="eval-table"><thead><tr><th>Name</th><th>Metric</th><th>Timing</th><th>On</th><th /></tr></thead><tbody>
-          {saved.map((e) => <tr key={e.name}>
-            <td>{e.name}</td><td>{e.metric || '—'}</td><td>{e.timing || 'manual'}</td>
-            <td><input type="checkbox" aria-label={`Enable ${e.name}`} checked={e.enabled !== false}
-              onChange={(event) => replace(saved.map((x) => (x.name === e.name ? { ...x, enabled: event.target.checked } : x)))} /></td>
-            <td className="input-actions">
-              <button type="button" onClick={() => edit(e)}>Edit</button>
-              <button type="button" disabled={!selection || !!busy} onClick={() => runSaved(e)}>{busy === `saved:${e.name}` ? 'Running…' : 'Run'}</button>
-              <button type="button" onClick={() => remove(e)}>Delete</button>
-            </td></tr>)}
-        </tbody></table>}
-    </section>
+      <div className="field"><label htmlFor="evaluate-timeout">Time limit (seconds)</label>
+        <NumberInput id="evaluate-timeout" type="number" min={10} max={3600} step={1} value={timeout} onChange={(e) => setTimeoutSeconds(Number(e.target.value))} /></div>
+      <p className="muted small">Labels are passed as config.label_records (or a label_records parameter). Code decides how to match them.</p>
+      <div className="field"><label htmlFor="evaluate-labels">Label resource (optional)</label>
+        <select id="evaluate-labels" value={labels} onChange={(e) => setLabels(e.target.value)}>
+          <option value="">None</option>{resources.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+        </select></div>
+    </details>
   </div>;
 }

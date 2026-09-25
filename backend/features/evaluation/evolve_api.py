@@ -762,7 +762,7 @@ async def preview_saved_evaluation(graph_id: str, request: Request):
             select(graph_store.load_graph(graph_id) or {}, body['evaluator'])
             return {**selection, 'suggested_metric': 'canvas:' + evaluator_name(body['evaluator']),
                     'scoring': {'scored': None, 'unscored': None, 'total': len(records)},
-                    'note': 'The chosen evaluator will score saved outputs. Preview does not run the evaluation code.'}
+                    'note': 'The workflow\'s evaluation code will score saved outputs. Preview does not run it.'}
         metric = body.get('metric') or saved.default_metric(selection)
         if not any(m['name'] == metric for m in available_metrics()):
             raise sources.SourceError('Choose an available metric.')
