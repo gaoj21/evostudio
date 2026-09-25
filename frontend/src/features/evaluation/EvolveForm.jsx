@@ -9,6 +9,7 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
   const [evaluation, setEvaluation] = useState(null);   // the workflow's evaluation code
   const evaluator = evaluation?.name || '';
   const [rounds, setRounds] = useState(1);
+  const [heldOut, setHeldOut] = useState(30);          // % of entities kept for validation
   const [mode, setMode] = useState(initialMode);
   const evaluationOnly = mode === 'evaluate';
   const [source, setSource] = useState(initialSource);
@@ -70,7 +71,7 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
     setStarting(true);
     try {
       const res = source === 'canvas'
-        ? await api.startEvolveResults(graphId,{source:'canvas',mode,evaluator,nodes:evaluationOnly?[]:picked,rounds:Number(rounds),share_labels:shareLabels})
+        ? await api.startEvolveResults(graphId,{source:'canvas',mode,evaluator,nodes:evaluationOnly?[]:picked,rounds:Number(rounds),share_labels:shareLabels,...(evaluationOnly?{}:{val_fraction:Number(heldOut)/100})})
         : await api.startEvolveResults(graphId, {source, mode, evaluator, nodes: evaluationOnly ? [] : picked, share_labels: shareLabels, [source === 'saved_batch' ? 'batch_id' : 'run_id']: savedId});
       onStarted(res.task_id);
     } catch (err) {
@@ -97,6 +98,8 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
           : !evaluation.metric ? <p className="muted small" data-testid="no-objective">Choose the metric Evolve optimizes in Evaluation code (preview the code once, then pick it from the report).</p>
           : null}
         {source === 'canvas' && !evaluationOnly && <div className="field"><label htmlFor="canvas-rounds">Candidate rounds</label><input id="canvas-rounds" type="number" min="1" max="10" value={rounds} onChange={e=>setRounds(e.target.value)} /></div>}
+        {source === 'canvas' && !evaluationOnly && <div className="field"><label htmlFor="canvas-held-out">Held out for validation (%)</label><input id="canvas-held-out" type="number" min="10" max="50" value={heldOut} onChange={e=>setHeldOut(e.target.value)} />
+          <small className="muted">Whole entities (each Input trajectory with all its records), fixed split. Prompts are proposed and chosen on the rest; the held-out part is scored once at the end and decides nothing.</small></div>}
         <h4>1 · {evaluationOnly ? 'Data to evaluate' : 'Data to learn from'}</h4>
         <div className="evolve-grid">
           <div className="field">
@@ -121,7 +124,7 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
         </div>
         <div className="muted small">
           {evaluation?.metric ? <>Scored by the workflow's evaluation code, on <b>{evaluation.metric}</b> ({evaluation.direction === 'minimize' ? 'lower' : 'higher'} is better).</> : 'Scored by the workflow\'s evaluation code.'}
-          {source === 'canvas' ? ' Replays the real workflow on the Input selection. All candidates use the same prepared records and empty isolated memory. Scores are development scores; use a separate Test run for final validation.' : ' Reads saved predictions and traces. No workflow rerun. Evolution makes one model request to propose prompts from up to 40 saved traces; new prompts are not validated.'}
+          {source === 'canvas' ? (evaluationOnly ? ' Replays the real workflow on the Input selection, with empty isolated memory, and scores every record.' : ' Replays the real workflow on the Input selection. All candidates replay the same prepared records with empty isolated memory. Before/after scores are on dev; the held-out score is the estimate to trust.') : ' Reads saved predictions and traces. No workflow rerun. Evolution makes one model request to propose prompts from up to 40 saved traces; new prompts are not validated.'}
         </div>
       </section>
 

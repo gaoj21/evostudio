@@ -5,10 +5,16 @@ No provider implementation is embedded here. Saved-result proposals remain a
 separate no-replay operation.
 """
 import copy
+import hashlib
 import shutil
 import uuid
 from backend.api.sources import SourceError
 from . import evaluator_tools
+
+# Evolution holds out part of the data: prompts are proposed and chosen on
+# dev, and val is scored once, at the end, for the baseline and the chosen
+# candidate. It never decides anything, so its score is an honest estimate.
+VAL_FRACTION = 0.3
 
 # A candidate replay runs under its own workflow id so that memory, tables,
 # the session log and the run artifacts it writes are its own and empty. No
@@ -20,6 +26,41 @@ CANDIDATE_PREFIX = '_evolve-'
 
 def candidate_id(task_id, generation):
     return f'{CANDIDATE_PREFIX}{task_id}-{generation}'
+
+
+def split_units(graph, rows):
+    """What dev and val are made of: one unit per entity, never per record.
+
+    A record's output depends on everything its entity's earlier records
+    wrote to memory, so an entity's whole timeline goes to one side. The
+    entity is the trajectory the Input declares, else the key its memory is
+    kept under; a record with neither stands alone. Returns (unit per row,
+    what the unit is).
+    """
+    from backend.features.execution.batch import assign_sequences
+    items = [{} for _ in rows]
+    assign_sequences(graph, list(zip(items, rows)))
+    units, kinds = [], set()
+    for index, item in enumerate(items):
+        if item.get('trajectory') is not None:
+            units.append('t:' + str(item['trajectory'])); kinds.add('trajectory')
+        elif item.get('memory_key') is not None:
+            units.append('m:' + str(item['memory_key'])); kinds.add('memory entity')
+        else:
+            units.append(f'r:{index}'); kinds.add('record')
+    return units, ' / '.join(sorted(kinds)) or 'record'
+
+
+def held_out(units, fraction=VAL_FRACTION, seed=0):
+    """The val units: a fixed share of the distinct units, chosen by a hash
+    of each unit and the seed — the same split every time, whatever order
+    the data arrives in. At least one unit on each side when there are two."""
+    distinct = sorted(set(units))
+    if len(distinct) < 2:
+        return set()
+    size = min(len(distinct) - 1, max(1, round(len(distinct) * fraction)))
+    ranked = sorted(distinct, key=lambda u: hashlib.sha256(f'{seed}:{u}'.encode()).hexdigest())
+    return set(ranked[:size])
 
 
 def _store_roots():
@@ -132,7 +173,14 @@ def prepare(graph, body):
     share_labels = body.get('share_labels', False)
     if not isinstance(share_labels, bool):
         raise SourceError('share_labels must be true or false.')
+    fraction = body.get('val_fraction', VAL_FRACTION)
+    if isinstance(fraction, bool) or not isinstance(fraction, (int, float)) or not 0.1 <= fraction <= 0.5:
+        raise SourceError('Hold out between 10% and 50% for validation.')
+    seed = body.get('split_seed', 0)
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise SourceError('The split seed must be a whole number.')
     return rows, {'mode': mode, 'nodes': chosen, 'evaluator': evaluator_tools.evaluator_name(body['evaluator']), 'rounds': rounds, 'share_labels': share_labels,
+                  'val_fraction': float(fraction), 'split_seed': seed,
                   'source': {'type': 'canvas', 'node': main['name'], 'config': copy.deepcopy(main['source'])},
                   'n_dev': len(rows), 'n_train': 0, 'memory_start': 'empty isolated stores'}
 
@@ -215,15 +263,32 @@ def _execute(state, graph, rows, params, stage):
             records.append({**copy.deepcopy(output), 'id': str(i), 'run_id': id, 'inputs': row, 'status': output.get('status', 'failed'),
                             'error': output.get('error'), 'prediction': output.get('result'),
                             'nodes': output.get('nodes', []), 'node_outputs': output.get('node_outputs', {})})
-        return records, score_saved(graph, records, name)
+        return records
     best_graph = copy.deepcopy(graph)
-    evidence, baseline = run(best_graph, 'baseline')
-    state['baseline'] = baseline
+    everything = run(best_graph, 'baseline')
     if params['mode'] == 'evaluate':
+        state['baseline'] = score_saved(graph, everything, name)
         return
+    # Dev and val, by entity. Every candidate replays every record — memory
+    # may be read across entities — but only dev is seen, scored and chosen
+    # on; val is scored once, at the end.
+    units, unit_kind = split_units(graph, rows)
+    val_units = held_out(units, params.get('val_fraction', VAL_FRACTION), params.get('split_seed', 0))
+    on_val = [unit in val_units for unit in units]
+    def part(records, val):
+        return [r for r, v in zip(records, on_val) if v == val]
+    split = {'unit': unit_kind, 'seed': params.get('split_seed', 0),
+             'val_fraction': params.get('val_fraction', VAL_FRACTION),
+             'dev_units': len(set(units) - val_units), 'val_units': len(val_units),
+             'dev_records': on_val.count(False), 'val_records': on_val.count(True)}
+    state['split'] = split
+    baseline_all = everything
+    evidence = part(everything, False)
+    baseline = score_saved(graph, evidence, name)
+    state['baseline'] = baseline
     if baseline['metrics']['score'] is None:
         raise SourceError('Evaluator has no usable objective score. Supply labels or fix the evaluator before optimizing.')
-    best = baseline
+    best, best_all = baseline, baseline_all
     direction = best['objective']['direction']
     state['candidates'] = []
     # What would give the answers away: a label read from the inputs.
@@ -238,7 +303,9 @@ def _execute(state, graph, rows, params, stage):
         llm = runner._make_llm(usage_key=usage_key(state))
         candidate, diff, _ = saved.propose(best_graph, evidence, params['nodes'], llm, feedback=best,
                                            share_labels=params.get('share_labels', False), hidden_inputs=hidden)
-        traces, result = run(candidate, f'candidate-{round_no+1}')
+        replayed = run(candidate, f'candidate-{round_no+1}')
+        traces = part(replayed, False)
+        result = score_saved(graph, traces, name)
         value = result['metrics']['score']
         old = best['metrics']['score']
         comparable = result['evaluations'][name].get('coverage') == best['evaluations'][name].get('coverage')
@@ -250,7 +317,7 @@ def _execute(state, graph, rows, params, stage):
                                     'changed': [d['name'] for d in diff if d['changed']],
                                     'prompts': {d['name']: d['after'] for d in diff if d['changed']}})
         if better:
-            best_graph, best, evidence = candidate, result, traces
+            best_graph, best, evidence, best_all = candidate, result, traces, replayed
     # Internal frozen label data must not become persistent graph configuration.
     best_graph['id'] = graph['id']
     best_graph.pop('_workspace_id', None)
@@ -258,6 +325,18 @@ def _execute(state, graph, rows, params, stage):
     best_graph['evaluators'] = copy.deepcopy(state['execution_graph'].get('evaluators') or [])
     state['optimized'] = best
     state['optimized_graph'] = best_graph
+    # The held-out answer: decided nothing, so it is the estimate to trust.
+    if split['val_units']:
+        stage('scoring the held-out records')
+        before = score_saved(graph, part(baseline_all, True), name)
+        after = before if best_all is baseline_all else score_saved(graph, part(best_all, True), name)
+        b, a = before['metrics'].get('score'), after['metrics'].get('score')
+        improved = None if a is None or b is None else (a > b if direction == 'maximize' else a < b)
+        state['validation'] = {**split, 'metric': best['objective'].get('metric'), 'direction': direction,
+                               'baseline': before['metrics'], 'optimized': after['metrics'],
+                               'improved': improved, 'changed': best_all is not baseline_all}
+    else:
+        state['validation'] = {**split, 'note': 'Too few entities to hold any out: nothing was validated.'}
     state['validation_status'] = 'evaluated'
     state['diff'] = [{'name': t['name'], 'before': original_tasks[t['name']].get('prompt', ''), 'after': t.get('prompt', ''),
                       'changed': original_tasks[t['name']].get('prompt', '') != t.get('prompt', '')}

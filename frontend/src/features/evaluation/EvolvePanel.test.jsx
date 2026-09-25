@@ -335,3 +335,29 @@ describe('the panel is where evaluation is written', () => {
     expect(screen.getByRole('button', { name: 'Check code' })).toBeInTheDocument();
   });
 });
+
+describe('evolve holds out whole entities for validation', () => {
+  it('sends the held-out share, 30% unless changed', async () => {
+    const { container } = render(<NewTaskForm initialSource="canvas" initialMode="evolve_evaluate" graphId="g1" onStarted={vi.fn()} onError={vi.fn()} />);
+    const view = within(container);
+    const user = userEvent.setup();
+    expect(await view.findByLabelText('Held out for validation (%)')).toHaveValue(30);
+    await waitFor(() => expect(view.getByRole('button', { name: /start evolution/i })).toBeEnabled());
+    await user.click(view.getByRole('button', { name: /start evolution/i }));
+    await waitFor(() => expect(api.startEvolveResults).toHaveBeenCalledWith('g1', expect.objectContaining({ val_fraction: 0.3 })));
+  });
+
+  it('shows dev before/after and warns when the held-out score did not improve', () => {
+    const task = { task_id: 'h1', status: 'done', params: { mode: 'evolve_evaluate', n_dev: 20, source: { type: 'canvas' } },
+      baseline: { metrics: { score: 0 }, objective: { direction: 'maximize' } }, optimized: { metrics: { score: 1 } },
+      split: { unit: 'trajectory', dev_units: 7, val_units: 3, dev_records: 14, val_records: 6, seed: 0, val_fraction: 0.3 },
+      validation: { unit: 'trajectory', val_units: 3, val_records: 6, seed: 0, val_fraction: 0.3,
+        baseline: { score: 1 }, optimized: { score: 0 }, improved: false, changed: true },
+      diff: [], candidates: [] };
+    const { container } = render(<TaskDetail task={task} onApplied={vi.fn()} />);
+    expect(container.textContent).toMatch(/on dev: 7 trajectories \(14 records\)/);
+    const v = within(container).getByTestId('validation');
+    expect(v.textContent).toMatch(/on 3 trajectories \(6 records\)/);
+    expect(v.textContent).toMatch(/did not score better on the held-out data/);
+  });
+});

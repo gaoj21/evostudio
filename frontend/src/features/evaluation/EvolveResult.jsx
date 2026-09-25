@@ -48,6 +48,38 @@ function Candidates({ candidates, direction }) {
   );
 }
 
+const plural = (n, word) => `${n} ${n === 1 ? word : word.endsWith('y') ? `${word.slice(0, -1)}ies` : `${word}s`}`;
+
+// The held-out answer: whole entities the proposer never saw and that chose
+// nothing, scored once for the baseline and the chosen prompts.
+function Validation({ validation }) {
+  if (!validation) return null;
+  const unit = validation.unit === 'record' ? 'record' : validation.unit;
+  if (!validation.val_units) {
+    return <p className="muted small" data-testid="validation">{validation.note}</p>;
+  }
+  const before = validation.baseline?.score;
+  const after = validation.optimized?.score;
+  const delta = before != null && after != null ? after - before : null;
+  return <section className="evolve-validation" data-testid="validation">
+    <h4>Held-out validation</h4>
+    <div className="evolve-scores">
+      <div className="evolve-score"><div className="muted small">Before</div><div className="evolve-score-value">{fmt(before)}</div></div>
+      <div className="evolve-score-arrow">→</div>
+      <div className="evolve-score"><div className="muted small">After</div><div className="evolve-score-value">{fmt(after)}</div></div>
+      {delta != null && <span className={`evolve-delta ${delta > 0 ? 'up' : delta < 0 ? 'down' : ''}`}>{delta > 0 ? '+' : ''}{delta.toFixed(3)}</span>}
+      <span className="muted small">on {plural(validation.val_units, unit)} ({plural(validation.val_records, 'record')})</span>
+    </div>
+    <p className="muted small" role="status">
+      {!validation.changed ? 'No candidate was kept, so the held-out score is the baseline\'s.'
+        : validation.improved === true ? 'The chosen prompts also score better on data they were never proposed or chosen on.'
+          : validation.improved === false ? 'The chosen prompts did not score better on the held-out data: the gain may not generalize. Apply with care.'
+            : 'The held-out data has no usable score (no labels among it?).'}
+      {' '}Held out {Math.round((validation.val_fraction ?? 0.3) * 100)}% by a fixed split of whole entities (seed {validation.seed}); every candidate still replays everything.
+    </p>
+  </section>;
+}
+
 export function TaskDetail({ task, onApplied, onStopped }) {
   const [applying, setApplying] = useState(null);
   const [applyError, setApplyError] = useState(null);
@@ -136,8 +168,11 @@ export function TaskDetail({ task, onApplied, onStopped }) {
                 {delta > 0 ? '+' : ''}{delta.toFixed(3)}
               </span>
             )}
-            <span className="muted small">on the {p.n_dev} judging record{p.n_dev === 1 ? '' : 's'}</span>
+            <span className="muted small">{task.split
+              ? `on dev: ${plural(task.split.dev_units, task.split.unit === 'record' ? 'record' : task.split.unit)} (${plural(task.split.dev_records, 'record')}) — proposed and chosen on`
+              : `on the ${p.n_dev} judging record${p.n_dev === 1 ? '' : 's'}`}</span>
           </div>}
+          {!evaluationOnly && <Validation validation={task.validation} />}
           {!evaluationOnly && <>
           <div className="evolve-apply">
             <button type="button" className="primary" onClick={() => apply('replace')} disabled={applying != null || changed.length === 0}>
