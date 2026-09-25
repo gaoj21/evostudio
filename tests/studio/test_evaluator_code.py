@@ -123,7 +123,7 @@ def build_evaluator():
 
 
 class TestFailedRunsAreEvaluatedToo:
-    def test_a_run_that_fails_reaches_the_after_each_run_evaluator(self, tmp_path, monkeypatch):
+    def test_a_failed_run_can_be_evaluated_and_never_evaluates_itself(self, tmp_path, monkeypatch):
         from fastapi.testclient import TestClient
         from backend.api import app as studio_app, graphs as graph_store
         from backend.features.workflow import runner
@@ -153,9 +153,12 @@ class TestFailedRunsAreEvaluatedToo:
             if state["status"] not in ("running", "pending"):
                 break
             time.sleep(0.05)
-        # Present as soon as the status says failed: evaluated before publishing.
         assert state["status"] == "failed"
-        assert state["evaluations"]["check"]["metrics"]["completion_rate"] == 0.0
+        assert not state.get("evaluations")        # never on its own, whatever the saved timing
+        # A failure is a result the evaluation code has to be able to count.
+        report = c.post(f"/api/graphs/{gid}/evaluators/run", json={"run_id": rid})
+        assert report.status_code == 200, report.text
+        assert report.json()["evaluations"]["check"]["metrics"]["completion_rate"] == 0.0
 
 
 class TestEvaluatingASavedBatch:

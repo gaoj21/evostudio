@@ -437,18 +437,7 @@ def _run_task(task_id: str, graph_doc: dict, metric: str, params: dict, task_dir
             else:
                 state["baseline"] = saved.evaluate(records, metric, params["source"])
             check_stop(state)
-            if params.get("mode") != "evaluate":
-                from backend.api import runner
-                _stage(state, "proposing prompts")
-                llm = runner._make_llm(usage_key=token_usage.usage_key(state))
-                # Scores reach the proposer; expected answers only if the user said so.
-                hidden = [params.get("label_key")]
-                updated, diff, used = saved.propose(graph_doc, records, params["nodes"], llm, feedback=state["baseline"],
-                                                    share_labels=bool(params.get("share_labels")), hidden_inputs=hidden)
-                # The proposal call was already sent when Stop arrived; it
-                # cannot be recalled, but what it answered is not applied.
-                check_stop(state)
-                state.update(optimized_graph=updated, diff=diff, validation_status="not_run", evidence_records=used)
+            # Saved results are only evaluated: Evolve replays the canvas Input.
             _finish(state)
             return
         from backend.api import runner as runner_mod
@@ -825,8 +814,10 @@ async def start_evolve_task(graph_id: str, request: Request):
                 elif not any(m["name"] == metric for m in available_metrics()):
                     raise sources.SourceError("Choose an available metric.")
                 mode = body.get("mode", "evaluate")
-                if mode not in ("evaluate", "evolve_evaluate"):
-                    raise sources.SourceError("Choose evaluation or evolution with evaluation.")
+                if mode != "evaluate":
+                    # Proposals from saved traces are never validated: Evolve
+                    # replays the canvas Input, with a held-out part.
+                    raise sources.SourceError("Saved results can only be evaluated. Evolve from the canvas Input: it replays the workflow and validates on held-out data.")
                 available = [t["name"] for t in ordered if t.get("kind") not in ("source", "tool")]
                 chosen = [] if mode == "evaluate" else body.get("nodes", available)
                 if not isinstance(chosen, list) or any(n not in available for n in chosen):

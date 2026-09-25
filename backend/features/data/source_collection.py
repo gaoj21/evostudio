@@ -143,7 +143,7 @@ def execute_collection(job, graph, node, control, workers, metric, label_key):
                   'mode': job['mode'], 'chunk': len(job['batches']) + 1, 'config': job['config']}
         with _lock:
             control.check()
-            id = batch.start_batch({**run_graph, '_defer_evaluators': True}, mapped, source, workers=workers, metric=metric, labels=labels, mode='node')
+            id = batch.start_batch(run_graph, mapped, source, workers=workers, metric=metric, labels=labels, mode='node')
             job['batches'].append({'id': id, 'total': len(mapped)})
             job['submitted_records'] += len(records)
             save(job)
@@ -261,19 +261,6 @@ def execute_collection(job, graph, node, control, workers, metric, label_key):
             else:
                 job['status'] = 'completed' if streaming or prepared else 'ready'
             save(job)
-        # Over whatever actually ran: a collection that was stopped part way
-        # still produced batches, and their evaluator reports are what says
-        # how that part went (a cancelled batch reports the same way).
-        if (streaming or prepared) and job.get('batches'):
-            from backend.api import runner
-            from backend.features.evaluation.evaluator_tools import evaluate_runs
-            runs = [(runner.get_run(item['run_id']) if item.get('run_id') else None) or {**item, 'nodes': []}
-                    for entry in job.get('batches', [])
-                    for item in (batch.get_batch(entry['id']) or {}).get('items', [])]
-            try:
-                job['evaluations'] = evaluate_runs(graph, [run for run in runs if run], timing={'batch'})
-            except Exception as exc:
-                job['evaluation_error'] = str(exc)
         with _lock:
             save(job)
             _controls.pop(job['id'], None)

@@ -361,3 +361,15 @@ describe('evolve holds out whole entities for validation', () => {
     expect(v.textContent).toMatch(/did not score better on the held-out data/);
   });
 });
+
+it('evolves only from the canvas Input; saved results are evaluated', async () => {
+  const { container } = render(<NewTaskForm graphId="g1" onStarted={vi.fn()} onError={vi.fn()} />);
+  const view = within(container);
+  const user = userEvent.setup();
+  expect(view.getByLabelText('Source')).toHaveValue('saved_batch');
+  await user.click(view.getByLabelText('Evolve + Evaluation'));
+  expect(view.getByLabelText('Source')).toHaveValue('canvas');
+  expect(view.getByLabelText('Source')).toBeDisabled();
+  expect([...view.getByLabelText('Source').querySelectorAll('option')].map((o) => o.value)).toEqual(['canvas']);
+  expect(container.textContent).toMatch(/saved results can only be evaluated/);
+});

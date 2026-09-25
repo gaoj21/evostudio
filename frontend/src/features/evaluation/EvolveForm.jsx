@@ -90,7 +90,8 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
         <div className="evolve-presets">
           {[['evaluate', 'Evaluation only'], ['evolve_evaluate', 'Evolve + Evaluation']].map(([value, label]) => (
             <label key={value} className={`evolve-preset ${mode === value ? 'selected' : ''}`}>
-              <input type="radio" name="run-mode" value={value} checked={mode === value} onChange={() => setMode(value)} />{label}
+              <input type="radio" name="run-mode" value={value} checked={mode === value}
+                onChange={() => { setMode(value); if (value !== 'evaluate') setSource('canvas'); }} />{label}
             </label>
           ))}
         </div>
@@ -104,11 +105,12 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
         <div className="evolve-grid">
           <div className="field">
             <label htmlFor="evolve-source">Source</label>
-            <select id="evolve-source" value={source} onChange={(e) => setSource(e.target.value)}>
-              <option value="canvas">Canvas Input + saved evaluator — run workflow</option>
-              <option value="saved_batch">Saved batch results — no workflow rerun</option>
-              <option value="saved_run">Saved run result — no workflow rerun</option>
+            <select id="evolve-source" value={source} onChange={(e) => setSource(e.target.value)} disabled={!evaluationOnly}>
+              <option value="canvas">Canvas Input — run the workflow</option>
+              {evaluationOnly && <option value="saved_batch">Saved batch results — no workflow rerun</option>}
+              {evaluationOnly && <option value="saved_run">Saved run result — no workflow rerun</option>}
             </select>
+            {!evaluationOnly && <small className="muted">Evolve replays the workflow on the canvas Input and holds out part of it to validate; saved results can only be evaluated.</small>}
           </div>
           {savedSource ? <>
             <div className="field"><label htmlFor="evolve-saved">Saved result</label>

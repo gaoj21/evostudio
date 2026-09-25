@@ -278,55 +278,6 @@ class TestARunInsideATool:
                 _kill(pid)
 
 
-class TestAnEvaluatorTheRunStarted:
-    """An evaluator is the run's own work: Python in a worker process, started
-    by the node that just finished. A stop has to take it too, rather than
-    leave the run 'running' for the evaluator's whole time limit."""
-
-    def graph(self):
-        return {"id": "evaluator-stop", "name": "Evaluator", "goal": "stop an evaluator",
-                "flow_version": 3, "output_dir": "runs",
-                "tasks": [{"name": "work", "kind": "tool", "tool": "echo",
-                           "inputs": [{"name": "text", "type": "str", "required": True}],
-                           "outputs": [{"name": "answer", "type": "str", "required": True}]}],
-                "edges": [],
-                "evaluators": [{"name": "quality", "timing": "run", "metric": "score",
-                                "code": None, "config": {}}]}
-
-    def test_its_worker_dies_and_the_run_settles(self, runs, monkeypatch, tmp_path):
-        from backend.api import tools_registry
-        pid_file = tmp_path / "evaluator.pid"
-        monkeypatch.setattr(tools_registry, "find_tool", lambda name: ("custom", None))
-        monkeypatch.setattr(tools_registry, "validate_tool_names", lambda names: None)
-        monkeypatch.setattr(tools_registry, "call_tool",
-                            lambda name, args, **kw: {"answer": args["text"]})
-        graph = self.graph()
-        graph["evaluators"][0]["code"] = (
-            "import os, time\n"
-            "\n"
-            "\n"
-            "def evaluate(records):\n"
-            f"    open({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
-            "    time.sleep(300)\n"
-            "    return {'metrics': {'score': 1}}\n")
-
-        run_id = runs.start_run(graph, {"text": "x"}, run_id="evaluator-run")
-        pid = None
-        try:
-            assert _wait_until(lambda: pid_file.is_file(), 60), "the evaluator never ran"
-            pid = int(pid_file.read_text())
-            started = time.time()
-            runs.cancel_run(run_id)
-            assert _wait_until(lambda: not _alive(pid), 10), \
-                "the evaluator's worker outlived the stop"
-            assert _wait_until(
-                lambda: (runs.get_run(run_id) or {}).get("status") == "cancelled", 10)
-            assert time.time() - started < 8
-        finally:
-            if pid is not None:
-                _kill(pid)
-
-
 class TestTheRetryPause:
     """`RETRY_PAUSE_SECONDS` is a minute, and it was a plain `time.sleep`.
 
@@ -378,95 +329,6 @@ class TestTheRetryPause:
         monkeypatch.setattr(batch_store.time, "sleep", lambda s: slept.append(s))
         batch_store._pause(7.5, "no-such-batch")
         assert slept == [7.5]
-
-
-class TestABatchThatIsStillEvaluating:
-    """A batch's own evaluators run when its records are done — including
-    when they are done because the user stopped them.
-
-    Scoring what did run is worth having. Waiting for it before admitting the
-    batch has stopped is not: the evaluator has two minutes of its own, and
-    the Stop button says "Stopping…" for all of them.
-    """
-
-    @pytest.fixture
-    def graph_with_slow_evaluator(self, tmp_path):
-        code = ("import time\n"
-                "\n"
-                "\n"
-                "def evaluate(records):\n"
-                f"    open({str(tmp_path / 'evaluating')!r}, 'w').write('yes')\n"
-                "    time.sleep(6)\n"
-                "    return {'metrics': {'score': len(records)}}\n")
-        return {"id": "g", "tasks": [], "evaluators": [
-            {"name": "check", "enabled": True, "timing": "batch", "metric": "score",
-             "code": code, "config": {}}]}
-
-    def test_the_batch_says_it_stopped_without_waiting_for_the_report(
-            self, batch_store, graph_with_slow_evaluator, monkeypatch):
-        from backend.api import runner
-        running = threading.Event()
-
-        def fake_start_run(graph, inputs, background=True, run_id=None, **_kw):
-            running.set()
-            runner._runs[run_id] = {"run_id": run_id, "status": "success", "result": inputs,
-                                    "nodes": [], "error": None, "review_status": None}
-            return run_id
-
-        monkeypatch.setattr(batch_store.runner, "start_run", fake_start_run)
-        monkeypatch.setattr(batch_store.runner, "get_run", lambda rid: runner._runs.get(rid))
-        batch_id = batch_store.start_batch(graph_with_slow_evaluator,
-                                           [{"n": i} for i in range(2)],
-                                           {"type": "manual"}, workers=1)
-        assert running.wait(10)
-        started = time.time()
-        batch_store.cancel_batch(batch_id)
-        assert _wait_until(
-            lambda: batch_store.get_batch(batch_id)["status"] == "cancelled", 5), \
-            "the batch read 'cancelling' until its evaluator was finished"
-        assert time.time() - started < 5
-
-        # And the report over what did run still arrives, on the same batch.
-        assert batch_store.wait_for(batch_id, timeout=30)
-        settled = batch_store.get_batch(batch_id)
-        assert settled["status"] == "cancelled"
-        assert settled["evaluations"]["check"]["status"] == "success"
-
-    def test_no_record_is_run_for_the_evaluators(
-            self, batch_store, graph_with_slow_evaluator, monkeypatch):
-        """Evaluating is reading what happened; it never starts a workflow."""
-        from backend.api import runner
-        runs_started = []
-        running = threading.Event()
-
-        release = threading.Event()
-
-        def fake_start_run(graph, inputs, background=True, run_id=None, **_kw):
-            runs_started.append(inputs)
-            running.set()
-            # Hold the first record until the stop has been asked for: with
-            # instant runs the batch could otherwise finish all six first,
-            # and the test would be measuring nothing.
-            release.wait(10)
-            runner._runs[run_id] = {"run_id": run_id, "status": "success", "result": inputs,
-                                    "nodes": [], "error": None, "review_status": None}
-            return run_id
-
-        monkeypatch.setattr(batch_store.runner, "start_run", fake_start_run)
-        monkeypatch.setattr(batch_store.runner, "get_run", lambda rid: runner._runs.get(rid))
-        batch_id = batch_store.start_batch(graph_with_slow_evaluator,
-                                           [{"n": i} for i in range(6)],
-                                           {"type": "manual"}, workers=1)
-        assert running.wait(10)
-        batch_store.cancel_batch(batch_id)
-        release.set()
-        assert batch_store.wait_for(batch_id, timeout=30)
-        after_stop = len(runs_started)
-        time.sleep(1)
-
-        # The evaluator ran over what did run, and started nothing itself.
-        assert batch_store.get_batch(batch_id)["evaluations"]["check"]["status"] == "success"
-        assert len(runs_started) == after_stop < 6
 
 
 class TestABatchInsideSomethingUninterruptible:
@@ -1078,9 +940,8 @@ class TestASourceCollection:
         assert job["status"] == "cancelled"
 
     def test_a_stopped_collection_still_reaches_a_final_status(self, collection, monkeypatch):
-        """Its last act is to evaluate what ran — in a worker process, under
-        the same stop that just ended the collection. That worker refusing to
-        start must not leave the job reading `collecting` for ever."""
+        """A stopped collection settles as cancelled and forgets its job; it
+        never evaluates what ran — that is asked for, on its batches."""
         from backend.api import chat_control
         first_running = threading.Event()
 
@@ -1123,8 +984,7 @@ class TestASourceCollection:
         assert not worker.is_alive()
 
         assert job["status"] == "cancelled"
-        # The report over what did run is still worth having.
-        assert job["evaluations"]["check"]["status"] == "success"
+        assert not job.get("evaluations")
         assert collection._jobs.get("c3") is None
 
 

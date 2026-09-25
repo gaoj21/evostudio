@@ -769,10 +769,8 @@ def _execute_run(run_id: str, graph_doc: dict, inputs: dict) -> None:
         finally:
             state.pop("_cancel", None)
             loop.close()
-        from backend.features.evaluation.evaluator_tools import evaluate_runs
-        if state.get('_cancel_requested'):
-            raise asyncio.CancelledError()
-        state.setdefault('evaluations', {}).update(evaluate_runs(graph_doc, [{**_public(state), 'status': 'success', 'result': result}], timing={'run'}))
+        # A run does not evaluate itself: evaluation is asked for, in
+        # Evaluate & Evolve or on a result, over saved runs.
         if state.get('_cancel_requested'):
             raise asyncio.CancelledError()
         _set_status(state, "success", result=result)
@@ -807,16 +805,6 @@ def _execute_run(run_id: str, graph_doc: dict, inputs: dict) -> None:
             for n in state.get("nodes") or []:
                 if n.get("status") == "running":
                     n["status"] = "failed"
-            # Evaluators that run after each run see failed runs too: a failure is
-            # a result the user's evaluation code has to be able to count. Done
-            # before the status is published, as on success, so a client that
-            # stops polling at "failed" already finds the report.
-            try:
-                from backend.features.evaluation.evaluator_tools import evaluate_runs
-                state.setdefault('evaluations', {}).update(evaluate_runs(
-                    graph_doc, [{**_public(state), 'status': 'failed', 'error': failure['error']}], timing={'run'}))
-            except Exception:
-                state.setdefault('evaluations_error', traceback.format_exc())
             _set_status(state, "failed", **failure)
             if graph is not None:
                 # A node set to remember failed runs too: what did complete has

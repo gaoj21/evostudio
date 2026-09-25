@@ -360,6 +360,5 @@ class TestTheDraft:
 def test_the_catalog_says_what_an_evaluator_is(client):
     body = client.get('/api/evaluators').json()
     assert [e['name'] for e in body['entrypoints']] == ['build_evaluator', 'evaluate']
-    assert [t['id'] for t in body['timings']] == list(tools.TIMINGS)
-    assert body['defaults']['timing'] == tools.DEFAULT_TIMING
+    assert 'timings' not in body and 'timing' not in body['defaults']   # evaluation only runs when asked
     assert tools.described(body['example_code'])['error'] is None

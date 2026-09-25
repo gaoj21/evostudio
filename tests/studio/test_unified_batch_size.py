@@ -46,23 +46,14 @@ def test_failed_group_remains_blocked_across_chunk_boundaries(monkeypatch):
     assert state['llm_batch_size'] is None
 
 
-def test_batch_does_not_publish_completion_before_evaluator_report(monkeypatch):
-    import threading
+def test_a_finished_batch_never_evaluates_itself(monkeypatch):
     from backend.features.evaluation import evaluator_tools
     setup(monkeypatch)
-    started, release = threading.Event(), threading.Event()
-    def evaluate(*args, **kwargs):
-        started.set()
-        assert release.wait(5)
-        return {'quality':{'status':'success','metrics':{'score':1}}}
-    monkeypatch.setattr(evaluator_tools,'evaluate_runs',evaluate)
-    id=batch.start_batch({'id':'unified','tasks':[],'edges':[]},[{'value':1}],{})
-    try:
-        assert started.wait(5)
-        assert batch.get_batch(id)['status']=='running'
-    finally:
-        release.set()
-    assert batch.wait_for(id,5)
-    finished=batch.get_batch(id)
-    assert finished['status']=='succeeded'
-    assert finished['evaluations']['quality']['metrics']['score']==1
+    called = []
+    monkeypatch.setattr(evaluator_tools, 'evaluate_runs', lambda *a, **kw: called.append(a) or {})
+    id = batch.start_batch({'id': 'unified', 'tasks': [], 'edges': [],
+                            'evaluators': [{'name': 'quality', 'timing': 'batch', 'code': 'x'}]}, [{'value': 1}], {})
+    assert batch.wait_for(id, 5)
+    finished = batch.get_batch(id)
+    assert finished['status'] == 'succeeded'
+    assert called == [] and not finished.get('evaluations')

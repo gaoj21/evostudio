@@ -372,31 +372,15 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
 
 
 def _finish_batch(state, graph):
-    if state.get("cancel_requested"):
-        # A stopped batch has stopped, whatever its own evaluators still have
-        # to say about what ran. They get their own two minutes and a worker
-        # process; waiting for them left the batch reading `cancelling` — the
-        # Stop button disabled and saying "Stopping…" — for all of it. The
-        # report below is added to the same batch when it arrives.
-        with _lock:
-            state["status"] = _outcome(state)
-            _persist_batch(state)
     if state.get("metric"):
         from backend.api import evaluation
         with _lock:
             # Scored over what actually ran. A cancelled batch still reports a
             # mean, and `scored`/`total` show how much of the set it covers.
             state["summary"] = evaluation.summarise(state["items"])
-    from backend.features.evaluation.evaluator_tools import evaluate_runs, has_timing
-    has_evaluator = has_timing(graph, 'batch')
-    runs = [(runner.get_run(item.get('run_id')) if item.get('run_id') else None)
-            or {**item, 'nodes': []}
-            for item in state['items']] if has_evaluator else []
-    reports = {} if graph.get('_defer_evaluators') else evaluate_runs(graph, runs, timing={'batch'})
-    # Publish completion only once its report exists, so polling clients cannot
-    # stop on a terminal status before evaluation has finished.
+    # A batch does not evaluate itself: its Evaluation tab, or Evaluate &
+    # Evolve, runs the workflow's evaluation code on it when asked.
     with _lock:
-        state['evaluations'] = reports
         state['status'] = _outcome(state)
         _persist_batch(state)
 

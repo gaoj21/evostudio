@@ -115,10 +115,9 @@ def test_evaluator_preserves_prediction_reads_full_intermediate_and_replays_with
     result = runner.get_run(run_id)
     assert result['status'] == 'success', result.get('error')
     assert result['result'] == {'answer':content}
-    # 'run' scores it as the run settles; 'manual' waits to be asked.
-    assert bool(result.get('evaluations')) == (timing == 'run')
-    if timing == 'run':
-        assert result['evaluations']['quality']['metrics']['accuracy'] == 1
+    # Whatever timing an older evaluator was saved with, a run never
+    # evaluates itself: evaluation is asked for, over saved runs.
+    assert not result.get('evaluations')
     assert result['node_outputs']['work']['answer'] == content
     assert evaluator_tools.evaluate_runs(graph,[result],['quality'])['quality']['metrics']['accuracy'] == 1
     assert result['execution_snapshot']['graph'] == graph
@@ -314,7 +313,6 @@ def test_single_run_loader_retains_actual_inputs_for_saved_evaluation(client,mon
     result=runner.get_run(id)
     assert result['status']=='success',result.get('error')
     assert result['inputs']['expected']=='yes'
-    assert result['evaluations']['quality']['metrics']['accuracy']==1
     assert result['nodes'][-1]['status']=='completed'
     assert evaluator_tools.evaluate_runs(graph,[result])['quality']['metrics']['accuracy']==1
 
@@ -350,12 +348,14 @@ def test_api_dataloader_batch_and_canvas_evaluator_end_to_end(client,monkeypatch
     assert batch.wait_for(batch_id,timeout=10)
     result=batch.get_batch(batch_id)
     assert result['status']=='succeeded',result
-    evaluation=result['evaluations']['quality']
-    assert evaluation['coverage']=={'unit':'records','total':3,'scored':2,'unscored':1}
-    assert evaluation['metrics']['accuracy']==0.5
+    assert not result.get('evaluations')          # a batch never evaluates itself
     report=client.post('/api/graphs/'+graph['id']+'/evaluators/run',json={'batch_id':batch_id})
     assert report.status_code==200,report.text
-    assert report.json()['evaluations']['quality']['metrics']['accuracy']==0.5
+    evaluation=report.json()['evaluations']['quality']
+    assert evaluation['coverage']=={'unit':'records','total':3,'scored':2,'unscored':1}
+    assert evaluation['metrics']['accuracy']==0.5
+    # Kept with the batch, where its Evaluation tab reads it.
+    assert batch.get_batch(batch_id)['evaluations']['quality']['metrics']['accuracy']==0.5
 
 
 FINAL_RESULT = '''def evaluate(records):
@@ -373,7 +373,8 @@ def test_evaluation_code_receives_the_final_result_without_private_runtime(monke
     graph['evaluators'][0]['metric'] = 'score'
     run_id = runner.start_run(graph, {'text':'hello'}, background=False)
     run = runner.get_run(run_id)
-    assert run['evaluations']['quality']['status'] == 'success', run['evaluations']['quality'].get('error')
+    report = evaluator_tools.evaluate_runs(graph, [run], ['quality'])['quality']
+    assert report['status'] == 'success', report.get('error')
     scored = canvas_evolution.score_saved(graph, [run], 'quality')
     assert scored['metrics'] == {'score':1}
     assert scored['records'] == {}

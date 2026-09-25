@@ -80,7 +80,7 @@ decorated entrypoints is rejected.
 
 ### Routes (all under `/api`)
 
-- `GET /api/evaluators` — what an evaluator is: entrypoints, timings,
+- `GET /api/evaluators` — what an evaluator is: entrypoints,
   defaults, example code.
 - `POST /api/evaluators/interface` — `{code}` → `{kind: "factory"|"function",
   params: [{name, type, required, default, description}], provided, warnings,

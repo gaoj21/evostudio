@@ -23,27 +23,6 @@ def test_missing_labels_are_unscored():
     assert saved.evaluate([r], 'exact_match', {})['metrics'] == {'score': None, 'scored': 0, 'total': 1, 'unscored': 1}
 
 
-def test_saved_engine_proposes_without_runner_or_optimizer(tmp_path, monkeypatch):
-    records = [{'id': '0', 'run_id': 'r', 'status': 'success', 'inputs': {}, 'label': 'yes', 'prediction': 'no', 'nodes': []}]
-    (tmp_path / 'dataset.jsonl').write_text(json.dumps(records[0]) + '\n')
-    state = {'task_id': 'saved', 'created_at': evolve_api._utcnow()}
-    monkeypatch.setitem(evolve_api._tasks, 'saved', state)
-    monkeypatch.setattr(evolve_api, '_task_dir', lambda _: tmp_path)
-    start = Mock(side_effect=AssertionError('must not replay'))
-    monkeypatch.setattr(runner, 'start_run', start)
-    llm = SimpleNamespace(generate=Mock(return_value=SimpleNamespace(content='{"prompts":{"a":"Improved prompt"}}')))
-    monkeypatch.setattr(runner, '_make_llm', lambda **kw: llm)
-    graph = {'id': 'g', 'tasks': [{'name': 'a', 'prompt': 'Original'}]}
-    evolve_api._execute_evolve('saved', graph, 'exact_match', {'mode': 'evolve_evaluate', 'source': {'type': 'saved_run'}, 'nodes': ['a']}, tmp_path)
-    assert state['status'] == 'done', state.get('error')
-    assert state['baseline']['metrics']['score'] == 0
-    assert state['validation_status'] == 'not_run'
-    assert not state.get('optimized')
-    assert graph['tasks'][0]['prompt'] == 'Original'
-    llm.generate.assert_called_once()
-    start.assert_not_called()
-
-
 def test_saved_route_does_not_load_dataset_or_start_workflow(monkeypatch):
     from fastapi.testclient import TestClient
     from backend.api import app, graphs
@@ -54,7 +33,7 @@ def test_saved_route_does_not_load_dataset_or_start_workflow(monkeypatch):
     monkeypatch.setattr(sources, 'records_from_source_node', Mock(side_effect=AssertionError('No dataset replay')))
     launch = Mock(return_value='task')
     monkeypatch.setattr(evolve_api, 'start_evolve', launch)
-    response = TestClient(app.app).post('/api/graphs/g/evolve', json={'source': 'saved_run', 'run_id': 'r', 'mode': 'evolve_evaluate', 'metric': 'exact_match', 'nodes': ['a']})
+    response = TestClient(app.app).post('/api/graphs/g/evolve', json={'source': 'saved_run', 'run_id': 'r', 'mode': 'evaluate', 'metric': 'exact_match'})
     assert response.status_code == 200, response.text
     assert launch.call_args.args[1] == records
     assert launch.call_args.args[3]['source']['run_id'] == 'r'
@@ -91,3 +70,17 @@ def test_saved_results_take_no_dataset_or_split(monkeypatch):
         assert 'matched_cases' not in selection and 'split' not in selection
         assert selection['origin'] == {'type':'test_ledger'}
     assert len(original['items']) == 3
+
+
+def test_saved_results_can_only_be_evaluated(monkeypatch):
+    """Prompts proposed from saved traces were never validated: Evolve
+    replays the canvas Input and holds out part of it instead."""
+    from fastapi.testclient import TestClient
+    from backend.api import app, graphs
+    monkeypatch.setattr(graphs, 'load_graph', lambda _: {'id': 'g', 'tasks': [{'name': 'a'}]})
+    monkeypatch.setattr(saved, 'resolve', lambda *a: ([{'id': '0'}], {'type': 'saved_run', 'run_id': 'r'}))
+    launch = Mock(return_value='task')
+    monkeypatch.setattr(evolve_api, 'start_evolve', launch)
+    response = TestClient(app.app).post('/api/graphs/g/evolve', json={'source': 'saved_run', 'run_id': 'r', 'mode': 'evolve_evaluate', 'nodes': ['a']})
+    assert response.status_code == 422 and 'canvas Input' in response.text
+    launch.assert_not_called()

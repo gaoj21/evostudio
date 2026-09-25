@@ -42,40 +42,6 @@ GRAPH = {"id": "g-stop", "tasks": [{"name": "a", "prompt": "Answer {q}", "kind":
 ROWS = [{"q": "one"}, {"q": "two"}]
 
 
-class TestStoppingASavedResultProposal:
-    """The model call that proposes new prompts is already sent and cannot be
-    recalled, but what it returns must not be applied."""
-
-    def test_a_proposal_in_flight_ends_the_task_stopped(self, evolve, monkeypatch):
-        from backend.api import runner
-        from backend.api import saved_result_evolution as saved
-        proposing, go = threading.Event(), threading.Event()
-
-        def propose(graph, records, chosen, llm, **kw):
-            proposing.set()
-            waited(go)                      # the user presses Stop in here
-            return ({**graph, "tasks": [{"name": "a", "prompt": "better"}]},
-                    [{"name": "a", "before": "Answer {q}", "after": "better", "changed": True}], 2)
-
-        monkeypatch.setattr(runner, "_make_llm", lambda *a, **kw: object())
-        monkeypatch.setattr(saved, "evaluate", lambda *a, **kw: {"metrics": {"score": 0.5}, "records": {}})
-        monkeypatch.setattr(saved, "propose", propose)
-
-        params = {"mode": "evolve_evaluate", "nodes": ["a"], "n_dev": 2, "n_train": 0,
-                  "source": {"type": "saved_run", "run_id": "r1"}}
-        task_id = evolve.start_evolve(GRAPH, ROWS, "exact_match", params)
-        waited(proposing)
-        evolve.stop_evolve_task(task_id)
-        go.set()
-
-        task = settle(task_id)
-        assert task["status"] == "stopped", "a stopped task reported itself finished"
-        assert not task.get("optimized_graph"), "prompts proposed after Stop were applied"
-        assert task["error"] is None
-        persisted = json.loads((evolve._task_dir(task_id) / "result.json").read_text())
-        assert persisted["status"] == "stopped"
-
-
 class TestStoppingACanvasCandidateRound:
     def test_the_candidate_proposed_after_stop_is_not_kept(self, evolve, monkeypatch):
         from backend.api import runner

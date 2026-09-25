@@ -491,16 +491,14 @@ def saved_runs(graph_id, body):
 @router.get('/evaluators')
 def catalog():
     """What an evaluator is, for a panel that has none yet: the entrypoints
-    the code may define, the timings, the defaults and an example."""
+    the code may define, the defaults and an example. Evaluation only
+    runs when asked: a run or a batch never evaluates itself."""
     return {'entrypoints': [
                 {'kind': 'factory', 'name': 'build_evaluator',
                  'description': 'build_evaluator(**typed parameters) returns an object with evaluate(records).'},
                 {'kind': 'function', 'name': 'evaluate',
                  'description': 'evaluate(records, **typed parameters) returns the report directly.'}],
-            'timings': [{'id': 'manual', 'label': 'Only when I ask'},
-                        {'id': 'run', 'label': 'After each run'},
-                        {'id': 'batch', 'label': 'After the batch'}],
-            'defaults': {'timing': DEFAULT_TIMING, 'timeout': DEFAULT_TIMEOUT, 'direction': 'maximize'},
+            'defaults': {'timeout': DEFAULT_TIMEOUT, 'direction': 'maximize'},
             'example_code': EXAMPLE_CODE}
 
 

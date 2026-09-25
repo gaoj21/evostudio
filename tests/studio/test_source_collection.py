@@ -222,8 +222,9 @@ def test_failed_stream_batch_blocks_later_batches(client, monkeypatch):
     assert len(chunks)==1
 
 
-def test_a_stopped_collection_still_reports_its_batch_evaluators(client, monkeypatch):
-    """Stopping part way does not throw away the report for what did run."""
+def test_a_stopped_collection_settles_and_evaluates_nothing(client, monkeypatch):
+    """A collection never evaluates itself, stopped or not: its batches are
+    evaluated when asked, in their Evaluation tab or Evaluate & Evolve."""
     import threading
     from backend.api import source_collection as sc
     started = threading.Event()
@@ -236,9 +237,9 @@ def test_a_stopped_collection_still_reports_its_batch_evaluators(client, monkeyp
             sc.chat_control.check()
             time.sleep(.01)
 
-    def fake_evaluate_runs(graph, runs, timing=None):
+    def fake_evaluate_runs(graph, runs, *a, **kw):
         seen['runs'] = len(runs)
-        return {'report': {'status': 'success', 'metrics': {'score': 1.0}}}
+        return {}
 
     monkeypatch.setattr(sc.chat_control, 'worker', worker)
     monkeypatch.setattr(sc.batch, 'start_batch', lambda *a, **kw: started.set() or 'active-batch')
@@ -254,5 +255,4 @@ def test_a_stopped_collection_still_reports_its_batch_evaluators(client, monkeyp
     job = settle(client, id)
 
     assert job['status'] == 'cancelled'
-    assert seen['runs'] == 1                     # the one batch that ran
-    assert job['evaluations']['report']['status'] == 'success'
+    assert 'runs' not in seen and not job.get('evaluations')
