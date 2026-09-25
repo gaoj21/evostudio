@@ -47,7 +47,7 @@ The public API, all importable from the top-level `llm`: `chat`, `chat_result`,
 `LLM_PROVIDER` (Studio also honours `EAX_PROVIDER`, which wins). **Add one:**
 an entry in `llm/providers.json` plus, for a new transport, a module in
 `llm/adapters/` offering `complete` (optionally `acomplete`, `native_batch`).
-Smoke test with `.venv/bin/python llm/examples_terminal.py`. See
+Smoke test with `python llm/examples_terminal.py` in the project's environment (`./start.sh` picks it: EVO_VENV, else the `evo` conda env, else `.venv`). See
 [llm-contract.md](llm-contract.md). 该包不在仓库内，每台机器自备实现。
 
 ### backend/features/model_bridge.py — `llm` as a framework model

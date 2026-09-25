@@ -47,7 +47,7 @@ Studio 是通用平台。只对某个任务有意义的代码（领域数据集 
 
 ## 更换 LLM API：最重要的一组文件
 
-模型调用只有一个边界：仓库根目录的独立包 `llm/`。该包不随仓库分发（`.gitignore` 排除 `/llm/`）：本机是 DeepSeek 实现，另一台是 SafeChain 实现，两边只需接口一致，`backend`、`frontend` 和数据可以直接互换。契约见 [docs/llm-contract.md](docs/llm-contract.md)；包自带的测试放在包内 `llm/tests/`，用 `.venv/bin/python -m pytest llm/tests` 跑。
+模型调用只有一个边界：仓库根目录的独立包 `llm/`。该包不随仓库分发（`.gitignore` 排除 `/llm/`）：本机是 DeepSeek 实现，另一台是 SafeChain 实现，两边只需接口一致，`backend`、`frontend` 和数据可以直接互换。契约见 [docs/llm-contract.md](docs/llm-contract.md)；包自带的测试放在包内 `llm/tests/`，用 `$PY -m pytest llm/tests` 跑（$PY 见「验证与启动」）。
 **`backend/` 和 `frontend/` 里不允许出现供应商名字、供应商 SDK 的 import，或读取供应商返回结构的代码。**
 旧的 `backend/llm/`（`get_evoagentx_llm` / `get_agent_model` / `llm.registry` / `llm.adapters`）已删除。
 
@@ -72,7 +72,7 @@ Studio 是通用平台。只对某个任务有意义的代码（领域数据集 
 
 ```sh
 set -a; . ./.env; set +a
-.venv/bin/python llm/examples_terminal.py
+$PY llm/examples_terminal.py
 ```
 
 测试从不真的请求供应商：`tests/llm/` 把 transport 打桩。
@@ -108,10 +108,17 @@ python3 scripts/maintenance/context_bundle.py evaluation --part frontend --outpu
 
 ## 验证与启动
 
+Python 环境按以下顺序选择，`./start.sh` 和下面的命令保持一致：
+`EVO_VENV`（显式指定）> conda 环境 `evo`（名字可用 `EVO_CONDA_ENV` 改）> 仓库内 `.venv`。
+本机没有 `evo` 环境时用 `.venv`；另一台机器有 `evo` 就自动用它，脚本不用改。
+下面的 `$PY` 代表所选环境的 python（例如 `.venv/bin/python` 或
+`~/anaconda3/envs/evo/bin/python`）。
+
 从仓库根目录运行：
 
 ```sh
-.venv/bin/python -m pytest tests/api tests/studio tests/src/test_llm_factory.py tests/src/test_llm_adapters.py -q
+$PY -m pytest tests/api tests/studio tests/src tests/dataset tests/llm -q
+$PY -m pytest llm/tests -q      # 该机器自备的 llm 包自身的测试
 npm --prefix frontend test -- --run
 npm --prefix frontend run build
 ```
@@ -120,7 +127,8 @@ npm --prefix frontend run build
 更改纯前端代码后构建并刷新；后端服务入口仍为：
 
 ```sh
-.venv/bin/python -m uvicorn backend.api.app:app --host 0.0.0.0 --port 8000
+./start.sh                       # 选环境、装依赖、构建前端、起服务
+$PY -m uvicorn backend.api.app:app --host 0.0.0.0 --port 8000   # 只起后端
 ```
 
 重启前确认没有正在运行的 Batch、Evolve 或聊天。不要为了更新代码误停运行中的任务。

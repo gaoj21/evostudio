@@ -7,7 +7,35 @@ cd "$ROOT"
 
 HOST="${EVO_HOST:-127.0.0.1}"
 PORT="${EVO_PORT:-8000}"
-VENV="${EVO_VENV:-$ROOT/.venv}"
+CONDA_ENV_NAME="${EVO_CONDA_ENV:-evo}"
+
+# Which Python environment to run in, in order: whatever EVO_VENV names, the
+# conda environment this project uses (`evo` by default), then the
+# repository's own .venv — created on first launch if none of the above
+# exists. One script for every machine: naming an environment is not a thing
+# to remember, and the wrong interpreter is how Evolve ends up "unavailable"
+# (no dspy) or torch broken.
+conda_env_path() {
+    local base=""
+    if [[ -n "${CONDA_EXE:-}" && -x "${CONDA_EXE:-}" ]]; then
+        base="$("$CONDA_EXE" info --base 2>/dev/null || true)"
+    elif command -v conda >/dev/null 2>&1; then
+        base="$(conda info --base 2>/dev/null || true)"
+    fi
+    [[ -z "$base" && -d "$HOME/anaconda3" ]] && base="$HOME/anaconda3"
+    [[ -z "$base" && -d "$HOME/miniconda3" ]] && base="$HOME/miniconda3"
+    [[ -z "$base" ]] && return 1
+    local candidate="$base/envs/$1"
+    [[ -x "$candidate/bin/python" ]] && printf '%s\n' "$candidate"
+}
+
+if [[ -n "${EVO_VENV:-}" ]]; then
+    VENV="$EVO_VENV"
+elif VENV="$(conda_env_path "$CONDA_ENV_NAME")" && [[ -n "$VENV" ]]; then
+    :
+else
+    VENV="$ROOT/.venv"
+fi
 EXTRAS="${EVO_EXTRAS:-studio,harness,mem0,optimizers}"
 INSTALL=0
 BUILD=1
@@ -16,14 +44,18 @@ usage() {
     cat <<'HELP'
 Usage: ./start.sh [--host ADDRESS] [--port NUMBER] [--install] [--no-build]
 
-First launch creates .venv, installs Python dependencies and builds the UI.
-Later launches reuse dependencies and rebuild the UI. Ctrl+C stops the server.
+Runs in the conda environment named by EVO_CONDA_ENV (default: evo) when it
+exists, else in the repository's .venv, created on first launch. EVO_VENV
+overrides both. Dependencies are installed there and the UI is rebuilt; a
+later launch reuses them. Ctrl+C stops the server.
 
   --install    Reinstall dependencies (also after changing Python extras).
   --no-build   Use an existing frontend/dist build; Node.js is not required.
   --help       Show this help.
 
-Environment: PYTHON (Python 3.11+ executable), EVO_VENV, EVO_HOST, EVO_PORT,
+Environment: PYTHON (Python 3.11+ executable, only when creating .venv),
+             EVO_CONDA_ENV (default: evo), EVO_VENV (an explicit environment
+             path), EVO_HOST, EVO_PORT,
              EVO_EXTRAS (default: studio,harness,mem0,optimizers).
 Optional RAG/tool integrations can be added with EVO_EXTRAS.
 HELP
@@ -59,7 +91,8 @@ if [[ ! -x "$VENV/bin/python" ]]; then
     "$PYTHON" -m venv "$VENV"
 fi
 PY="$VENV/bin/python"
-"$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' || fail "The selected environment needs Python 3.11+. Use a new EVO_VENV."
+echo "Python environment: $VENV"
+"$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' || fail "The selected environment ($VENV) needs Python 3.11+. Point EVO_VENV or EVO_CONDA_ENV at one that has it."
 
 # Detect occupied ports before spending time installing or building. Uvicorn
 # still performs the authoritative bind after setup, including race handling.
