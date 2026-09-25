@@ -170,8 +170,10 @@ for raw in open(sys.argv[1], encoding="utf-8", errors="replace"):
     value = value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
         value = value[1:-1]
-    # Only when the shell has not exported one already.
-    print(f': "${{{name}:={shlex.quote(value)[1:-1] if value else ""}}}"; export {name}')
+    # Quoted exactly once, by shlex, and only when the shell has not
+    # exported one already. Never reshape the value: a secret that arrives
+    # one character short fails as "incorrect padding" far from here.
+    print(f'if [ -z "${{{name}+x}}" ]; then export {name}={shlex.quote(value)}; fi')
 ENVPY
     . "$ENV_EXPORTS"
 else
