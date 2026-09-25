@@ -67,6 +67,19 @@ describe('node library hierarchy', () => {
     expect(screen.queryByRole('button', { name: /Credit risk/ })).not.toBeInTheDocument();
   });
 
+  it('never offers an evaluator node: evaluation is written in Evaluate & Evolve', async () => {
+    const user = setup();
+    await waitFor(() => expect(api.listTools).toHaveBeenCalled());
+    expect(screen.queryByText('Evaluator')).not.toBeInTheDocument();
+    await user.type(screen.getByRole('searchbox', { name: 'Search node library' }), 'evaluat');
+    expect(await screen.findByText(/No nodes or tools match/)).toBeInTheDocument();
+  });
+
+  it('drops an evaluator entry a palette still carries', () => {
+    render(<Palette templates={[...templates, { type: 'evaluate', label: 'Evaluator', description: 'Score outputs', defaults: { kind: 'evaluator' } }]} sources={sources} graphTemplates={[]} onAdd={vi.fn()} onLoadTemplate={vi.fn()} />);
+    expect(screen.queryByText('Evaluator')).not.toBeInTheDocument();
+  });
+
   it('searches across folded groups and exposes matching results', async () => {
     const user = setup();
     await waitFor(() => expect(api.listTools).toHaveBeenCalled());

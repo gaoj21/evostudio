@@ -42,7 +42,7 @@ import ConnectionEditor from './features/canvas/ConnectionEditor.jsx';
 import { memorySiblings } from './features/memory/MemorySettings.jsx';
 import RunDialog from './features/execution/RunDialog.jsx';
 import MemoryNode from './features/memory/MemoryNode.jsx';
-import { RESET_MEMORY_KEYS, describeReset, isResetMemoryShortcut } from './shortcuts.js';
+import { RESET_MEMORY_KEYS, describeMemoryAction, isResetMemoryShortcut } from './shortcuts.js';
 import MemoryPanel from './features/memory/MemoryPanel.jsx';
 import EvolvePanel from './features/evaluation/EvolvePanel.jsx';
 import ReviewPanel from './components/ReviewPanel.jsx';
@@ -52,7 +52,7 @@ import RunsPanel from './features/execution/RunsPanel.jsx';
 import SchedulePanel from './features/execution/SchedulePanel.jsx';
 import TopBar from './components/TopBar.jsx';
 
-const nodeTypes = { task: TaskNode, source: SourceNode, tool: ToolNode, evaluator: ToolNode, memory: MemoryNode, chatAgent: ChatAgentNode };
+const nodeTypes = { task: TaskNode, source: SourceNode, tool: ToolNode, memory: MemoryNode, chatAgent: ChatAgentNode };
 
 // Wide enough that the Library / Custom / Workspace tabs and the collapse chevron
 // all fit without truncating, and that palette descriptions stop wrapping to
@@ -668,7 +668,6 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
             },
           ];
         }
-        if (defaults.kind === 'evaluator') return [...nds,{id:name,type:'evaluator',position:pos,data:JSON.parse(JSON.stringify(defaults))}];
         if (defaults.kind === 'tool') {
           return [
             ...nds,
@@ -869,13 +868,22 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
 
   onSaveRef.current = onSave;
 
-  // Snapshot memory, then clear it — before a measured run. The server
-  // refuses while anything runs, and never clears without a copy first.
+  // Two separate steps. Backing up takes nothing away and is allowed at any
+  // time; clearing is refused while anything runs, and keeps a copy first
+  // unless the person says otherwise.
+  const backupMemory = useCallback(async () => {
+    if (!graph?.id) return;
+    try {
+      setErrors([describeMemoryAction(await api.backupMemory(graph.id))]);
+    } catch (err) {
+      setErrors(extractErrors(err));
+    }
+  }, [graph?.id]);
   const resetMemory = useCallback(async () => {
     if (!graph?.id) return;
     try {
       const out = await api.resetMemory(graph.id);
-      setErrors([describeReset(out)]);
+      setErrors([describeMemoryAction(out)]);
     } catch (err) {
       setErrors(extractErrors(err));
     }
@@ -1634,6 +1642,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
         showMemory={showMemory}
         onToggleMemory={onToggleMemory}
         onResetMemory={resetMemory}
+        onBackupMemory={backupMemory}
         resetMemoryKeys={RESET_MEMORY_KEYS}
         impliedCount={edges.filter((e) => e.data?.implied).length}
         onWorkspace={openWorkspace}
@@ -1824,14 +1833,14 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
                   {` · ${batchProgress.done}/${batchProgress.total ?? '?'} done`}
                   {batchProgress.failed > 0 && ` · ${batchProgress.failed} failed`}
                   {batch.metric && ` · metric ${batch.metric}`}
-                  {` · logs → ${graph?.output_dir || 'runs'}/<started-at>/nodes/<node>.jsonl`}
+                  {` · logs → ${graph?.output_dir || 'runs'}/nodes/<node>.jsonl`}
                 </>
               ) : (
                 <>
                   <span className={`node-status ${toneClass(describeRun(run.status).tone)}`}>
                     {describeRun(run.status).label}
                   </span>
-                  {` · logs → ${graph?.output_dir || 'runs'}/<started-at>/nodes/<node>.jsonl`}
+                  {` · logs → ${graph?.output_dir || 'runs'}/nodes/<node>.jsonl`}
                 </>
               )}
             </span>

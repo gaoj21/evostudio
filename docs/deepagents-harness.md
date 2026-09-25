@@ -4,11 +4,15 @@ Implemented 2026-09-09.
 
 ## Runtime and responsibilities
 
-`backend/api/harness.py` builds a real `deepagents.create_deep_agent` with a
-LangGraph SQLite checkpointer. It does not route execution through the old
-JSON-prompt agent loop. Provider configuration comes from the existing
-`llm.registry`: OpenAI-compatible endpoints use ChatOpenAI; LiteLLM providers
-use ChatLiteLLM with native tool calls. Keys remain server-side.
+`backend/features/agents/harness.py` builds a real
+`deepagents.create_deep_agent` with a LangGraph SQLite checkpointer. It does
+not route execution through the old JSON-prompt agent loop. Its chat model
+comes from `backend.features.model_bridge.agent_model()`, a LangChain
+`BaseChatModel` over the standalone `llm` package: the harness names no
+provider and imports no provider SDK, so which model answers is decided by
+`llm/providers.json` and `EAX_PROVIDER`/`LLM_PROVIDER` alone. Token usage
+arrives as LangChain's `usage_metadata`, filled from `LLMResult.usage`. Keys
+remain server-side.
 
 Install with `pip install -e '.[studio,harness,mem0]'` in the project virtual
 environment. The harness extra pins Deep Agents 0.7.13, LangGraph 1.2.11,

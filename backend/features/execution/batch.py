@@ -319,9 +319,8 @@ def _finish_batch(state, graph):
             # Scored over what actually ran. A cancelled batch still reports a
             # mean, and `scored`/`total` show how much of the set it covers.
             state["summary"] = evaluation.summarise(state["items"])
-    from backend.features.evaluation.evaluator_tools import evaluate_runs
-    from backend.features.evaluation.evaluator_tools import timing_of
-    has_evaluator = any(t.get('kind') == 'evaluator' and t.get('enabled',True) and timing_of(t.get('evaluator')) == 'batch' for t in graph.get('tasks',[]))
+    from backend.features.evaluation.evaluator_tools import evaluate_runs, has_timing
+    has_evaluator = has_timing(graph, 'batch')
     runs = [(runner.get_run(item.get('run_id')) if item.get('run_id') else None)
             or {**item, 'nodes': []}
             for item in state['items']] if has_evaluator else []

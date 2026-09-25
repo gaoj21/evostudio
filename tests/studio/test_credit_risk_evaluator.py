@@ -21,10 +21,11 @@ def run(i, case, as_of, level, action="suppress", status="success", sample=None,
 
 
 def graph(config=None, labels=None):
-    cfg = {"type": "python", "code": CODE, "timing": "batch", "metric": "detection_rate", "config": config or {}}
+    entry = {"name": "report", "code": CODE, "timing": "batch",
+             "metric": "detection_rate", "config": config or {}}
     if labels is not None:
-        cfg["_label_records"] = labels
-    return {"tasks": [{"name": "report", "kind": "evaluator", "evaluator": cfg, "inputs": [], "outputs": []}], "edges": []}
+        entry["_label_records"] = labels
+    return {"tasks": [], "edges": [], "evaluators": [entry]}
 
 
 def evaluate(runs, **kw):

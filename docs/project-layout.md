@@ -61,7 +61,7 @@ Python 项目采用 editable 安装：`pip install -e .`。源码位置改变，
 | studio/frontend/ | frontend/ |
 | studio/data/ | studio-data/ |
 | evoagentx/ | backend/evoagentx/ |
-| llm/ | backend/llm/ |
+| llm/ | llm/（仓库根目录的独立包） |
 | memory/ | backend/memory/ |
 | credit_risk/ | projects/credit_risk/ |
 

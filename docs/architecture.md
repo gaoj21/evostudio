@@ -1,43 +1,63 @@
 # Architecture
 
 The repository is a small monorepo with a framework at its center and two
-applications around it. Dependencies point inward toward `evoagentx`; the LLM
-and memory adapters build on the framework rather than sitting below it.
+applications around it. Dependencies point inward toward `evoagentx`; the
+memory adapters build on the framework rather than sitting below it. The `llm`
+package is the exception and sits beside everything: it depends on nothing in
+this repository, and everything that makes a model call depends on it.
 
 ```text
 frontend/                  React UI
 backend/api/               Platform API and execution
 backend/evoagentx/         Agent/workflow framework
-backend/llm/               Model adapters
+llm/                       The model boundary (standalone package, repo root)
+backend/features/model_bridge.py   Adapts `llm` to the framework's model classes
 backend/memory/            Storage adapters
 projects/credit_risk/      Credit-risk domain project
 ```
 
 Data flow: the GUI builds and runs workflow graphs; the App assembles
 domain pipelines; both execute on the EvoAgentX framework, which calls LLMs
-through the `llm` layer and persists memory through the `memory` layer.
+through the `llm` package and persists memory through the `memory` layer.
 
 ## Layers
 
-### backend/llm/ — LLM provider adapter
+### llm/ — the model boundary
 
-Several providers can be registered at once in `backend/llm/providers.json`; each may
-use a different calling convention (`type: "litellm"` goes through the
-litellm SDK, `type: "openai_compatible"` POSTs to `{base_url}/chat/completions`
-directly). API keys are read from the environment (repo-root `.env`), never
-stored in the config.
+A standalone package at the repository root. **Nothing in `backend/` or
+`frontend/` may name a provider, import a provider SDK, or read a provider's
+response shape** — that is the whole point of the package, and it is what lets
+the same checkout run against a different transport elsewhere (on the user's
+other machine this package is SafeChain-backed, provider name `safechain`, and
+no other file differs).
 
-- `llm.registry` — `list_providers()`, `get_provider(name)` (default from
-  config; resolves the key, clear errors for unknown/disabled providers).
-- `llm.client` — `chat(provider, messages, **kwargs) -> str` with timeout and
-  429/5xx retry.
-- `llm.factory` — `get_evoagentx_llm(provider=None)` builds a framework
-  `LiteLLM` instance.
+Several providers can be registered at once in `llm/providers.json`; each may
+use a different transport (`type: "litellm"` goes through the litellm SDK,
+`type: "openai_compatible"` POSTs to `{base_url}/chat/completions` directly,
+`adapter` names a module of your own). API keys are read from the environment
+(repo-root `.env`), never stored in the config.
 
-**Add a provider:** add an entry to `backend/llm/providers.json` (name, type, model,
-`api_key_env`, optional `base_url`/`params`), put the key in `.env`. A new
-calling convention = a new `type` with a handler in `client.py` and a branch
-in `factory.py`. See `backend/llm/README.md`.
+The public API, all importable from the top-level `llm`: `chat`, `chat_result`,
+`batch`, `batch_result`, their `a`-prefixed async forms, `LLMResult`,
+`LLMUsage`, `UsageTracker`, `list_providers`, `get_provider`,
+`default_provider`, `ProviderError`. Callers import from `llm`, never from
+`llm.client`, `llm.registry` or `llm.adapters`.
+
+**Switch provider:** change `default` in `llm/providers.json`, or set
+`LLM_PROVIDER` (Studio also honours `EAX_PROVIDER`, which wins). **Add one:**
+an entry in `llm/providers.json` plus, for a new transport, a module in
+`llm/adapters/` offering `complete` (optionally `acomplete`, `native_batch`).
+Smoke test with `.venv/bin/python llm/examples_terminal.py`. See
+[llm/README.md](../llm/README.md).
+
+### backend/features/model_bridge.py — `llm` as a framework model
+
+The framework instantiates a model class from an `LLMConfig`, and the Deep
+Agents harness wants a LangChain chat model; neither is text in, text out. The
+bridge is the one place that adapts: `workflow_model()` returns the registered
+`StudioLLM`, `agent_model()` a LangChain `BaseChatModel` with `usage_metadata`
+filled from `LLMResult.usage`, and `usage_hook()` is where a run's token
+accounting comes from. Token usage is never read off a provider response.
 
 ### backend/memory/ — memory adapter
 
@@ -70,7 +90,7 @@ actively modified package and the stable dependency boundary for applications.
 
 The credit-risk monitoring app: agentic pipeline (`agentic_pipeline/`),
 dataset builders (`dataset/`), evaluation and optimization scripts. LLM
-construction goes through `get_evoagentx_llm()`.
+construction goes through `model_bridge.workflow_model()`.
 
 ### backend/api/ and frontend/ — GUI
 

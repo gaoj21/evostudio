@@ -137,7 +137,9 @@ def remove(resource_id: str):
         used = []
         for path in graphs.GRAPHS_DIR.glob('*.json'):
             graph = json.loads(path.read_text())
-            if any((t.get('source') or {}).get('resource_id') == resource_id or ((t.get('evaluator') or {}).get('labels') or {}).get('resource_id') == resource_id for t in graph.get('tasks', [])):
+            from backend.features.evaluation.evaluator_tools import label_resource_ids
+            if resource_id in label_resource_ids(graph) or any(
+                    (t.get('source') or {}).get('resource_id') == resource_id for t in graph.get('tasks', [])):
                 used.append(graph.get('name', graph['id']))
         if used:
             raise HTTPException(409, 'Resource is used by saved workflows: ' + ', '.join(used))

@@ -82,30 +82,52 @@ def search_memory(
     return {"agent": agent, "kind": "recall", "query": q, "entries": entries}
 
 
+def _mem0_guard(graph_id: str | None) -> None:
+    """A shared Mem0 space is not this workflow's to empty."""
+    from backend.api import mem0_service
+
+    if graph_id and graph_store.graph_exists(graph_id):
+        graph = graph_store.load_graph(graph_id)
+        if any(t.get('use_long_term_memory') and (t.get('memory') or {}).get('provider') == 'mem0'
+               for t in graph.get('tasks', [])):
+            raise HTTPException(409, 'This task uses shared Mem0 memory. For a clean experiment, select a new empty space; workflow reset cannot clear a shared space.')
+    elif not graph_id and any((mem0_service.ROOT / 'spaces').glob('*.json')):
+        raise HTTPException(409, 'Shared Mem0 spaces exist. Reset individual workflows or manage shared entries in the Mem0 panel.')
+
+
+def _live() -> bool:
+    from backend.api import batch as batch_store
+    from backend.api import runner
+
+    return any(b.get("status") in ("running", "cancelling") for b in batch_store.list_batches()) \
+        or any(r.get("status") == "running" for r in runner.list_runs())
+
+
+@router.post("/memory/backup")
+def backup_memory(body: dict | None = None):
+    """Copy memory to a timestamped backup and leave it in place.
+
+    Per workflow when `graph_id` is given, otherwise every store. Allowed
+    while things run: a backup takes nothing away.
+    """
+    body = body or {}
+    return memory_reset.snapshot(body.get("graph_id") or None)
+
+
 @router.post("/memory/reset")
 def reset_memory(body: dict | None = None):
-    """Snapshot memory to a timestamped backup, then empty it.
+    """Empty memory. Backs up first unless `backup` is false.
 
     Per workflow when `graph_id` is given, otherwise every store. Refused
     while a run or batch is executing — clearing memory under a live run
     would leave it reading from nothing halfway through.
     """
-    from backend.api import batch as batch_store
-    from backend.api import runner
-
     body = body or {}
-    from backend.api import mem0_service
-    graph_id = body.get('graph_id')
-    if graph_id and graph_store.graph_exists(graph_id):
-        graph = graph_store.load_graph(graph_id)
-        if any(t.get('use_long_term_memory') and (t.get('memory') or {}).get('provider') == 'mem0' for t in graph.get('tasks', [])):
-            raise HTTPException(409, 'This task uses shared Mem0 memory. For a clean experiment, select a new empty space; workflow reset cannot clear a shared space.')
-    elif not graph_id and any((mem0_service.ROOT / 'spaces').glob('*.json')):
-        raise HTTPException(409, 'Shared Mem0 spaces exist. Reset individual workflows or manage shared entries in the Mem0 panel.')
-    live = any(b.get("status") in ("running", "cancelling") for b in batch_store.list_batches()) \
-        or any(r.get("status") == "running" for r in runner.list_runs())
+    graph_id = body.get('graph_id') or None
+    _mem0_guard(graph_id)
     try:
-        return memory_reset.snapshot_and_clear(body.get("graph_id") or None, busy=live)
+        return memory_reset.clear(graph_id, busy=_live(),
+                                  backup=body.get("backup", True) is not False)
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
 

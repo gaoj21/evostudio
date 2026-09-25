@@ -1,19 +1,28 @@
-"""Canvas evaluators: the same contract for runs, saved results and evolution.
+"""Evaluators: the user's own Python code, kept with the workflow document.
 
-Evaluation branches never feed workflow nodes. Reports are kept separately
+Evaluation is not part of the canvas. A workflow carries a list of evaluators
+on its graph document (`graph["evaluators"]`), each one a piece of Python whose
+typed parameters become the form that feeds it. Reports are kept separately
 from predictions; unavailable labels are unscored, never an implicit zero.
 """
 import copy
 import json
 import math
+import re
 from statistics import mean
 from fastapi import APIRouter, Body, HTTPException
 from backend.api.sources import SourceError
+from backend.api.studio_config import DATA_DIR
 
-router = APIRouter(prefix='/api/evaluators', tags=['Evaluators'])
-# An evaluator is the user's own code. The fixed built-ins below remain only
-# so graphs that already use them keep working; they are not offered for new
-# evaluators.
+router = APIRouter(prefix='/api', tags=['Evaluators'])
+
+# Where a pasted-but-unsaved evaluator is kept, one draft per workflow, so
+# leaving the panel to copy a run id from elsewhere does not lose the code.
+DRAFTS_DIR = DATA_DIR / 'evaluator_drafts'
+
+# Legacy fixed scorers. No evaluator can be created with them any more; they
+# remain because `report()` is also the `evaluate_records` library tool, whose
+# callers pass a scorer configuration of their own.
 CATALOG = [
     {'id': 'python', 'label': 'Python evaluator', 'metric': 'score', 'direction': 'maximize'},
     {'id': 'exact_match', 'label': 'Exact match', 'metric': 'accuracy', 'direction': 'maximize', 'legacy': True},
@@ -21,67 +30,173 @@ CATALOG = [
     {'id': 'required_fields', 'label': 'Required JSON fields', 'metric': 'valid_rate', 'direction': 'maximize', 'legacy': True},
     {'id': 'tool', 'label': 'Custom evaluator tool', 'metric': 'score', 'direction': 'maximize', 'legacy': True},
 ]
-# One default, used by the runner, the batch and the Inspector alike.
+
+# One default, used by the runner, the batch and the panel alike.
 DEFAULT_TIMING = 'run'
 DEFAULT_TIMEOUT = 120
+TIMINGS = ('manual', 'run', 'batch')
+DIRECTIONS = ('maximize', 'minimize')
+# Keys an evaluator entry carries. Anything else a client sends is dropped, so
+# a saved workflow cannot accumulate settings nothing reads.
+ENTRY_KEYS = ('name', 'description', 'code', 'config', 'metric', 'direction',
+              'timing', 'timeout', 'labels', 'enabled')
+MAX_EVALUATORS = 50
+
+EXAMPLE_CODE = '''def build_evaluator(threshold: float = 0.5):
+    """Typed parameters with defaults become the form Studio shows."""
+    class Evaluator:
+        def evaluate(self, records):
+            done = [r for r in records if r["status"] == "success"]
+            return {"metrics": {"completion_rate": len(done) / len(records)},
+                    "coverage": {"unit": "records", "total": len(records),
+                                 "scored": len(records), "unscored": 0}}
+    return Evaluator()
+'''
 
 
-def timing_of(cfg):
-    return (cfg or {}).get('timing') or DEFAULT_TIMING
+def entries(graph):
+    """The workflow's evaluators, in order."""
+    return [e for e in (graph.get('evaluators') or []) if isinstance(e, dict)]
 
 
-def timeout_of(cfg):
-    return int((cfg or {}).get('timeout') or DEFAULT_TIMEOUT)
+def evaluator_name(value):
+    """An evaluator name as Evolve sends it. Its objective is written
+    `canvas:<name>`, from when an evaluator was a node on the canvas; a bare
+    name means the same thing."""
+    if isinstance(value, str) and value.startswith('canvas:'):
+        return value[len('canvas:'):]
+    return value
 
 
-def is_evaluator(task):
-    return task.get('kind') == 'evaluator'
+def find(graph, name):
+    name = evaluator_name(name)
+    return next((e for e in entries(graph) if e.get('name') == name), None)
+
+
+def label_resource_ids(graph):
+    """The uploaded data resources a workflow's evaluators read labels from."""
+    found = set()
+    for entry in entries(graph):
+        labels = entry.get('labels')
+        if isinstance(labels, str):
+            found.add(labels)
+        elif isinstance(labels, dict) and labels.get('resource_id'):
+            found.add(labels['resource_id'])
+    return found
+
+
+def label_config(labels):
+    """A labels setting as a DataLoader configuration. The frontend sends the
+    resource id; an older graph stored the whole loader configuration."""
+    return {'resource_id': labels, 'loader': 'auto'} if isinstance(labels, str) else dict(labels or {})
+
+
+def timing_of(entry):
+    return (entry or {}).get('timing') or DEFAULT_TIMING
+
+
+def timeout_of(entry):
+    return int((entry or {}).get('timeout') or DEFAULT_TIMEOUT)
+
+
+def has_timing(graph, timing):
+    return any(e.get('enabled', True) and timing_of(e) == timing for e in entries(graph))
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+def validate_entry(entry, draft=False, check_code=True):
+    """What a save or a run refuses.
+
+    A switched-off evaluator, or a new one with no code yet, is a draft: it
+    must not stop the workflow from being saved (`draft`, and `check_code` for
+    code that does not parse yet). It is checked in full when it is used (it
+    then reports its own failure) or chosen as an Evolve objective.
+    """
+    if not isinstance(entry, dict):
+        raise SourceError('Each evaluator must be an object.')
+    name = entry.get('name')
+    if not isinstance(name, str) or not name.strip():
+        raise SourceError('Every evaluator needs a name.')
+    if timing_of(entry) not in TIMINGS:
+        raise SourceError(f"Evaluator '{name}' timing must be one of {', '.join(TIMINGS)}.")
+    timeout = entry.get('timeout', DEFAULT_TIMEOUT)
+    if isinstance(timeout, bool) or not isinstance(timeout, int) or not 10 <= timeout <= 3600:
+        raise SourceError('Evaluator time limit must be a whole number of seconds between 10 and 3600.')
+    if entry.get('direction', 'maximize') not in DIRECTIONS:
+        raise SourceError('Evaluator direction must be maximize or minimize.')
+    if entry.get('config') is not None and not isinstance(entry['config'], dict):
+        raise SourceError('Evaluator parameters must be an object of {parameter: value}.')
+    if entry.get('metric') is not None and not isinstance(entry['metric'], str):
+        raise SourceError('Evaluator metric must be the name of a metric the code returns.')
+    if entry.get('labels') is not None and not isinstance(entry['labels'], (str, dict)):
+        raise SourceError('Evaluator labels must be a data resource.')
+    if entry.get('enabled') is not None and not isinstance(entry['enabled'], bool):
+        raise SourceError('Evaluator enabled must be true or false.')
+    code = entry.get('code')
+    if code is not None and not isinstance(code, str):
+        raise SourceError('Evaluator code must be Python source text.')
+    if not (code or '').strip():
+        if draft:
+            return entry
+        raise SourceError(f"Evaluator '{name}' has no code yet. Write its evaluation code in Evaluate & Evolve.")
+    if not check_code:
+        return entry
+    from .python_evaluator import interface
+    try:
+        interface(code)
+    except (ValueError, TypeError) as exc:
+        raise SourceError(f"Evaluator '{name}': {exc}") from exc
+    return entry
+
+
+def normalize(entry):
+    """One evaluator, with only the keys the platform reads."""
+    kept = {k: entry[k] for k in ENTRY_KEYS if k in entry}
+    kept['name'] = (kept.get('name') or '').strip()
+    kept.setdefault('code', '')
+    kept['config'] = kept.get('config') or {}
+    kept.setdefault('metric', None)
+    kept['direction'] = kept.get('direction') or 'maximize'
+    kept['timing'] = timing_of(kept)
+    kept['timeout'] = timeout_of(kept)
+    kept.setdefault('labels', None)
+    kept['enabled'] = kept.get('enabled', True)
+    return kept
+
+
+def validate_evaluators(evaluators, draft=True):
+    """Validate and normalize the list a save or a PUT hands in."""
+    if evaluators in (None, ''):
+        return []
+    if not isinstance(evaluators, list):
+        raise SourceError('Evaluators must be a list.')
+    if len(evaluators) > MAX_EVALUATORS:
+        raise SourceError(f'A workflow keeps at most {MAX_EVALUATORS} evaluators.')
+    result, seen = [], set()
+    for entry in evaluators:
+        # A switched-off evaluator is not checked in full: it is where an
+        # unfinished one is parked, and parking it must always be possible.
+        off = isinstance(entry, dict) and entry.get('enabled') is False
+        validate_entry(entry, draft=draft or off, check_code=not off)
+        kept = normalize(entry)
+        if kept['name'] in seen:
+            raise SourceError(f"Two evaluators are called '{kept['name']}'. Evaluator names must be unique.")
+        seen.add(kept['name'])
+        result.append(kept)
+    return result
 
 
 def validate_graph(graph):
-    """What a save or a run refuses. A disabled evaluator, or a new one with
-    no code yet, is a draft: it must not stop the workflow from being saved
-    or run. It is checked in full when it is used (it then reports its own
-    failure) or chosen as an Evolve objective."""
-    tasks = {t['name']: t for t in graph.get('tasks', [])}
-    for task in tasks.values():
-        if is_evaluator(task) and task.get('enabled', True):
-            try:
-                validate_task(graph, task, draft=True)
-            except SourceError as exc:
-                if f"'{task['name']}'" in str(exc):
-                    raise
-                raise SourceError(f"Evaluator '{task['name']}': {exc}") from exc
-    if any(is_evaluator(tasks.get(e.get('source'), {})) for e in graph.get('edges', [])):
-        raise SourceError('Evaluator outputs are reports, not workflow inputs. Select an evaluator in Evolve instead of connecting it downstream.')
+    """What a save or a run refuses about a whole workflow's evaluators."""
+    validate_evaluators(graph.get('evaluators'))
 
 
-def validate_task(graph, task, draft=False):
-    cfg = task.get('evaluator') or {}
-    if cfg.get('type', 'exact_match') not in {e['id'] for e in CATALOG}:
-        raise SourceError('Unknown evaluator type.')
-    if timing_of(cfg) not in ('node', 'run', 'batch'):
-        raise SourceError('Evaluator timing must be node, run, or batch.')
-    if timing_of(cfg) == 'node' and not any(e.get('target') == task['name'] for e in graph.get('edges', [])):
-        raise SourceError(f"Evaluator '{task['name']}' runs when its connected outputs are ready, but nothing is connected to it. Connect the outputs it should wait for, or run it after each run or after the batch.")
-    timeout = cfg.get('timeout', DEFAULT_TIMEOUT)
-    if isinstance(timeout, bool) or not isinstance(timeout, int) or not 10 <= timeout <= 3600:
-        raise SourceError('Evaluator time limit must be a whole number of seconds between 10 and 3600.')
-    if cfg.get('type') == 'python' and not (cfg.get('code') or '').strip():
-        if draft:
-            return
-        raise SourceError(f"Evaluator '{task['name']}' has no code yet. Add its evaluation code in the evaluator settings.")
-    if cfg.get('type') == 'python':
-        from .python_evaluator import interface
-        try:
-            interface(cfg.get('code') or '')
-        except (ValueError, TypeError) as exc:
-            raise SourceError(str(exc)) from exc
-    if cfg.get('type') == 'tool' and not cfg.get('tool'):
-        raise SourceError('Choose an evaluator tool.')
-    if cfg.get('direction', 'maximize') not in ('maximize', 'minimize'):
-        raise SourceError('Evaluator direction must be maximize or minimize.')
-
+# ---------------------------------------------------------------------------
+# Reports
+# ---------------------------------------------------------------------------
 
 def decode(value):
     if isinstance(value, str):
@@ -101,17 +216,24 @@ def path_value(value, path):
 
 
 def report(cfg, records):
-    """Pass complete saved executions to the tool, without grouping or filtering."""
+    """Pass complete saved executions to the code, without grouping or filtering.
+
+    `cfg` is an evaluator entry (Python code) or, for the `evaluate_records`
+    library tool, one of the legacy fixed scorers.
+    """
     cfg, records = copy.deepcopy(cfg), copy.deepcopy(records)
-    kind = cfg.get('type', 'exact_match')
-    if kind == 'tool' and cfg.get('tool') in ('read_dataset','evaluate_records'):
+    kind = cfg.get('type', 'python')
+    if kind not in {e['id'] for e in CATALOG}:
+        raise SourceError('Unknown evaluator type.')
+    if kind == 'tool' and cfg.get('tool') in ('read_dataset', 'evaluate_records'):
         raise SourceError('Choose a non-recursive custom evaluator.')
     if kind in ('tool', 'python'):
         logs = ''
         if kind == 'python':
             from backend.features.chat import chat_control
             try:
-                outcome = chat_control.worker('evaluate_python', {'code':cfg['code'], 'records':records, 'config':cfg.get('config') or {}}, timeout=timeout_of(cfg))
+                outcome = chat_control.worker('evaluate_python', {'code': cfg.get('code') or '', 'records': records,
+                                                                  'config': cfg.get('config') or {}}, timeout=timeout_of(cfg))
             except TimeoutError as exc:
                 raise SourceError(f'Evaluator took longer than its {timeout_of(cfg)}-second limit. Raise the limit in the evaluator settings or make the code faster.') from exc
             if isinstance(outcome, dict) and outcome.get('studio_evaluator_output'):
@@ -122,7 +244,7 @@ def report(cfg, records):
             from backend.api import tools_registry
             result = tools_registry.call_tool(cfg['tool'], {'records': records, 'config': cfg.get('config') or {}})
         if not isinstance(result, dict) or not isinstance(result.get('metrics'), dict):
-            raise SourceError('Evaluator tools return {metrics: {name: number}} with optional records, coverage and details.')
+            raise SourceError('Evaluator code returns {metrics: {name: number}} with optional records, coverage and details.')
         result = copy.deepcopy(result)
         if logs:
             result['logs'] = logs
@@ -138,7 +260,7 @@ def report(cfg, records):
         if any(v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)) for v in result['metrics'].values()):
             raise SourceError('Evaluator metrics must be finite numbers or null.')
         if 'records' in result and (not isinstance(result['records'], list) or any(not isinstance(r, dict) for r in result['records'])):
-            raise SourceError('Evaluator records must be a list of objects; their granularity is chosen by the tool.')
+            raise SourceError('Evaluator records must be a list of objects; their granularity is chosen by the code.')
         for row in result.get('records', []):
             value = row.get('score')
             if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)):
@@ -146,7 +268,7 @@ def report(cfg, records):
         coverage = result.get('coverage')
         if coverage is not None:
             if not isinstance(coverage, dict) or not isinstance(coverage.get('unit'), str) or not coverage['unit'].strip():
-                raise SourceError('Tool coverage must declare its unit.')
+                raise SourceError('Coverage must declare its unit.')
             counts = [coverage.get(k) for k in ('total', 'scored', 'unscored')]
             if any(type(v) is not int or v < 0 for v in counts) or counts[1] + counts[2] != counts[0]:
                 raise SourceError('Coverage needs consistent nonnegative total, scored and unscored counts.')
@@ -178,80 +300,63 @@ def report(cfg, records):
     scores = [r['score'] for r in details if r['score'] is not None]
     metric = next(e['metric'] for e in CATALOG if e['id'] == kind)
     return {'metrics': {metric: mean(scores) if scores else None}, 'records': details,
-            'coverage': {'total': len(details), 'scored': len(scores), 'unscored': len(details)-len(scores)},
-            # The chosen direction, for every kind of evaluator alike: the
-            # built-ins report a rate, and which way is better is the user's.
+            'coverage': {'total': len(details), 'scored': len(scores), 'unscored': len(details) - len(scores)},
             'objective': {'metric': metric, 'direction': cfg.get('direction', 'maximize')}}
 
 
-def record_for(graph, task, run, record_id=None):
+def record_for(run, record_id=None):
+    """One saved execution, as the evaluation code receives it.
+
+    Every saved field is kept, including errors, provenance and the execution
+    snapshot: evaluation is no longer wired into the canvas, so nothing here
+    filters what the code may look at.
+    """
     values = {n['name']: n.get('output') for n in run.get('nodes', [])}
     values.update(run.get('node_outputs') or {})
     inputs = run.get('inputs') or run.get('_effective_inputs') or {}
-    mapped = {}
-    for edge in graph.get('edges', []):
-        if edge.get('target') != task['name']:
-            continue
-        output = decode(values.get(edge.get('source')))
-        for mapping in edge.get('mappings', []):
-            mapped[mapping['to']] = path_value(output, mapping['from'])
-    cfg = task.get('evaluator') or {}
-    expected = mapped.get('expected')
-    if cfg.get('label_field'):
-        expected = path_value(inputs, cfg['label_field'])
-    # Keep every saved field, including errors, provenance and execution snapshot.
-    # Mappings are conveniences, never an access filter on other node outputs.
     record = copy.deepcopy({k: v for k, v in run.items() if not k.startswith('_')})
     record.update({'id': record_id or run.get('id') or run.get('run_id', 'record'),
                    'inputs': copy.deepcopy(inputs), 'node_outputs': copy.deepcopy(values),
-                   'prediction': mapped.get('prediction', run.get('result', run.get('prediction'))),
-                   'expected': expected, 'status': run.get('status', 'success'),
-                   'focus': copy.deepcopy([e for e in graph.get('edges', []) if e.get('target') == task['name']])})
+                   'prediction': run.get('result', run.get('prediction')),
+                   'status': run.get('status', 'success')})
+    record.setdefault('expected', None)
     return record
 
 
-def evaluate_runs(graph, runs, names=None, timing=None):
+def evaluate_entries(evaluators, runs, names=None, timing=None):
     """Reports per evaluator. Never raises: an evaluator that is misconfigured
     reports its own failure, and the runs it scores keep their status."""
     reports = {}
-    for task in graph.get('tasks', []):
-        if not is_evaluator(task) or not task.get('enabled', True) or (names is not None and task['name'] not in names):
+    for entry in evaluators or []:
+        name = entry.get('name')
+        if not name or (names is not None and name not in names):
             continue
-        cfg = task.get('evaluator') or {}
-        if timing and timing_of(cfg) not in timing:
+        if names is None and not entry.get('enabled', True):
+            continue
+        if timing and timing_of(entry) not in timing:
             continue
         # The report keeps the settings, never the label records themselves:
         # they are copied into every run and batch that is saved, and into
         # what Evolve shows its prompt proposer.
-        shown = public_config(cfg)
+        shown = public_config(entry)
         try:
-            validate_task(graph, task)
-            records = [record_for(graph, task, run, str(i)) for i, run in enumerate(runs)]
+            validate_entry(entry)
+            cfg = {**copy.deepcopy(entry), 'type': 'python'}
+            records = [record_for(run, str(i)) for i, run in enumerate(runs)]
             # Labels are a separate resource and are never injected into Agents.
+            # The code owns label matching; no platform-imposed join or grouping.
             if cfg.get('labels') or '_label_records' in cfg:
                 from backend.features.data.dataloaders import records as load_records
-                labels = cfg['_label_records'] if '_label_records' in cfg else load_records(cfg['labels'])
-                if cfg.get('type') in ('tool', 'python'):
-                    # Tools own label matching too; no platform-imposed join or grouping.
-                    cfg = copy.deepcopy(cfg)
-                    cfg.setdefault('config', {})
-                    cfg['config']['label_records'] = copy.deepcopy(labels)
-                    labels = []
-                key = cfg.get('label_key') or 'id'
-                value = cfg.get('label_value') or 'expected'
-                lookup = {}
-                for label in labels:
-                    identifier = path_value(label, key)
-                    if identifier is None or str(identifier) in lookup:
-                        raise SourceError('Label keys must be present and unique.')
-                    lookup[str(identifier)] = path_value(label, value)
-                for row in ([] if cfg.get('type') in ('tool', 'python') else records):
-                    identifier = path_value(row['inputs'], cfg.get('record_key') or 'id')
-                    row['expected'] = lookup.get(str(identifier)) if identifier is not None else None
-            reports[task['name']] = {'status': 'success', **report(cfg, records), 'config': shown}
+                labels = cfg['_label_records'] if '_label_records' in cfg else load_records(label_config(cfg['labels']))
+                cfg['config'] = {**(cfg.get('config') or {}), 'label_records': copy.deepcopy(labels)}
+            reports[name] = {'status': 'success', **report(cfg, records), 'config': shown}
         except Exception as exc:
-            reports[task['name']] = {'status': 'failed', 'error': str(exc), 'config': shown}
+            reports[name] = {'status': 'failed', 'error': str(exc), 'config': shown}
     return reports
+
+
+def evaluate_runs(graph, runs, names=None, timing=None):
+    return evaluate_entries(entries(graph), runs, names, timing)
 
 
 def public_config(cfg):
@@ -265,9 +370,105 @@ def public_config(cfg):
     return shown
 
 
-@router.get('')
-def catalog():
-    return {'evaluators': CATALOG}
+# ---------------------------------------------------------------------------
+# Interface discovery
+# ---------------------------------------------------------------------------
+
+def described(code):
+    """The form the code declares: which entrypoint, and its typed parameters.
+
+    Never raises: a syntax error or an undiscoverable signature is part of the
+    answer, because the panel shows it beside the editor while it is typed.
+    """
+    from .python_evaluator import interface
+    try:
+        schema = interface(code or '')
+    except (ValueError, TypeError) as exc:
+        return {'kind': None, 'params': [], 'provided': [], 'warnings': [], 'error': str(exc)}
+    return {'kind': 'factory' if schema['entrypoint'] == 'build_evaluator' else 'function',
+            'params': [{'name': f['name'], 'type': f['type'], 'required': f['required'],
+                        'default': f.get('default'), 'description': f.get('description', '')}
+                       for f in schema['inputs']],
+            'provided': schema.get('provided_inputs', []),
+            'warnings': schema.get('warnings', []),
+            'code_hash': schema.get('code_hash'),
+            'error': None}
+
+
+# ---------------------------------------------------------------------------
+# Drafts: pasted code kept while the user goes elsewhere for a run id
+# ---------------------------------------------------------------------------
+
+def _draft_path(graph_id):
+    if not re.fullmatch(r'[A-Za-z0-9._-]{1,200}', graph_id or '') or graph_id.startswith('.'):
+        raise SourceError('Unknown workflow.')
+    return DRAFTS_DIR / f'{graph_id}.json'
+
+
+def get_draft(graph_id):
+    path = _draft_path(graph_id)
+    if not path.is_file():
+        return None
+    try:
+        with open(path, encoding='utf-8') as stream:
+            draft = json.load(stream)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return draft if isinstance(draft, dict) else None
+
+
+def put_draft(graph_id, code, config=None, name=None):
+    """Keep a pasted evaluator as it is. Drafts are never validated and never
+    run; they only have to survive leaving the panel, and a restart."""
+    from datetime import datetime, timezone
+    if not isinstance(code, str):
+        raise SourceError('A draft keeps the code you pasted.')
+    if config is not None and not isinstance(config, dict):
+        raise SourceError('Draft parameters must be an object of {parameter: value}.')
+    draft = {'code': code, 'config': config or {},
+             'updated_at': datetime.now(timezone.utc).isoformat()}
+    if isinstance(name, str) and name.strip():
+        draft['name'] = name.strip()
+    path = _draft_path(graph_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + '.tmp')
+    with temporary.open('w', encoding='utf-8') as stream:
+        json.dump(draft, stream, ensure_ascii=False, indent=2)
+    temporary.replace(path)
+    return draft
+
+
+def clear_draft(graph_id, code=None):
+    """Drop the draft. With `code`, only when that same code is now saved."""
+    draft = get_draft(graph_id)
+    if draft is None:
+        return False
+    if code is not None and (draft.get('code') or '').strip() != (code or '').strip():
+        return False
+    _draft_path(graph_id).unlink(missing_ok=True)
+    return True
+
+
+def clear_saved_drafts(graph_id, evaluators):
+    """After a save: the draft is gone once its code is one of the evaluators."""
+    draft = get_draft(graph_id)
+    if draft is None:
+        return
+    pasted = (draft.get('code') or '').strip()
+    if pasted and any((e.get('code') or '').strip() == pasted for e in evaluators or []):
+        clear_draft(graph_id)
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+def _graph(graph_id):
+    from backend.api import graphs
+    graph = graphs.load_graph(graph_id)
+    if not graph:
+        raise HTTPException(404, 'Workflow not found.')
+    return graph
 
 
 def saved_runs(graph_id, body):
@@ -287,55 +488,136 @@ def saved_runs(graph_id, body):
     return [run]
 
 
-@router.post('/interface')
+@router.get('/evaluators')
+def catalog():
+    """What an evaluator is, for a panel that has none yet: the entrypoints
+    the code may define, the timings, the defaults and an example."""
+    return {'entrypoints': [
+                {'kind': 'factory', 'name': 'build_evaluator',
+                 'description': 'build_evaluator(**typed parameters) returns an object with evaluate(records).'},
+                {'kind': 'function', 'name': 'evaluate',
+                 'description': 'evaluate(records, **typed parameters) returns the report directly.'}],
+            'timings': [{'id': 'manual', 'label': 'Only when I ask'},
+                        {'id': 'run', 'label': 'After each run'},
+                        {'id': 'batch', 'label': 'After the batch'}],
+            'defaults': {'timing': DEFAULT_TIMING, 'timeout': DEFAULT_TIMEOUT, 'direction': 'maximize'},
+            'example_code': EXAMPLE_CODE}
+
+
+@router.post('/evaluators/interface')
 def inspect_code(body: dict = Body(...)):
-    from .python_evaluator import interface
-    try:
-        return interface(body.get('code') or '')
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(422, str(exc)) from exc
+    return described(body.get('code') or '')
 
 
-@router.post('/graphs/{graph_id}/preview')
-def preview_code(graph_id: str, body: dict = Body(...)):
+@router.get('/graphs/{graph_id}/evaluators')
+def list_evaluators(graph_id: str):
+    return {'evaluators': entries(_graph(graph_id))}
+
+
+@router.put('/graphs/{graph_id}/evaluators')
+def replace_evaluators(graph_id: str, body=Body(...)):
     from backend.api import graphs
-    saved = graphs.load_graph(graph_id)
-    if not saved:
-        raise HTTPException(404, 'Workflow not found.')
-    graph = copy.deepcopy(body.get('graph') or saved)
-    name = body.get('evaluator')
-    task = next((t for t in graph.get('tasks', []) if t.get('name') == name and is_evaluator(t)), None)
-    if not task:
-        raise HTTPException(422, 'Choose an evaluator on this canvas.')
-    task['enabled'] = True
-    task.setdefault('evaluator', {})['_preview'] = True
-    # Other unfinished evaluator drafts must not block this preview.
-    graph['tasks'] = [t for t in graph['tasks'] if not is_evaluator(t) or t['name'] == name]
-    runs = saved_runs(graph_id, body)
+    _graph(graph_id)
+    payload = body.get('evaluators') if isinstance(body, dict) else body
     try:
-        result = evaluate_runs(graph, runs, [name])[name]
-    except (SourceError, ValueError) as exc:
+        saved = graphs.set_evaluators(graph_id, payload)
+    except (SourceError, graphs.GraphValidationError) as exc:
         raise HTTPException(422, str(exc)) from exc
-    if result['status'] != 'success':
-        raise HTTPException(422, result['error'])
-    result.pop('config', None)
-    return {'report':result, 'execution_count':len(runs),
-            'metrics':[{'name':key,'type':'number','nullable':value is None,'sample':value} for key,value in result['metrics'].items()]}
+    return {'evaluators': entries(saved)}
 
 
-@router.post('/graphs/{graph_id}/saved')
-def evaluate_saved(graph_id: str, body: dict = Body(...)):
-    from backend.api import graphs
-    graph = graphs.load_graph(graph_id)
-    if not graph:
-        raise HTTPException(404, 'Workflow not found.')
-    runs = saved_runs(graph_id, body)
+@router.get('/graphs/{graph_id}/evaluators/draft')
+def read_draft(graph_id: str):
+    _graph(graph_id)
+    return {'draft': get_draft(graph_id)}
+
+
+@router.put('/graphs/{graph_id}/evaluators/draft')
+def write_draft(graph_id: str, body: dict = Body(...)):
+    _graph(graph_id)
     try:
-        evaluations = evaluate_runs(graph, runs, body.get('evaluators'))
+        return {'draft': put_draft(graph_id, body.get('code') or '', body.get('config'), body.get('name'))}
     except SourceError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+@router.delete('/graphs/{graph_id}/evaluators/draft')
+def delete_draft(graph_id: str):
+    _graph(graph_id)
+    return {'cleared': clear_draft(graph_id)}
+
+
+@router.post('/graphs/{graph_id}/evaluators/preview')
+def preview_code(graph_id: str, body: dict = Body(...)):
+    """Run code over saved results without saving anything."""
+    _graph(graph_id)
+    entry = _ad_hoc(body)
+    if entry is None:
+        raise HTTPException(422, 'Paste the evaluation code to preview.')
+    runs = saved_runs(graph_id, body)
+    result = evaluate_entries([entry], runs, [entry['name']]).get(entry['name'], {})
+    if result.get('status') != 'success':
+        raise HTTPException(422, result.get('error') or 'Evaluator failed.')
+    result.pop('config', None)
+    return {'report': result, 'execution_count': len(runs),
+            'metrics': [{'name': key, 'type': 'number', 'nullable': value is None, 'sample': value}
+                        for key, value in result['metrics'].items()]}
+
+
+@router.post('/graphs/{graph_id}/evaluators/run')
+def run_evaluators(graph_id: str, body: dict = Body(...)):
+    """Evaluate saved results and keep the report with that batch or run."""
+    graph = _graph(graph_id)
+    runs = saved_runs(graph_id, body)
+    entry = _ad_hoc(body)
+    if entry is not None:
+        evaluations = evaluate_entries([entry], runs, [entry['name']])
+    else:
+        names = body.get('names')
+        if body.get('name'):
+            names = [body['name']]
+        if names is not None:
+            if not isinstance(names, list) or any(not isinstance(n, str) for n in names):
+                raise HTTPException(422, 'Name the evaluators to run.')
+            missing = [n for n in names if find(graph, n) is None]
+            if missing:
+                raise HTTPException(404, f'This workflow has no evaluator called {missing[0]!r}.')
+            names = [evaluator_name(n) for n in names]
+        evaluations = evaluate_runs(graph, runs, names)
     if body.get('batch_id'):
-        # Kept with the batch, so its drawer and the history list show it.
         from backend.api import batch
         batch.set_evaluations(body['batch_id'], evaluations)
+    else:
+        from backend.api import runner
+        runner.set_evaluations(body.get('run_id', ''), evaluations)
     return {'evaluations': evaluations}
+
+
+@router.delete('/graphs/{graph_id}/evaluators/{name}')
+def delete_evaluator(graph_id: str, name: str):
+    from backend.api import graphs
+    graph = _graph(graph_id)
+    if find(graph, name) is None:
+        raise HTTPException(404, f'This workflow has no evaluator called {name!r}.')
+    kept = [e for e in entries(graph) if e.get('name') != name]
+    try:
+        saved = graphs.set_evaluators(graph_id, kept)
+    except (SourceError, graphs.GraphValidationError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {'evaluators': entries(saved)}
+
+
+def _ad_hoc(body):
+    """The unsaved evaluator a preview or a run was handed, if it was."""
+    if not (body.get('code') or '').strip():
+        return None
+    entry = normalize({'name': body.get('name') or 'preview', 'code': body['code'],
+                       'config': body.get('config') or {}, 'metric': body.get('metric'),
+                       'direction': body.get('direction') or 'maximize',
+                       'timing': 'manual', 'timeout': body.get('timeout') or DEFAULT_TIMEOUT,
+                       'labels': body.get('labels'), 'enabled': True})
+    try:
+        validate_entry(entry)
+    except SourceError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return entry

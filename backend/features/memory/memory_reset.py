@@ -1,12 +1,15 @@
-"""Back memory up, then empty it — the step before a measured run.
+"""Back memory up, empty it, or both — the steps around a measured run.
 
 A run that starts with memory carried over from an earlier one is not
 measuring the pipeline, it is measuring the pipeline plus whatever it had
-been told before. The user's rule is: snapshot, then clear, before every
-run. This is that rule as one call, so it is not a thing to remember.
+been told before. So there are three operations, and the caller chooses:
 
-Nothing is ever deleted outright: every reset leaves a timestamped copy
-under `memory-backups/`, and those are never removed here.
+- `snapshot()` — copy the stores aside and leave them in place;
+- `clear()` — empty them (it snapshots first unless told not to);
+- `snapshot_and_clear()` — the usual step before a measured run.
+
+Nothing here ever removes a backup, and `clear(backup=False)` is the only
+way to lose data — it says so in the API and the UI.
 """
 
 import shutil
@@ -40,16 +43,22 @@ def _targets(graph_id: str | None):
             yield store, root / graph_id
 
 
-def snapshot_and_clear(graph_id: str | None = None, *, busy: bool = False) -> dict:
-    """Copy the stores aside, then empty them. Refused while anything runs.
+def snapshot(graph_id: str | None = None) -> dict:
+    """Copy the stores aside, leaving memory exactly as it is.
 
-    Returns where the copy went and how much each store held, so the caller
-    can say so; a reset that reports nothing is one nobody trusts.
+    Safe at any time: a copy of a store being written to may catch a write
+    mid-flight, which is why a reset before a measured run is still the
+    cleaner moment — but a backup must never be refused for being
+    inconvenient.
     """
-    if busy:
-        raise RuntimeError("A run or batch is in progress; memory is left as it is.")
     stamp = _stamp()
     dest = BACKUPS / stamp
+    # Two backups in the same second are two backups, not one folder.
+    suffix = 2
+    while dest.exists():
+        dest = BACKUPS / f"{stamp}-{suffix}"
+        suffix += 1
+    stamp = dest.name
     sizes = {}
     for store, target in _targets(graph_id):
         if not target.exists():
@@ -60,17 +69,48 @@ def snapshot_and_clear(graph_id: str | None = None, *, busy: bool = False) -> di
         copy_to.parent.mkdir(parents=True, exist_ok=True)
         if target.is_dir():
             shutil.copytree(target, copy_to if graph_id else dest / store, dirs_exist_ok=True)
+        else:
+            shutil.copy2(target, copy_to)
+    # Nothing there to copy: say so rather than name a folder that was never
+    # written — a backup nobody can find is worse than none.
+    saved = dest.exists()
+    return {"backup": str(dest) if saved else None, "saved": saved, "stamp": stamp,
+            "graph_id": graph_id, "sizes": sizes, "cleared": False}
+
+
+def clear(graph_id: str | None = None, *, busy: bool = False, backup: bool = True) -> dict:
+    """Empty the stores. Refused while anything runs.
+
+    `backup=False` deletes without a copy; nothing else in Studio does that,
+    and the caller has to ask for it explicitly.
+    """
+    if busy:
+        raise RuntimeError("A run or batch is in progress; memory is left as it is.")
+    taken = snapshot(graph_id) if backup else {"backup": None, "saved": False,
+                                               "stamp": _stamp(), "graph_id": graph_id,
+                                               "sizes": {}}
+    sizes = dict(taken["sizes"])
+    for store, target in _targets(graph_id):
+        if not target.exists():
+            sizes.setdefault(store, 0)
+            continue
+        sizes.setdefault(store, _size(target))
+        if target.is_dir():
             shutil.rmtree(target)
             if graph_id is None:
                 target.mkdir(parents=True, exist_ok=True)
         else:
-            shutil.copy2(target, copy_to)
             target.unlink()
     # The server keeps a memo of table files it has opened; the files are
     # gone now, and a memo that outlives them costs every later write.
     from backend.api import table_store
     table_store.forget(graph_id)
-    return {"backup": str(dest), "stamp": stamp, "graph_id": graph_id, "sizes": sizes}
+    return {**taken, "sizes": sizes, "cleared": True}
+
+
+def snapshot_and_clear(graph_id: str | None = None, *, busy: bool = False) -> dict:
+    """Back up, then empty — the step before a measured run."""
+    return clear(graph_id, busy=busy, backup=True)
 
 
 def backups() -> list[dict]:

@@ -178,7 +178,7 @@ class TestStoppingMipro:
 
         model = SimpleNamespace(config=SimpleNamespace(model="fake"),
                                generate=lambda **kw: SimpleNamespace(content="ok"))
-        monkeypatch.setattr(runner, "_make_llm", lambda: model)
+        monkeypatch.setattr(runner, "_make_llm", lambda **kw: model)
         monkeypatch.setattr(AgentManager, "add_agents_from_workflow", lambda *a, **kw: None)
         monkeypatch.setattr(tools_registry, "resolve_tools", lambda *a, **kw: [])
         monkeypatch.setattr(Evaluator, "__init__", lambda self, **kw: setattr(self, "collate_func", kw["collate_func"]))

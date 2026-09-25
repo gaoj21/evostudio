@@ -59,12 +59,42 @@ def test_arbitrary_files_and_folder_records(client):
     assert len(reference[0]['documents']) == 2
 
 
-def graph_with_evaluator(timing='run', kind='exact_match'):
-    return {'id':'loader-evaluation', 'name':'Test', 'goal':'test', 'flow_version':2,
-            'tasks':[{'name':'work','kind':'tool','tool':'echo','inputs':[{'name':'text','type':'str','required':True}], 'outputs':[{'name':'answer','type':'str','required':True}]},
-                     {'name':'quality','kind':'evaluator','evaluator':{'type':kind,'timing':timing,'label_field':'expected'},
-                      'inputs':[{'name':'prediction','type':'any','required':True},{'name':'expected','type':'any','required':False}], 'outputs':[]}],
-            'edges':[{'source':'work','target':'quality','mappings':[{'from':'answer','to':'prediction'}]}]}
+ACCURACY = '''def evaluate(records, answer_node: str = "work", answer_field: str = "answer", label_field: str = "expected"):
+    """Score each saved run against a label that came with its inputs."""
+    scores = []
+    for record in records:
+        expected = (record.get("inputs") or {}).get(label_field)
+        produced = ((record.get("node_outputs") or {}).get(answer_node) or {}).get(answer_field)
+        scores.append(None if record.get("status") != "success" or expected is None
+                      else float(produced == expected))
+    scored = [s for s in scores if s is not None]
+    return {"metrics": {"accuracy": sum(scored) / len(scored) if scored else None},
+            "records": [{"id": r["id"], "score": s} for r, s in zip(records, scores)],
+            "coverage": {"unit": "records", "total": len(scores), "scored": len(scored),
+                         "unscored": len(scores) - len(scored)}}
+'''
+
+
+def graph_with_evaluator(timing='run', code=None):
+    """A workflow whose evaluation is written as code, off the canvas."""
+    return {'id':'loader-evaluation', 'name':'Test', 'goal':'test', 'flow_version':3,
+            'tasks':[{'name':'work','kind':'tool','tool':'echo','inputs':[{'name':'text','type':'str','required':True}], 'outputs':[{'name':'answer','type':'str','required':True}]}],
+            'edges':[],
+            'evaluators':[{'name':'quality','code':code or ACCURACY,'config':{},
+                           'timing':timing,'timeout':120,'metric':'accuracy',
+                           'direction':'maximize','labels':None,'enabled':True}]}
+
+
+@pytest.fixture(autouse=True)
+def _evaluator_worker_in_process(monkeypatch):
+    """Evaluation code runs in this process for the tests; the worker itself
+    is covered by tests/studio/test_python_evaluator.py."""
+    from backend.features.chat import chat_control
+    from backend.features.evaluation.python_evaluator import execute_with_logs
+    real = chat_control.worker
+    monkeypatch.setattr(chat_control, 'worker',
+                        lambda kind, payload, **kw: execute_with_logs(payload)
+                        if kind == 'evaluate_python' else real(kind, payload, **kw))
 
 
 def mock_tool(monkeypatch):
@@ -73,7 +103,7 @@ def mock_tool(monkeypatch):
     monkeypatch.setattr(tools_registry,'call_tool',lambda name,args,**kwargs: args['text'])
 
 
-@pytest.mark.parametrize('timing', ['node','run'])
+@pytest.mark.parametrize('timing', ['run','manual'])
 def test_evaluator_preserves_prediction_reads_full_intermediate_and_replays_without_llm(monkeypatch, timing):
     mock_tool(monkeypatch)
     graph = graph_with_evaluator(timing)
@@ -85,18 +115,21 @@ def test_evaluator_preserves_prediction_reads_full_intermediate_and_replays_with
     result = runner.get_run(run_id)
     assert result['status'] == 'success', result.get('error')
     assert result['result'] == {'answer':content}
-    assert result['evaluations']['quality']['metrics']['accuracy'] == 1
+    # 'run' scores it as the run settles; 'manual' waits to be asked.
+    assert bool(result.get('evaluations')) == (timing == 'run')
+    if timing == 'run':
+        assert result['evaluations']['quality']['metrics']['accuracy'] == 1
     assert result['node_outputs']['work']['answer'] == content
-    assert evaluator_tools.evaluate_runs(graph,[result])['quality']['metrics']['accuracy'] == 1
+    assert evaluator_tools.evaluate_runs(graph,[result],['quality'])['quality']['metrics']['accuracy'] == 1
     assert result['execution_snapshot']['graph'] == graph
 
 
-def test_evaluator_cannot_feed_agents(monkeypatch):
+def test_evaluation_is_not_a_node_and_never_reaches_the_run_plan(monkeypatch):
     mock_tool(monkeypatch)
     graph = graph_with_evaluator()
-    graph['edges'].append({'source':'quality','target':'work','control_only':True})
-    with pytest.raises(graphs.GraphValidationError,match='Evaluator outputs'):
-        graphs.validate_graph(graph)
+    ordered, _ = graphs.validate_graph(graph)
+    assert [t['name'] for t in ordered] == ['work']
+    assert [n['name'] for n in run_plan.compile_plan(graph)['nodes']] == ['work']
 
 
 def test_missing_labels_are_unscored_not_negative():
@@ -105,46 +138,54 @@ def test_missing_labels_are_unscored_not_negative():
     assert result['metrics']['accuracy'] == 1
 
 
-def test_custom_tool_receives_all_saved_nodes_and_can_aggregate(monkeypatch):
-    graph = graph_with_evaluator('batch', 'tool')
-    graph['tasks'][-1]['evaluator'].update(tool='custom', metric='score')
+AGGREGATE = '''def evaluate(records):
+    """Every saved field is there, including unconnected nodes and failures."""
+    assert len(records) == 2 and records[1]["error"] == "boom"
+    assert records[0]["node_outputs"]["unconnected"]["text"] == "x" * 2000
+    assert records[0]["nodes"][0]["status"] == "success"
+    assert records[0]["result"] == {"done": True}
+    assert records[0]["execution_snapshot"] == {"version": 1}
+    assert not any(key.startswith("_") for key in records[0])
+    records[0]["inputs"]["folder"] = "mutated"        # the caller's copy is safe
+    return {"metrics": {"score": 0.5}, "records": [{"id": "folder-A", "score": 0.5}],
+            "coverage": {"unit": "folders", "total": 1, "scored": 1, "unscored": 0}}
+'''
+
+
+def test_evaluation_code_receives_all_saved_nodes_and_can_aggregate(monkeypatch):
+    graph = graph_with_evaluator('batch', AGGREGATE)
+    graph['evaluators'][0]['metric'] = 'score'
     runs = [{'run_id': 'one', 'inputs': {'folder':'A'}, 'status':'success',
              'result': {'done':True}, 'nodes':[{'name':'unconnected','status':'success'}],
              'node_outputs': {'work':{'answer':'yes'},'unconnected':{'text':'x'*2000}},
-             'execution_snapshot': {'version':1}},
+             'execution_snapshot': {'version':1}, '_private': 'runtime'},
             {'run_id':'two','inputs':{'folder':'A'},'status':'failed','error':'boom','node_outputs':{}}]
     original = copy.deepcopy(runs)
-    def call(name, args):
-        assert name == 'custom'
-        rows = args['records']
-        assert len(rows) == 2 and rows[1]['error'] == 'boom'
-        assert rows[0]['node_outputs']['unconnected']['text'] == 'x'*2000
-        assert rows[0]['nodes'][0]['status'] == 'success'
-        assert rows[0]['result'] == {'done':True}
-        assert rows[0]['execution_snapshot'] == {'version':1}
-        assert rows[0]['focus'][0]['source'] == 'work'
-        rows[0]['inputs']['folder'] = 'mutated'
-        return {'metrics':{'score':0.5}, 'records':[{'id':'folder-A','score':0.5}],
-                'coverage':{'unit':'folders','total':1,'scored':1,'unscored':0}}
-    monkeypatch.setattr(tools_registry, 'call_tool', call)
     result = evaluator_tools.evaluate_runs(graph, runs)['quality']
-    assert result['status'] == 'success'
+    assert result['status'] == 'success', result.get('error')
     assert result['coverage']['total'] == 1
     assert runs == original
 
 
-def test_separate_labels_are_passed_unjoined_to_custom_tool(client, monkeypatch):
+LABELS = '''def evaluate(records, label_records=None):
+    """Duplicate label keys are the code's business, not the platform's."""
+    assert len(label_records) == 2
+    assert records[0]["inputs"] == {"folder": "A"}
+    return {"metrics": {"score": 1}, "details": {"matched": True}}
+'''
+
+
+@pytest.mark.parametrize('labels', ['resource_id', {'resource_id': None, 'loader': 'auto'}])
+def test_separate_labels_are_passed_unjoined_to_the_code(client, labels):
     resource = upload(client,[('labels.json',b'[{"key":"A","expected":1},{"key":"A","expected":2}]')])
-    graph = graph_with_evaluator('batch','tool')
-    graph['tasks'][-1]['evaluator'].update(tool='custom',labels={'resource_id':resource['id']})
-    def call(name, args):
-        assert len(args['config']['label_records']) == 2
-        assert args['records'][0]['inputs'] == {'folder':'A'}
-        return {'metrics':{'score':1},'details':{'matched':True}}
-    monkeypatch.setattr(tools_registry,'call_tool',call)
+    graph = graph_with_evaluator('batch', LABELS)
+    graph['evaluators'][0].update(metric='score',
+        labels=resource['id'] if labels == 'resource_id' else {**labels, 'resource_id': resource['id']})
     result = evaluator_tools.evaluate_runs(graph,[{'inputs':{'folder':'A'},'status':'success'}])['quality']
-    assert result['status'] == 'success'
+    assert result['status'] == 'success', result.get('error')
     assert 'coverage' not in result
+    # The report keeps the setting, never the label rows.
+    assert 'label_records' not in result['config']['config']
 
 
 def test_custom_evaluator_allows_metrics_without_record_scores(monkeypatch):
@@ -174,7 +215,7 @@ def test_canvas_evolution_validates_candidates_and_keeps_best(monkeypatch):
         return 'good' if candidate['tasks'][0]['prompt']=='new' else 'bad'
     monkeypatch.setattr(runner,'start_run',start)
     monkeypatch.setattr(runner,'get_run',lambda id: {'status':'success','node_outputs':{'work':{'answer': 'yes' if id=='good' else 'no'}},'nodes':[]})
-    monkeypatch.setattr(runner,'_make_llm',lambda: object())
+    monkeypatch.setattr(runner,'_make_llm',lambda **kw: object())
     def propose(candidate,records,chosen,llm,feedback=None,**kwargs):
         assert feedback['metrics']['score']==0
         result=copy.deepcopy(candidate);result['tasks'][0]['prompt']='new'
@@ -200,7 +241,7 @@ def test_registered_tool_dispatch_uses_component_contract(client):
 def test_resource_delete_blocked_by_label_reference(client):
     resource = upload(client,[('labels.json',b'[{"id":"A","expected":1}]')])
     graph=graph_with_evaluator()
-    graph['tasks'][-1]['evaluator']['labels']={'resource_id':resource['id']}
+    graph['evaluators'][0]['labels']=resource['id']
     graphs.GRAPHS_DIR.mkdir(parents=True,exist_ok=True)
     (graphs.GRAPHS_DIR/'example.json').write_text(json.dumps(graph))
     assert client.delete('/api/data-resources/'+resource['id']).status_code == 409
@@ -238,8 +279,14 @@ def test_saved_evolve_uses_canvas_evaluator_instead_of_legacy_metric(client,monk
     assert response.status_code==200,response.text
     assert captured[0][2]=='canvas:quality'
     assert captured[0][3]['evaluator']=='quality'
+    # Evolve's own objective format for the same evaluator.
+    prefixed=client.post('/api/graphs/loader-evaluation/evolve',json={'source':'saved_run','run_id':'run-test','evaluator':'canvas:quality','mode':'evaluate'})
+    assert prefixed.status_code==200,prefixed.text
+    assert captured[1][2]=='canvas:quality' and captured[1][3]['evaluator']=='quality'
     scored=canvas_evolution.score_saved(graph,captured[0][1],'quality')
     assert scored['metrics']['score']==1
+    # Evolve's own wire format for the objective is accepted too.
+    assert canvas_evolution.score_saved(graph,captured[0][1],'canvas:quality')['metrics']['score']==1
 
 
 def test_shared_reference_is_available_to_loader_preprocessor(client,monkeypatch):
@@ -304,30 +351,29 @@ def test_api_dataloader_batch_and_canvas_evaluator_end_to_end(client,monkeypatch
     result=batch.get_batch(batch_id)
     assert result['status']=='succeeded',result
     evaluation=result['evaluations']['quality']
-    assert evaluation['coverage']=={'total':3,'scored':2,'unscored':1}
+    assert evaluation['coverage']=={'unit':'records','total':3,'scored':2,'unscored':1}
     assert evaluation['metrics']['accuracy']==0.5
-    report=client.post('/api/evaluators/graphs/'+graph['id']+'/saved',json={'batch_id':batch_id})
+    report=client.post('/api/graphs/'+graph['id']+'/evaluators/run',json={'batch_id':batch_id})
     assert report.status_code==200,report.text
     assert report.json()['evaluations']['quality']['metrics']['accuracy']==0.5
 
 
-def test_custom_evaluator_run_receives_final_result_without_private_runtime(monkeypatch):
-    graph = graph_with_evaluator('run', 'tool')
-    graph['tasks'][-1]['evaluator'].update(tool='custom')
-    monkeypatch.setattr(tools_registry,'find_tool',lambda name: {})
-    monkeypatch.setattr(tools_registry,'validate_tool_names',lambda names:None)
-    def call(name,args,**kwargs):
-        if name != 'custom':
-            return args['text']
-        record = args['records'][0]
-        assert record['result'] == {'answer':'hello'}
-        assert record['node_outputs']['work'] == {'answer':'hello'}
-        assert not any(k.startswith('_') for k in record)
-        return {'metrics':{'score':1}}
-    monkeypatch.setattr(tools_registry,'call_tool',call)
+FINAL_RESULT = '''def evaluate(records):
+    record = records[0]
+    assert record["result"] == {"answer": "hello"}
+    assert record["node_outputs"]["work"] == {"answer": "hello"}
+    assert not any(key.startswith("_") for key in record)
+    return {"metrics": {"score": 1}}
+'''
+
+
+def test_evaluation_code_receives_the_final_result_without_private_runtime(monkeypatch):
+    mock_tool(monkeypatch)
+    graph = graph_with_evaluator('run', FINAL_RESULT)
+    graph['evaluators'][0]['metric'] = 'score'
     run_id = runner.start_run(graph, {'text':'hello'}, background=False)
     run = runner.get_run(run_id)
-    assert run['evaluations']['quality']['status'] == 'success'
+    assert run['evaluations']['quality']['status'] == 'success', run['evaluations']['quality'].get('error')
     scored = canvas_evolution.score_saved(graph, [run], 'quality')
     assert scored['metrics'] == {'score':1}
     assert scored['records'] == {}

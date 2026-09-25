@@ -183,7 +183,6 @@ Repository = "https://github.com/EvoAgentX/EvoAgentX"
 
 [tool.setuptools.package-dir]
 evoagentx = "backend/evoagentx"
-llm = "backend/llm"
 memory = "backend/memory"
 credit_risk = "projects/credit_risk"
 
@@ -191,3 +190,9 @@ credit_risk = "projects/credit_risk"
 where = [".", "backend", "projects"]
 include = ["backend", "backend.api*", "evoagentx*", "llm*", "memory*", "credit_risk*", "projects"]
 exclude = ["credit_risk.dataset*", "credit_risk.output*"]
+
+# `llm` is a package at the repository root (not under backend/), so it needs
+# no package-dir entry -- but its provider configuration is data and has to
+# travel with it, or an installed copy has no providers to select from.
+[tool.setuptools.package-data]
+llm = ["providers.json"]

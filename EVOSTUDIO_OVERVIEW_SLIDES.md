@@ -103,7 +103,8 @@ backend/features/         Workflow, execution, chat, agents, memory,
                           data, evaluation, library, and workspace
         │
 backend/evoagentx/         Agent and workflow framework
-backend/llm/              Central model-provider integration boundary
+llm/                      Central model-provider integration boundary
+                          (standalone package at the repository root)
 backend/memory/           Memory storage adapters
 
 projects/                 Domain code, skills, datasets, and documentation

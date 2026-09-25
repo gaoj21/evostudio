@@ -117,47 +117,25 @@ PLAN = {_py(steps)}
 
 
 def load_llm():
-    """Build the LLM.
+    """The model every task in this workflow uses.
 
-    Prefers the bundled provider layer (vendor/llm/providers.json), which is
-    how the rest of this project selects a model — set EAX_PROVIDER to pick a
-    non-default one. Falls back to a single endpoint from EAX_MODEL /
-    EAX_API_KEY when that layer or its config is unavailable.
+    One path only: the bundled `llm` package (vendor/llm) decides where a
+    model call goes, and vendor/model_bridge.py — the same bridge Studio
+    uses — presents it as the model class the framework instantiates. This
+    file names no provider, no endpoint and no SDK: which provider is used
+    comes from vendor/llm/providers.json and the environment (EAX_PROVIDER,
+    or LLM_PROVIDER), and the secrets from that provider's own variables.
     """
-    from evoagentx.models import LiteLLM, LiteLLMConfig
+    from model_bridge import workflow_model
 
-    if not os.environ.get("EAX_MODEL"):
-        try:
-            from llm import get_evoagentx_llm
-
-            return get_evoagentx_llm(os.environ.get("EAX_PROVIDER") or None)
-        except Exception as exc:
-            print(f"[llm] provider layer unavailable ({{exc}}); using EAX_MODEL")
-
-    model = os.environ.get("EAX_MODEL")
-    api_key = os.environ.get("EAX_API_KEY")
-    base_url = os.environ.get("EAX_BASE_URL")
-    if not model or not api_key:
+    try:
+        return workflow_model(os.environ.get("EAX_PROVIDER") or None)
+    except Exception as exc:
         raise SystemExit(
-            "Set EAX_MODEL and EAX_API_KEY (copy .env.example to .env), or "
-            "configure vendor/llm/providers.json. See the README."
+            f"No LLM provider is available: {{exc}}\\n"
+            "Copy .env.example to .env and set the key the provider needs, or "
+            "edit vendor/llm/providers.json. See the README."
         )
-    if base_url:
-        # An explicit endpoint goes through LiteLLM's openai-compatible path.
-        config = LiteLLMConfig(
-            model=model if model.startswith("openai/") else f"openai/{{model}}",
-            api_key=api_key,
-            api_base=base_url,
-        )
-    else:
-        # LiteLLM wants the key under the provider's own field (deepseek_key,
-        # anthropic_key, ...); only some providers fall back to a generic one.
-        prefix = model.split("/")[0]
-        field = f"{{prefix}}_key"
-        if field not in LiteLLMConfig.model_fields:
-            field = "api_key"
-        config = LiteLLMConfig(model=model, **{{field: api_key}})
-    return LiteLLM(config=config)
 
 
 def load_skills(tasks):
@@ -961,8 +939,11 @@ def _readme(name, goal, llm_tasks, tool_nodes, source_nodes, edges,
               "skills/               SKILL.md instruction packs",
               "data/                 sample input (and output, if a run existed)",
               "memory_store/         long-term memory, written as runs happen",
-              "vendor/               evoagentx, the llm and memory layers, and",
-              "                      any project modules the toolkits import",
+              "vendor/evoagentx/     the workflow framework, as this export saw it",
+              "vendor/llm/           the model boundary: every call goes here",
+              "vendor/model_bridge.py  presents vendor/llm as a framework model",
+              "vendor/memory/        the long-term memory layer",
+              "vendor/*.py           any project modules the toolkits import",
               "```", "",
               "`run.py` puts `vendor/` on `sys.path` before anything else, so "
               "the bundled copies win over anything installed system-wide.", ""]
@@ -980,10 +961,22 @@ def _readme(name, goal, llm_tasks, tool_nodes, source_nodes, edges,
         ]
     ltm_tasks = [t["name"] for t in llm_tasks if t.get("use_long_term_memory")]
     lines += ["## Model and memory", "",
-              "The model comes from `vendor/llm/providers.json` (set "
-              "`EAX_PROVIDER` to choose one, keys via `.env`). Setting "
-              "`EAX_MODEL` + `EAX_API_KEY` instead bypasses that layer and "
-              "talks to a single endpoint.", ""]
+              "Every model call this project makes goes through the bundled "
+              "`llm` package under `vendor/llm/`. Nothing else in the project "
+              "names a provider, an endpoint or a vendor SDK — "
+              "`vendor/model_bridge.py` turns that package into the model "
+              "class the framework instantiates.", "",
+              "**To run it you need two things:** the provider you want in "
+              "`vendor/llm/providers.json` (set `EAX_PROVIDER`, or "
+              "`LLM_PROVIDER`, to pick one other than that file's `default`), "
+              "and that provider's environment variables in `.env` — "
+              "`.env.example` lists the ones the default provider needs. "
+              "Pointing this project at a different provider means editing "
+              "`vendor/llm/providers.json` and setting its variables; no "
+              "generated code changes.", "",
+              "`requirements.txt` includes the transport the configured "
+              "provider uses (`litellm`, or `openai` for an "
+              "OpenAI-compatible host).", ""]
     if ltm_tasks:
         lines += [
             "Long-term memory is **on** for "
@@ -1013,6 +1006,7 @@ def _readme(name, goal, llm_tasks, tool_nodes, source_nodes, edges,
     if sample:
         lines += [f"`data/sample_input.json` came from run `{sample['run_id']}`.", ""]
     if model:
-        lines += [f"Exported against model `{model}`; change it in `.env`.", ""]
+        lines += [f"Exported against model `{model}`; change it in "
+                  "`vendor/llm/providers.json`.", ""]
     return "\n".join(lines)
 

@@ -66,11 +66,13 @@ export default function Palette({ templates, sources, graphTemplates, onAdd, onL
   };
   // Presets a project adds carry the group they belong to; each group is its
   // own section, titled as the project names it.
-  const grouped = (templates || []).filter((tpl) => tpl.group);
+  // Evaluation is not a node: it is written as code in Evaluate & Evolve, so
+  // an evaluator entry is never offered here, whatever the palette carries.
+  const entries = (templates || []).filter((tpl) => tpl.defaults?.kind !== 'evaluator');
+  const grouped = entries.filter((tpl) => tpl.group);
   const groups = [...new Set(grouped.map((tpl) => tpl.group))]
     .map((name) => ({ name, entries: grouped.filter((tpl) => tpl.group === name).filter(matches) }));
-  const core = [...(templates || []).filter((tpl) => !tpl.group),
-    {type:'evaluate',label:'Evaluator',description:'Score intermediate or final outputs; use the same objective in Evolve.',defaults:{kind:'evaluator',evaluator:{type:'python',timing:'batch'},inputs:[{name:'prediction',type:'any',required:false},{name:'expected',type:'any',required:false}],outputs:[]}}];
+  const core = entries.filter((tpl) => !tpl.group);
   const filtered = {
     core: core.filter(matches),
     groups: groups.flatMap((g) => g.entries),

@@ -15,8 +15,8 @@ import traceback
 import uuid
 from datetime import datetime, timezone
 
-from llm import get_evoagentx_llm
-
+from backend.features import model_bridge
+from backend.features.execution import token_usage
 from backend.features.persistence import write_json
 from backend.features.chat import chat_control
 from backend.features.memory.identity import execution_snapshot
@@ -58,14 +58,20 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _make_llm():
-    return get_evoagentx_llm()  # default provider from llm/providers.json
+def _make_llm(usage_key: str | None = None):
+    """The one place a run's model is built: the `llm` package, via the bridge.
+
+    Every call the returned model makes — and every call an agent the
+    framework clones from its config makes — goes through the package and
+    reports its usage to `usage_key`. Tests replace this seam wholesale.
+    """
+    return model_bridge.workflow_model(usage_key=usage_key)
 
 
 def _model_for_run(state):
     from backend.features.execution.provider_batch import validate
     validate({}, state.get('llm_batch_size'))
-    return _make_llm()
+    return _make_llm(usage_key=token_usage.usage_key(state))
 
 
 
@@ -647,14 +653,6 @@ async def _walk(plan: dict, graph_doc: dict, inputs: dict, state: dict,
                 # A checkpoint of what has been spent, should the process die
                 # before the run settles; the live endpoints read memory.
                 _persist_run(state)
-            from backend.features.evaluation import evaluator_tools
-            immediate = [t['name'] for t in graph_doc.get('tasks', []) if t.get('kind') == 'evaluator'
-                         and evaluator_tools.timing_of(t.get('evaluator')) == 'node'
-                         and t['name'] not in state.get('evaluations', {})
-                         and all(e['source'] in values for e in graph_doc.get('edges', []) if e.get('target') == t['name'])]
-            if immediate:
-                state.setdefault('evaluations', {}).update(evaluator_tools.evaluate_runs(
-                    graph_doc, [{**_public(state), 'status': 'success'}], immediate))
         except Exception as e:
             status[name]["status"] = "failed"
             status[name]["output"] = {"error": (getattr(e, "message", None) or str(e))[:500]}
@@ -721,8 +719,7 @@ def _execute_run(run_id: str, graph_doc: dict, inputs: dict) -> None:
                 node = one.nodes[0]
                 framework_nodes.append(node)
                 agents[node.name] = _agent_for_node(agent_manager, node)
-                from backend.features.execution.token_usage import attach_model
-                attach_model(agents[node.name].llm, state)
+                token_usage.attach_usage(agents[node.name].llm, state.get('_usage_key'))
                 if state.get('llm_batch_size'):
                     from backend.features.execution.provider_batch import attach_workflow_model
                     attach_workflow_model(agents[node.name].llm, state)
@@ -797,6 +794,7 @@ def _execute_run(run_id: str, graph_doc: dict, inputs: dict) -> None:
                 # real outputs, and what went wrong is often the thing to keep.
                 _save_ltm(graph_doc, memories, graph, env, state, succeeded=False)
     finally:
+        token_usage.release_usage(state)
         persisted = _persist_run(state)
         if not persisted:
             state["persistence_error"] = "Run completed in memory but could not be saved. Restore disk access before recovery."
@@ -1340,11 +1338,28 @@ def _public(state: dict) -> dict:
             {**n, "status": live.get(n["name"], n["status"])}
             for n in out["nodes"]
         ]
-    evaluations = out.get('evaluations') or {}
-    out['nodes'] = [({**node, 'status': 'completed' if evaluations[node['name']].get('status') == 'success' else 'failed',
-                     'output': evaluations[node['name']]} if node['name'] in evaluations else node)
-                    for node in out.get('nodes', [])]
     return out
+
+
+def set_evaluations(run_id: str, reports: dict) -> dict | None:
+    """Keep evaluator reports computed later (on a saved run) with that run,
+    beside the ones the run itself produced, and persist them."""
+    with _lock:
+        state = _runs.get(run_id)
+        if state is not None:
+            state['evaluations'] = {**(state.get('evaluations') or {}), **reports}
+            _persist_run(state)
+            return _public(state)
+    stored = _read_run(run_id)
+    if stored is None:
+        return None
+    stored['evaluations'] = {**(stored.get('evaluations') or {}), **reports}
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        write_json(RUNS_DIR / f"{run_id}.json", stored)
+    except OSError:
+        return stored
+    return stored
 
 
 def apply_review_outcome(run_id: str, outcome: dict) -> None:

@@ -86,9 +86,9 @@ Do not infer connections just because field names match.
 
 DataLoader source: {"kind":"source","source":{"type":"dataloader","resource_id":"uploaded resource ID","loader":"python","code":"<build_dataset(resource, config) returning a PyTorch Dataset>","n":0},"outputs":[...]}. Uploaded resources are chosen by the user. Never invent resource IDs. Loader owns transforms, selection and order; Run owns execution settings. Create new DataLoader inputs only with loader="python". Legacy reader modes are for existing saved inputs only. All loader modes use PyTorch DataLoader with drop_last=False and dictionary-preserving collation. For pasted Python use loader="python", code defining build_dataset(resource, config) returning torch.utils.data.Dataset or IterableDataset, and read_batch_size. Prefer named typed build_dataset arguments (resource, path: str, split: str = "dev") so Studio can generate the input form; resource is automatic. Legacy config keys are also supported. Each item must be a JSON-compatible dictionary; do not return an already batched DataLoader. Preview determines output fields and types, never guess them. Code is saved on the Input, not in the model adapter.
 New reusable Python tools may define build_tool(typed configuration parameters), returning an object with synchronous run(inputs). Declare literal INPUT_SCHEMA and OUTPUT_SCHEMA lists of {name,type,required,nullable}; types use str/int/float/bool/dict/list. Only the factory is exported under the saved tool name; other functions/classes are internal. Config is shared by canvas, Agent and Chat callers. Existing function toolkits remain supported.
-Evaluator: {"kind":"evaluator","evaluator":{"type":"python","timing":"batch","code":"def build_evaluator(threshold: float = 0.5):\n    return MyEvaluator(threshold)  # an object with evaluate(self, records) returning {\"metrics\": {...}}","config":{},"metric":"<metric the code returns>"},"inputs":[],"outputs":[]}. An evaluator is the user's own Python code: always create type=python (build_evaluator(...) returning an object with evaluate(records), or legacy evaluate(records, ...)); never create exact_match, contains or required_fields, which only remain for old graphs. Connect workflow outputs to it with field mappings when its code wants a mapped prediction. Timings are node (needs incoming connections)/run/batch. Users can upload .py code and preview its returned metrics on saved runs/batches in the Inspector without rerunning agents. Keep existing registered type=tool evaluators compatible. Python evaluators and tools receive complete saved executions (inputs, result, all nodes and node_outputs, status/errors, execution_snapshot, focus), even for unconnected nodes. Tools own grouping and aggregation; return metrics with optional details/records and optional coverage declaring its unit. Never impose trajectory aggregation. Evaluators cannot feed workflow nodes. Evolve selects an evaluator as an objective, not via an outgoing edge.
+Evaluation is not on the canvas. A workflow's evaluators live in the Evaluate & Evolve panel (the graph document's "evaluators" list, each {name, code, config, metric, direction, timing, timeout, labels, enabled}), never as a node. Never create a node of kind "evaluator" and never connect anything to one. If the user asks for evaluation, say that it is written as Python code in Evaluate & Evolve: build_evaluator(**typed parameters) returning an object with evaluate(records), or evaluate(records, **typed parameters), returning {"metrics": {name: number}} with optional records, details and coverage. The code receives complete saved executions (inputs, result, all nodes and node_outputs, status/errors, execution_snapshot) and owns its own grouping and aggregation. Evolve selects one of those evaluators as its objective.
 
-Four kinds of node:
+Three kinds of node:
 
 1. LLM task (the default, no `kind` field) -- calls the model.
    {"name": "detect", "description": "...", "prompt": "...", \
@@ -106,7 +106,6 @@ are appended to this node's system prompt at run time.
 input data at run start. Do not invent source types.
 3. Tool node -- `{"kind": "tool", "tool": "<sub-tool name>"}`. Deterministic, \
 no LLM call. Its inputs are the tool's parameters. It can consume explicitly mapped outputs from sources, tools or LLM tasks.
-4. Evaluator node -- described above; a terminal evaluation branch, not a workflow data producer.
 
 Names must be lowercase identifiers (letters, digits, underscore).
 
@@ -353,14 +352,14 @@ def _workflow_from_goal(goal: str, on_stage=None) -> dict:
     One generated agent per node: the canvas has a single prompt per task, and
     the generated agent already carries the prompt, inputs and outputs.
     """
-    from llm import get_evoagentx_llm
+    from backend.features.model_bridge import workflow_model
     from evoagentx.workflow.workflow_generator import WorkFlowGenerator
 
     def stage(text):
         if on_stage:
             on_stage(text)
 
-    generator = WorkFlowGenerator(llm=get_evoagentx_llm())
+    generator = WorkFlowGenerator(llm=workflow_model())
     stage("Planning the tasks…")
     plan = generator.generate_plan(goal=goal)
     workflow = generator.build_workflow_from_plan(goal=goal, plan=plan)
@@ -802,8 +801,8 @@ def _ask(messages: list) -> str:
             return chat_control.worker('model', {'messages': messages})
         except Exception as exc:
             raise ChatError(str(exc)) from exc
+    from llm import ProviderError
     from llm import chat as llm_chat
-    from llm.registry import ProviderError
 
     try:
         return llm_chat(None, messages)

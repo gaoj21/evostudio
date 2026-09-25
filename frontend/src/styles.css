@@ -3246,6 +3246,9 @@ button.run-badge:hover:not(:disabled) {
    on the way out. */
 .evolve-form section { margin-bottom: 14px; }
 .evolve-form h4 { margin: 0 0 6px; font-size: 13px; }
+/* Evaluate: write the code, read its parameters, try it, keep it. */
+.evaluate-panel section { margin-bottom: 16px; }
+.evaluate-panel h4 { margin: 0 0 6px; font-size: 13px; }
 .evolve-nodes { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 4px; }
 .evolve-node { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; cursor: pointer; }
 .evolve-presets { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }

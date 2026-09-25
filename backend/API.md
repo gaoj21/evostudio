@@ -115,8 +115,38 @@ A metric that raises marks that one item unscored with the reason and leaves
 the rest of the batch alone — the runs themselves succeeded and are worth
 keeping, and `unscored` reports how many did not get a number.
 
-Canvas Evaluator nodes (`/api/evaluators/*`, see
-`backend/features/evaluation/README.md`) are the main way to evaluate.
+### Evaluators
+
+Evaluation is not on the canvas. A workflow's evaluators are the user's own
+Python code kept on the graph document as
+`graph["evaluators"] = [{name, code, config, metric, direction, timing,
+timeout, labels, enabled}]` (`timing`: `manual` | `run` | `batch`; `timeout`
+10–3600s; validated on save the way `review` is). A `PUT /api/graphs/{id}`
+body that omits `evaluators` keeps the stored list. An old
+`kind: "evaluator"` node is lifted into the list on load
+(`graphs.migrate_flow`, `FLOW_VERSION = 3`; the old `node` timing becomes
+`run`) and its node and edges are dropped.
+
+- `GET /api/evaluators` → entrypoints, timings, defaults, example code.
+- `POST /api/evaluators/interface` → `{"code"}` → `{kind:
+  "factory"|"function", params: [{name, type, required, default,
+  description}], provided, warnings, error}`. Nothing is executed; a code
+  error comes back in `error` with HTTP 200.
+- `GET|PUT /api/graphs/{id}/evaluators` → `{"evaluators": [...]}`. PUT
+  replaces the list and returns it; 422 names what is wrong.
+- `DELETE /api/graphs/{id}/evaluators/{name}` → `{"evaluators": [...]}`.
+- `POST /api/graphs/{id}/evaluators/preview` →
+  `{code, config, metric?, labels?, batch_id|run_id}` →
+  `{"report", "execution_count", "metrics": [{name, type, nullable, sample}]}`.
+  Nothing is saved, nothing is re-run.
+- `POST /api/graphs/{id}/evaluators/run` →
+  `{name|names, or code+config, batch_id|run_id}` →
+  `{"evaluations": {name: report}}`, kept with that batch or run.
+- `GET|PUT|DELETE /api/graphs/{id}/evaluators/draft` →
+  `{"draft": {code, config, updated_at}}` — one pasted draft per workflow,
+  never validated, never run, kept across a restart, cleared when the same
+  code is saved as an evaluator.
+
 `evaluator_tools.evaluate_runs` validates and runs each evaluator inside its
 own `try`: a misconfigured or failing evaluator reports
 `{"status": "failed", "error": ...}` in its own report and never fails the
@@ -275,11 +305,11 @@ a MIPRO task also writes `best_program.json` (framework graph save).
 - `GET /api/evolve/presets` → `{"presets": [{name, label, blurb,
   num_candidates, max_steps}]}` (`quick`, `standard`, `thorough`).
 - `POST /api/graphs/{id}/evolve` → `{"task_id"}`. Body shapes:
-  - JSON `{"source": "canvas", "evaluator": "<evaluator node>", "mode":
+  - JSON `{"source": "canvas", "evaluator": "<evaluator name>", "mode":
     "evaluate"|"evolve_evaluate", "nodes"?: [...], "rounds"?: 1-10}` —
     replays the canvas Input's records through the actual workflow and scores
-    them with that canvas Evaluator (a Python evaluator must have its
-    objective metric chosen). Records run with the same ordering as a batch
+    them with that evaluator of the workflow (its objective metric must be
+    chosen). `evaluator` accepts `canvas:<name>` as well as a bare `<name>`. Records run with the same ordering as a batch
     (`assign_sequences` / `_group_key`): trajectories run in order and a
     failure blocks the rest of its trajectory. Mem0-backed long-term memory
     is refused (candidates need isolated memory).
@@ -680,9 +710,15 @@ graph has no rule). No tkinter — pure web polling.
 
   Not reproduced (and stated in the generated README): **source nodes** — their
   feeds live in Studio, so their outputs become declared inputs the caller
-  supplies — and **long-term memory** / HITL review. The exported project reads
-  `EAX_MODEL` / `EAX_API_KEY` / optional `EAX_BASE_URL` from the environment
-  rather than `llm/providers.json`.
+  supplies — and **long-term memory** / HITL review.
+
+  The exported project reaches a model exactly as Studio does: the `llm`
+  package is vendored at `vendor/llm/` and `vendor/model_bridge.py` presents
+  it as the framework's model class, so `workflow.py` names no provider, no
+  endpoint and no SDK. To run it you set the provider's environment variables
+  (`.env.example` lists the ones the configured provider needs) and, if you
+  want a provider other than that file's `default`, `EAX_PROVIDER` — or you
+  edit `vendor/llm/providers.json`. There is no second path.
 
 ### Import a project back
 
@@ -849,9 +885,14 @@ backend parses, validates and applies itself.
   (`node.status`, values pending/running/completed/failed).
 - Node output captured after run from the workflow `Environment`
   execution data (best effort per node output name).
-- LLM: `LiteLLM(LiteLLMConfig(model="deepseek/deepseek-v4-flash",
-  deepseek_key=os.getenv("DEEPSEEK_API_KEY"), timeout=120))`,
-  `load_dotenv()` from repo root.
+- LLM: `backend.features.model_bridge.workflow_model()`. Every model call in
+  the backend goes through the standalone `llm` package (`llm/README.md`);
+  nothing in `backend/` or `frontend/` names a provider, imports a provider
+  SDK or reads a provider's response. Which provider is used comes from
+  `llm/providers.json` and `EAX_PROVIDER`/`LLM_PROVIDER`; secrets come from
+  that provider's own environment variables, loaded from the repo-root `.env`.
+  Token usage is what `LLMResult.usage` reported, delivered to the run's
+  `model_bridge.usage_hook`, and priced by `llm.UsageTracker`.
 - Graph construction: `SequentialWorkFlowGraph(goal=..., tasks=[{...without
   x/y...}])` with tasks ordered by topological sort of edges (input order
   breaks ties). Agents via `AgentManager().add_agents_from_workflow(graph,

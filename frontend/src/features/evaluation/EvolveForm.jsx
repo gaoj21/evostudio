@@ -32,8 +32,13 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
     api.evolvePresets().then((r) => setPresets(r.presets || [])).catch(() => setPresets([]));
     if (graphId) {
       api.getGraph(graphId)
-        .then((g) => { setNodes((g.tasks || []).filter((t) => !['source', 'tool', 'evaluator'].includes(t.kind)).map((t) => t.name)); setEvaluators((g.tasks || []).filter(t=>t.kind==='evaluator' && t.enabled!==false)); })
+        .then((g) => setNodes((g.tasks || []).filter((t) => !['source', 'tool'].includes(t.kind)).map((t) => t.name)))
         .catch(() => setNodes([]));
+      // The objective is one of the workflow's saved evaluators, written in
+      // Evaluate; the canvas has no evaluator to choose.
+      api.graphEvaluators(graphId)
+        .then((r) => setEvaluators((Array.isArray(r) ? r : r.evaluators || []).filter((e) => e.enabled !== false)))
+        .catch(() => setEvaluators([]));
     }
   }, [graphId]);
 
@@ -104,14 +109,14 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
             </label>
           ))}
         </div>
-        {(savedSource || source === 'canvas') && <div className="field"><label htmlFor="canvas-evaluator">Canvas evaluator</label><select id="canvas-evaluator" value={evaluator} onChange={e=>setEvaluator(e.target.value)}><option value="">{source === 'canvas' ? 'Choose an evaluator' : 'Use existing metric'}</option>{evaluators.map(t=><option key={t.name} value={t.name}>{t.name} · {t.evaluator?.type}</option>)}</select></div>}
+        {(savedSource || source === 'canvas') && <div className="field"><label htmlFor="canvas-evaluator">Objective evaluator</label><select id="canvas-evaluator" value={evaluator} onChange={e=>setEvaluator(e.target.value)}><option value="">{source === 'canvas' ? 'Choose an evaluator' : 'Use existing metric'}</option>{evaluators.map(t=><option key={t.name} value={t.name}>{t.name}{t.metric ? ` · ${t.metric}` : ' · no metric chosen'}</option>)}</select>{evaluators.length === 0 && <small className="muted" data-testid="no-saved-evaluators">No saved evaluators. Write one in Write evaluator first.</small>}</div>}
         {source === 'canvas' && !evaluationOnly && <div className="field"><label htmlFor="canvas-rounds">Candidate rounds</label><input id="canvas-rounds" type="number" min="1" max="10" value={rounds} onChange={e=>setRounds(e.target.value)} /></div>}
         <h4>1 · {evaluationOnly ? 'Data to evaluate' : 'Data to learn from'}</h4>
         <div className="evolve-grid">
           <div className="field">
             <label htmlFor="evolve-source">Source</label>
             <select id="evolve-source" value={source} onChange={(e) => setSource(e.target.value)}>
-              <option value="canvas">Canvas DataLoader + Evaluator — run workflow</option>
+              <option value="canvas">Canvas Input + saved evaluator — run workflow</option>
               <option value="saved_batch">Saved batch results — no workflow rerun</option>
               <option value="saved_run">Saved run result — no workflow rerun</option>
               <option value="upload">Upload JSON / JSONL — rerun workflow</option>
@@ -129,7 +134,7 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
             {selection && <p role="status">{selection.matched_records} matching records{selection.note ? ` · ${selection.note}` : ''}</p>}
             {selection?.scoring && <p role="status">{selection.scoring.scored} records can be scored · {selection.scoring.unscored} unscored. {selection.scoring.scored === 0 && 'Choose the expected-answer field and metric before evaluating.'}</p>}
             <div className="field"><label htmlFor="evolve-label-key">Expected-answer field (optional)</label><input id="evolve-label-key" value={labelKey} onChange={e => setLabelKey(e.target.value)} placeholder="Uses saved labels when available" /></div>
-          </> : source === 'canvas' ? <p className="muted small">Uses the Input configuration and attached evaluator. Prepares data once; each candidate starts with empty isolated workflow memory. This runs the workflow and may call tools and models.</p> : (
+          </> : source === 'canvas' ? <p className="muted small">Uses the Input configuration and the chosen saved evaluator. Prepares data once; each candidate starts with empty isolated workflow memory. This runs the workflow and may call tools and models.</p> : (
             <div className="field">
               <label htmlFor="evolve-file">File</label>
               <input id="evolve-file" type="file" accept=".json,.jsonl" onChange={(e) => setFile(e.target.files?.[0] || null)} />

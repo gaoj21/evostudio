@@ -13,15 +13,12 @@ from types import SimpleNamespace
 import pytest
 
 
-class _Model:
-    """A model whose response hook the Studio observes, as a real adapter's."""
-
-    def _update_cost(self, response):
-        return None
-
-
-def _response(prompt, completion):
-    return SimpleNamespace(usage=SimpleNamespace(prompt_tokens=prompt, completion_tokens=completion))
+def _result(prompt, completion):
+    """What the `llm` package returns for one call."""
+    from llm import LLMResult, LLMUsage
+    return LLMResult(content="ok", provider="test", model="test-model",
+                     usage=LLMUsage(input_tokens=prompt, output_tokens=completion,
+                                    total_tokens=prompt + completion))
 
 
 def _wait(predicate, timeout=10):
@@ -36,25 +33,35 @@ def _wait(predicate, timeout=10):
 
 @pytest.fixture
 def engine(studio_data, monkeypatch):
-    """The real run engine; each LLM node reports usage, then waits to be let go."""
-    from evoagentx.models import LiteLLMConfig
+    """The real run engine and the real bridge model; only the package's call
+    is replaced, so each node's usage travels the way a real call's does."""
     from backend.api import runner, tools_registry
+    from backend.features import model_bridge
     gates: dict[str, threading.Event] = {}
     reported: list[str] = []
+    models: list = []
+
+    monkeypatch.setattr(model_bridge, "chat_result",
+                        lambda provider, messages, **options: _result(10, 5))
 
     async def fake_llm(agent, task, inputs, state):
-        agent.llm._update_cost(_response(10, 5))
+        # One model call, through the bridge and the package, as a node makes it.
+        agent.llm.single_generate([{"role": "user", "content": task["name"]}])
         reported.append(task["name"])
         gate = gates.setdefault(f"{state['run_id']}:{task['name']}", threading.Event())
         await asyncio.to_thread(gate.wait, 10)
         return {o["name"]: "ok" for o in task.get("outputs") or []}
 
-    class StubLLM:
-        config = LiteLLMConfig(model="deepseek/deepseek-chat", deepseek_key="test-only")
+    real_make_llm = runner._make_llm
+
+    def make_llm(**kwargs):
+        models.append(real_make_llm(**kwargs))
+        return models[-1]
 
     monkeypatch.setattr(runner, "execute_llm_node", fake_llm)
-    monkeypatch.setattr(runner, "_make_llm", lambda: StubLLM())
-    monkeypatch.setattr(runner, "_agent_for_node", lambda manager, node: SimpleNamespace(llm=_Model()))
+    monkeypatch.setattr(runner, "_make_llm", make_llm)
+    monkeypatch.setattr(runner, "_agent_for_node",
+                        lambda manager, node: SimpleNamespace(llm=models[-1]))
     monkeypatch.setattr(runner, "_prepare_ltm", lambda doc, ordered, inputs, state: ({}, ordered))
     monkeypatch.setattr(runner, "_attach_ltm", lambda *a, **k: None)
     monkeypatch.setattr(runner, "_save_ltm", lambda *a, **k: None)
@@ -69,7 +76,8 @@ def engine(studio_data, monkeypatch):
         for gate in gates.values():
             gate.set()
 
-    yield SimpleNamespace(release=release, release_all=release_all, reported=reported, gates=gates)
+    yield SimpleNamespace(release=release, release_all=release_all, reported=reported,
+                          gates=gates, models=models)
     release_all()
 
 
@@ -173,13 +181,13 @@ def test_a_session_retry_does_not_count_the_previous_attempt_as_live(batches, mo
 
 def test_provider_batch_results_report_usage_as_they_arrive(monkeypatch):
     from concurrent.futures import Future
-    from langchain_core.messages import AIMessage
+    from llm import LLMResult, LLMUsage
     from backend.features.execution import provider_batch
 
     def submit(messages, state, **kwargs):
         future = Future()
-        future.set_result(AIMessage(content="hi", usage_metadata={
-            "input_tokens": 7, "output_tokens": 3, "total_tokens": 10}))
+        future.set_result(LLMResult(content="hi", usage=LLMUsage(
+            input_tokens=7, output_tokens=3, total_tokens=10)))
         return future
 
     monkeypatch.setattr(provider_batch, "validate", lambda graph, value: None)
@@ -202,14 +210,25 @@ def _done(value):
     return future
 
 
-def test_a_model_moved_to_another_run_counts_only_there():
-    from backend.features.execution.token_usage import attach_model
-    model, first, second = _Model(), {}, {}
-    attach_model(model, first)
-    attach_model(model, second)
-    model._update_cost(_response(2, 1))
-    assert first == {}
+def test_each_run_counts_only_its_own_calls_and_nothing_after_it_settles(monkeypatch):
+    """The hook is per run and released with it: a call made afterwards is
+    counted nowhere rather than into the run that has already been reported."""
+    from backend.features import model_bridge
+    from backend.features.execution import token_usage
+    first, second = {}, {}
+    first_key = token_usage.usage_key(first)
+    second_key = token_usage.usage_key(second)
+    assert first_key != second_key
+
+    model_bridge._report(second_key, _result(2, 1))
+    assert first == {"_usage_key": first_key}
     assert second["token_usage"]["total_tokens"] == 3
+
+    token_usage.release_usage(second)
+    model_bridge._report(second_key, _result(5, 5))
+    assert second["token_usage"]["total_tokens"] == 3
+    assert "_usage_key" not in second
+    token_usage.release_usage(first)
 
 
 def test_an_evolve_task_shows_its_in_flight_run(monkeypatch):

@@ -10,7 +10,8 @@ def resources(graph_id):
     from backend.api import graphs
     graph = graphs.load_graph(graph_id) or {}
     referenced = {(t.get('source') or {}).get('resource_id') for t in graph.get('tasks', [])}
-    referenced.update(((t.get('evaluator') or {}).get('labels') or {}).get('resource_id') for t in graph.get('tasks', []))
+    from backend.features.evaluation.evaluator_tools import label_resource_ids
+    referenced.update(label_resource_ids(graph))
     return [r for r in data_resources.listing()['resources'] if r.get('graph_id') == graph_id or graph_id in (r.get('workspace_graph_ids') or []) or r['id'] in referenced]
 
 

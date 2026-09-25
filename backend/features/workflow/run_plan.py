@@ -44,7 +44,7 @@ def _kind(task: dict) -> str:
 
 def _does_work(task: dict) -> bool:
     """A source only yields data; the run has to reach something that acts on it."""
-    return _kind(task) != "source" and task.get("kind") != "evaluator"
+    return _kind(task) != "source"
 
 
 def _reaches_work(tasks, edges, name: str) -> bool:
@@ -112,7 +112,7 @@ def compile_plan(graph: dict, start_at=None, mode: str = "single") -> dict:
     # A source wired to nothing is skipped by the runner; a plan that listed
     # it would describe a run that does not happen.
     wired = {e.get("source") for e in kept_edges}
-    active = [t for t in ordered if t.get("name") not in parked and t.get("kind") != "evaluator"
+    active = [t for t in ordered if t.get("name") not in parked
               and not (graph_store.is_source_task(t) and t.get("name") not in wired)]
 
     if not any(_does_work(t) for t in active):

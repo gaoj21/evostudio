@@ -46,7 +46,6 @@ export function taskToNode(task, extra = {}) {
       },
     };
   }
-  if (task.kind === 'evaluator') return {id:task.name,type:'evaluator',position:{x:Number(task.x)||0,y:Number(task.y)||0},data:{...task,...extra}};
   if (task.kind === 'tool') {
     return {
       id: task.name,
@@ -164,7 +163,6 @@ export function flowToGraph(graphMeta, nodes, edges) {
             x: Math.round(n.position.x),
             y: Math.round(n.position.y),
           }
-        : n.data.kind === 'evaluator' ? {name:n.id,kind:'evaluator',description:n.data.description || '',evaluator:n.data.evaluator || {},inputs:n.data.inputs || [],outputs:[],enabled:n.data.enabled!==false,x:Math.round(n.position.x),y:Math.round(n.position.y)}
         : n.data.kind === 'tool'
           ? {
               name: n.id,

@@ -53,7 +53,7 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__),
-                                                "..")))  # repo root (llm/)
+                                                "..", "..")))  # repo root (llm/, backend/)
 
 from credit_risk_demo import (  # noqa: E402
     SKILLS_DIR,
@@ -558,8 +558,8 @@ def main():
 
     os.makedirs(STORES_DIR, exist_ok=True)
     prewarm_embedder()  # load bge-small once, in the main thread
-    from llm import get_evoagentx_llm  # noqa: E402
-    llm = get_evoagentx_llm()  # default provider from llm/providers.json
+    from backend.features.model_bridge import workflow_model  # noqa: E402
+    llm = workflow_model()  # default provider from llm/providers.json
     skills = SkillManager(skill_paths=SKILLS_DIR)
     taxonomy = skills.get_skill("credit_risk_taxonomy").content
     rubric = skills.get_skill("risk_scoring_rubric").content

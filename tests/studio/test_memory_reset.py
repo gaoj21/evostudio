@@ -5,6 +5,8 @@ Done by hand it is a thing to forget; here it is a keystroke, and it never
 deletes anything without a copy first.
 """
 
+from pathlib import Path
+
 import pytest
 
 
@@ -92,3 +94,65 @@ def test_a_reset_leaves_the_table_store_able_to_write_again(stores):
     table_store.upsert("g1", "decide", "Acme", "2026-02-01", {"outputs": {"d": 3}}, "t")
     rows = table_store.rows("g1", "decide", "Acme")
     assert [r["payload"]["outputs"]["d"] for r in rows] == [3]
+
+
+
+class TestBackupAndClearAreSeparate:
+    """Backing up and emptying are two operations: one takes nothing away and
+    is allowed at any time, the other is the step before a measured run."""
+
+    def test_a_backup_leaves_memory_in_place(self, stores):
+        from backend.api import memory_reset
+
+        out = memory_reset.snapshot()
+
+        assert out["saved"] and out["cleared"] is False
+        assert (stores / "tables" / "g1").exists()
+        assert (stores / "memory" / "g1" / "memory.db").exists()
+        assert (stores / "stm" / "g1.json").exists()
+        assert (Path(out["backup"]) / "tables" / "g1").exists()
+
+    def test_a_backup_of_nothing_names_no_folder(self, tmp_path, monkeypatch):
+        from backend.api import memory_reset, studio_config
+
+        monkeypatch.setattr(studio_config, "DATA_DIR", tmp_path / "empty")
+        monkeypatch.setattr(memory_reset, "BACKUPS", tmp_path / "empty" / "memory-backups")
+
+        out = memory_reset.snapshot()
+
+        assert out["saved"] is False and out["backup"] is None
+
+    def test_clearing_backs_up_by_default(self, stores):
+        from backend.api import memory_reset
+
+        out = memory_reset.clear()
+
+        assert out["cleared"] and out["backup"]
+        assert not (stores / "memory" / "g1").exists()
+        assert (Path(out["backup"]) / "memory" / "g1" / "memory.db").exists()
+
+    def test_clearing_without_a_copy_is_possible_but_explicit(self, stores):
+        from backend.api import memory_reset
+
+        out = memory_reset.clear(backup=False)
+
+        assert out["cleared"] and out["backup"] is None
+        assert memory_reset.backups() == []
+        assert not (stores / "memory" / "g1").exists()
+
+    def test_two_backups_in_the_same_second_are_two_backups(self, stores):
+        from backend.api import memory_reset
+
+        first, second = memory_reset.snapshot(), memory_reset.snapshot()
+
+        assert first["stamp"] != second["stamp"]
+        assert len(memory_reset.backups()) == 2
+
+    def test_a_backup_is_allowed_while_something_runs(self, stores):
+        """Refusing a backup because a run is in flight would deny the user
+        the one operation that cannot lose anything."""
+        from backend.api import memory_reset
+
+        assert memory_reset.snapshot()["saved"] is True
+        with pytest.raises(RuntimeError):
+            memory_reset.clear(busy=True)

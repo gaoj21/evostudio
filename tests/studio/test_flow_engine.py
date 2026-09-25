@@ -195,7 +195,7 @@ class TestOldGraphsAreMigratedOnce:
                          edges=[("a", "b")])
         new = graph_store.migrate_flow(old)
         assert new["edges"][0]["mappings"] == [{"from": "x", "to": "x"}]
-        assert new["flow_version"] == 2
+        assert new["flow_version"] == graph_store.FLOW_VERSION
 
     def test_an_edge_with_nothing_in_common_becomes_control_only(self):
         from backend.api import graphs as graph_store
@@ -259,7 +259,7 @@ class TestOldGraphsAreMigratedOnce:
         # A save follows the body's name, so the id can change under it.
         saved = graph_store.save_graph(created["id"], old)
         loaded = graph_store.load_graph(saved["id"])
-        assert loaded["flow_version"] == 2
+        assert loaded["flow_version"] == graph_store.FLOW_VERSION
         assert loaded["edges"][0]["mappings"] == [{"from": "x", "to": "x"}]
 
 
@@ -288,7 +288,7 @@ def engine(studio_data, monkeypatch, fake_tools):
         config = LiteLLMConfig(model="deepseek/deepseek-chat", deepseek_key="test-only")
 
     monkeypatch.setattr(runner, "execute_llm_node", fake_llm)
-    monkeypatch.setattr(runner, "_make_llm", lambda: StubLLM())
+    monkeypatch.setattr(runner, "_make_llm", lambda **kw: StubLLM())
     monkeypatch.setattr(runner, "_prepare_ltm", lambda doc, ordered, inputs, state: ({}, ordered))
     monkeypatch.setattr(runner, "_attach_ltm", lambda *a, **k: None)
     monkeypatch.setattr(runner, "_save_ltm", lambda *a, **k: None)
@@ -496,7 +496,7 @@ class TestASuppliedRecordIsTheRecord:
 def test_tool_only_run_does_not_initialize_a_model(fake_tools, studio_data, monkeypatch):
     from backend.api import runner
     monkeypatch.setattr(runner, 'RUNS_DIR', studio_data/'runs')
-    monkeypatch.setattr(runner, '_make_llm', lambda: pytest.fail('Tool-only task initialized a model'))
+    monkeypatch.setattr(runner, '_make_llm', lambda **kw: pytest.fail('Tool-only task initialized a model'))
     g=graph([tool('uppercase',inputs=['text'],outputs=['result'])],[])
     rid=runner.start_run(g,{'text':'hello'},background=False)
     result=runner.get_run(rid)

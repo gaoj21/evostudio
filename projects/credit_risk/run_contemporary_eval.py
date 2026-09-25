@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 sys.path.insert(0, os.path.join(os.path.abspath(os.path.dirname(__file__)),
                                 "agentic_pipeline"))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__),
-                                                "..")))  # repo root (llm/)
+                                                "..", "..")))  # repo root (llm/, backend/)
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -39,7 +39,7 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 from dotenv import load_dotenv  # noqa: E402
 
-from llm import get_evoagentx_llm  # noqa: E402
+from backend.features.model_bridge import workflow_model  # noqa: E402
 from agentic_pipeline import (AutoApprover, ObligorRegistry, RawItem,  # noqa: E402
                               build_pipeline, weight_of_evidence)
 
@@ -79,7 +79,7 @@ def eval_sample(sample: dict, registry, out_dir: str, with_text: bool,
         return json.load(open(out_path))
 
     store_dir = os.path.join(out_dir, "stores", sid)
-    llm = get_evoagentx_llm()  # default provider from llm/providers.json
+    llm = workflow_model()  # default provider from llm/providers.json
     with _build_lock:
         pipeline = build_pipeline(llm, registry, store_dir=store_dir,
                                   fresh=True,

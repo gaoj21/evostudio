@@ -92,6 +92,7 @@ _DATA_PATHS = [
     ("review", "REVIEWS_DIR"), ("review", "RUNS_DIR"), ("review", "BATCHES_DIR"),
     ("workspace", "WORKSPACE_DIR"), ("watcher", "WATCH_DIR"),
     ("table_store", "TABLES_DIR"), ("memory_reset", "BACKUPS"),
+    ("evaluator_tools", "DRAFTS_DIR"),
 ]
 
 

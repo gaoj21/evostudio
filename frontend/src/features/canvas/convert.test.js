@@ -306,3 +306,13 @@ it('does not guess when normalized names are ambiguous', () => {
     { id: 'b', data: { inputs: [{ name: 'company_name' }] } }];
   expect(connectEdge(nodes, 'a', 'b').data.mappings).toEqual([]);
 });
+
+
+// Evaluation left the canvas: it is code in the Evaluate panel, kept on the
+// workflow document. Nothing the canvas produces is an evaluator any more.
+it('has no evaluator node type in either direction', () => {
+  const flow = graphToFlow({ id: 'g', tasks: [{ name: 'legacy', kind: 'evaluator', evaluator: { type: 'python', code: 'x' } }], edges: [] });
+  expect(flow.nodes.map((n) => n.type)).toEqual(['task']);
+  const saved = flowToGraph({ id: 'g' }, flow.nodes, flow.edges);
+  expect(saved.tasks.some((t) => t.kind === 'evaluator' || t.evaluator)).toBe(false);
+});

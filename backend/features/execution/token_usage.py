@@ -1,4 +1,4 @@
-"""Provider-reported token accounting, without changing model adapters.
+"""Token accounting, from what the `llm` package reports for each call.
 
 Usage is recorded the moment a model call returns, into the run state that
 the live endpoints read, so a run in progress shows what it has spent so far.
@@ -48,22 +48,46 @@ def record(state, usage):
                 target['token_usage'] = total
 
 
-def response_usage(response):
-    raw = response.get('usage') if isinstance(response, dict) else getattr(response, 'usage', None)
-    if raw is None and not isinstance(response, dict):
-        raw = getattr(response, 'usage_metadata', None) or (getattr(response, 'response_metadata', None) or {}).get('token_usage')
-    return reported_usage(raw) if raw is not None else None
+def usage_key(state) -> str:
+    """The key of this state's usage hook, registering it the first time.
+
+    A model built with the key — and every agent the framework clones from
+    its config — reports each call's `LLMResult.usage` here, so the run, its
+    node and its batch show what has been spent while the work is still
+    running. Nothing reads a provider response: the package already told us.
+    """
+    from backend.features import model_bridge
+    key = state.get('_usage_key')
+    if key:
+        return key
+    key = model_bridge.usage_hook(lambda result: record(state, reported_usage(result.usage)))
+    state['_usage_key'] = key
+    return key
 
 
-def attach_model(model, state):
-    """Observe an existing response hook when available; never infer zero usage."""
-    original = getattr(model, '_update_cost', None)
-    if not callable(original): return
-    if getattr(model, '_studio_usage_state', None) is state: return
-    object.__setattr__(model, '_studio_usage_state', state)
-    original = getattr(model, '_studio_usage_original', None) or original
-    object.__setattr__(model, '_studio_usage_original', original)
-    def tracked(response, *args, **kwargs):
-        record(state, response_usage(response))
-        return original(response, *args, **kwargs)
-    object.__setattr__(model, '_update_cost', tracked)
+def release_usage(state) -> None:
+    """Drop the hook when the run, batch or task settles."""
+    from backend.features import model_bridge
+    model_bridge.release_usage_hook(state.pop('_usage_key', None))
+
+
+def attach_usage(model, key):
+    """Make a model the framework built for us report to `key` as well.
+
+    `add_agents_from_workflow` builds each agent's model from the config it is
+    handed, which already carries the key; this covers a model built from a
+    config that lost it (a rebuild that passed none) without touching any
+    provider or framework model class.
+    """
+    config = getattr(model, 'config', None)
+    if not key or config is None or not hasattr(config, 'usage_key'):
+        return model
+    for target, attribute in ((config, 'usage_key'), (model, 'usage_key')):
+        try:
+            object.__setattr__(target, attribute, key)
+        except (AttributeError, TypeError):
+            try:
+                setattr(target, attribute, key)
+            except Exception:
+                pass
+    return model

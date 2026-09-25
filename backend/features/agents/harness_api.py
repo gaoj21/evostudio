@@ -210,7 +210,7 @@ def execution_error(exc):
         import sys
         return f"Missing Python module: {exc.name}. Install it in the backend environment ({sys.executable}), then send again."
     if isinstance(exc, ImportError):
-        return 'Chat Agent dependency/interface mismatch. The active LLM adapter must export get_agent_model(provider) returning a LangChain chat model with tool calling. Check backend package versions and adapter support.'
+        return 'Chat Agent dependency/interface mismatch. model_bridge.agent_model() must return a LangChain chat model that supports tool calling. Check backend package versions (langchain-core) and the configured provider in llm/providers.json.'
     if isinstance(exc, NotImplementedError):
         return 'The selected model adapter does not implement a capability required by Chat Agent, such as tool calling. Configure a compatible LangChain chat model.'
     text = str(exc).lower()
@@ -274,7 +274,7 @@ def send_message(graph_id: str, agent_id: str, session_id: str, body: TurnInput)
         # Validate credentials/adapters before accepting the turn. No model call.
         try: harness.make_model(agent.get('provider'))
         except (ImportError, NotImplementedError) as exc: raise HTTPException(422, execution_error(exc)) from exc
-        except Exception: raise HTTPException(422, 'Model configuration is unavailable or unsupported. Check the selected provider; Chat Agent requires get_agent_model(provider) and LangChain tool calling, in addition to workflow/batch support.')
+        except Exception: raise HTTPException(422, 'Model configuration is unavailable or unsupported. Check the selected provider in llm/providers.json and its environment variables; Chat Agent needs a LangChain chat model with tool calling, in addition to workflow/batch support.')
         session['messages'].append({'role': 'user', 'content': body.message})
         session.update(status='running', error=None, events=[], turn_token_usage={}, usage_unavailable=False)
         put(db, session_id, owner(graph), 'session', agent_id, session)

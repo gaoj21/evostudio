@@ -7,7 +7,7 @@ After Stop: no new model call, no new subprocess, and the thing settles in
 seconds rather than whenever its own timers happen to expire.
 
 Every model call here is a stand-in (`runner.execute_llm_node`,
-`runner._make_llm`, `llm.batch`); slow work is a sleep or a real sleeping
+`runner._make_llm`, `llm.batch_result`); slow work is a sleep or a real sleeping
 subprocess. Nothing reaches a provider.
 """
 
@@ -82,7 +82,7 @@ class TestARunStoppedBeforeItStarts:
             return {o["name"]: "answer" for o in task.get("outputs") or []}
 
         monkeypatch.setattr(runs, "execute_llm_node", recording_llm)
-        monkeypatch.setattr(runs, "_make_llm", lambda: _StubLLM())
+        monkeypatch.setattr(runs, "_make_llm", lambda **kw: _StubLLM())
         _neutralise_memory(runs, monkeypatch)
         graph = make_graph([make_task("a", inputs=["topic"], outputs=["x"])])
         graph["id"] = "stop-before-start"
@@ -107,7 +107,7 @@ class TestARunStoppedBeforeItStarts:
             return {o["name"]: "answer" for o in task.get("outputs") or []}
 
         monkeypatch.setattr(runs, "execute_llm_node", recording_llm)
-        monkeypatch.setattr(runs, "_make_llm", lambda: _StubLLM())
+        monkeypatch.setattr(runs, "_make_llm", lambda **kw: _StubLLM())
         _neutralise_memory(runs, monkeypatch)
 
         real_start_run = runs.start_run
@@ -154,7 +154,7 @@ class TestARunWaitingOnTheModel:
             return {}
 
         monkeypatch.setattr(runs, "execute_llm_node", retrying_llm)
-        monkeypatch.setattr(runs, "_make_llm", lambda: _StubLLM())
+        monkeypatch.setattr(runs, "_make_llm", lambda **kw: _StubLLM())
         _neutralise_memory(runs, monkeypatch)
         graph = make_graph([make_task("a", inputs=["topic"], outputs=["x"])])
         graph["id"] = "stop-mid-retry"
@@ -178,7 +178,7 @@ class TestARunWaitingOnTheModel:
             return {}
 
         monkeypatch.setattr(runs, "execute_llm_node", blocking_llm)
-        monkeypatch.setattr(runs, "_make_llm", lambda: _StubLLM())
+        monkeypatch.setattr(runs, "_make_llm", lambda **kw: _StubLLM())
         monkeypatch.setattr(runs, "_prepare_ltm",
                             lambda doc, ordered, inputs, state: ({}, ordered))
         monkeypatch.setattr(runs, "_attach_ltm", lambda *a, **k: None)
@@ -285,16 +285,13 @@ class TestAnEvaluatorTheRunStarted:
 
     def graph(self):
         return {"id": "evaluator-stop", "name": "Evaluator", "goal": "stop an evaluator",
-                "flow_version": 2, "output_dir": "runs",
+                "flow_version": 3, "output_dir": "runs",
                 "tasks": [{"name": "work", "kind": "tool", "tool": "echo",
                            "inputs": [{"name": "text", "type": "str", "required": True}],
-                           "outputs": [{"name": "answer", "type": "str", "required": True}]},
-                          {"name": "quality", "kind": "evaluator", "outputs": [],
-                           "inputs": [{"name": "prediction", "type": "any", "required": True}],
-                           "evaluator": {"type": "python", "timing": "node", "metric": "score",
-                                         "code": None}}],
-                "edges": [{"source": "work", "target": "quality",
-                           "mappings": [{"from": "answer", "to": "prediction"}]}]}
+                           "outputs": [{"name": "answer", "type": "str", "required": True}]}],
+                "edges": [],
+                "evaluators": [{"name": "quality", "timing": "run", "metric": "score",
+                                "code": None, "config": {}}]}
 
     def test_its_worker_dies_and_the_run_settles(self, runs, monkeypatch, tmp_path):
         from backend.api import tools_registry
@@ -304,7 +301,7 @@ class TestAnEvaluatorTheRunStarted:
         monkeypatch.setattr(tools_registry, "call_tool",
                             lambda name, args, **kw: {"answer": args["text"]})
         graph = self.graph()
-        graph["tasks"][1]["evaluator"]["code"] = (
+        graph["evaluators"][0]["code"] = (
             "import os, time\n"
             "\n"
             "\n"
@@ -401,10 +398,9 @@ class TestABatchThatIsStillEvaluating:
                 f"    open({str(tmp_path / 'evaluating')!r}, 'w').write('yes')\n"
                 "    time.sleep(6)\n"
                 "    return {'metrics': {'score': len(records)}}\n")
-        return {"id": "g", "tasks": [
-            {"name": "check", "kind": "evaluator", "enabled": True,
-             "evaluator": {"type": "python", "timing": "batch", "metric": "score",
-                           "code": code}}]}
+        return {"id": "g", "tasks": [], "evaluators": [
+            {"name": "check", "enabled": True, "timing": "batch", "metric": "score",
+             "code": code, "config": {}}]}
 
     def test_the_batch_says_it_stopped_without_waiting_for_the_report(
             self, batch_store, graph_with_slow_evaluator, monkeypatch):
@@ -549,7 +545,7 @@ class TestStoppingASteppedBatch:
 
 
 class TestTheCoalescerInFrontOfTheProvider:
-    """Prompts waiting to be coalesced into one `llm.batch` call.
+    """Prompts waiting to be coalesced into one `llm.batch_result` call.
 
     The flush timer fired whatever the batch's state, so Stop was followed by
     a fresh call to the provider with every prompt queued behind it — and
@@ -559,11 +555,13 @@ class TestTheCoalescerInFrontOfTheProvider:
     @pytest.fixture
     def provider(self, monkeypatch):
         import llm
+        from llm import LLMResult
         from backend.features.execution import provider_batch
         sent = []
         monkeypatch.setattr(
-            llm, "batch",
-            lambda name, inputs, **kw: (sent.append(list(inputs)), ["ok"] * len(inputs))[1],
+            llm, "batch_result",
+            lambda name, inputs, **kw: (sent.append(list(inputs)),
+                                       [LLMResult(content="ok") for _ in inputs])[1],
             raising=False)
         provider_batch._pending.clear()
         provider_batch._cancelled.clear()
@@ -578,20 +576,21 @@ class TestTheCoalescerInFrontOfTheProvider:
 
     def test_a_request_already_with_the_provider_is_reported_not_waited_for(
             self, monkeypatch):
-        """`llm.batch` takes a list and returns results: no job handle, so a
+        """`llm.batch_result` takes a list and returns results: no job handle, so a
         request in flight cannot be recalled. The record waiting on it is
         released at once and told plainly that it may still be billed —
         rather than holding the batch in `cancelling` until it returns."""
         import llm
+        from llm import LLMResult
         from backend.features.execution import provider_batch
         in_flight, release = threading.Event(), threading.Event()
 
         def slow_provider(name, inputs, **kwargs):
             in_flight.set()
             assert release.wait(60)
-            return ["ok"] * len(inputs)
+            return [LLMResult(content="ok") for _ in inputs]
 
-        monkeypatch.setattr(llm, "batch", slow_provider, raising=False)
+        monkeypatch.setattr(llm, "batch_result", slow_provider, raising=False)
         provider_batch._pending.clear()
         provider_batch._cancelled.clear()
         try:
@@ -615,6 +614,7 @@ class TestTheCoalescerInFrontOfTheProvider:
     def test_the_provider_is_asked_to_cancel_when_it_can(self, monkeypatch):
         """And when the API does offer a cancel, it is used."""
         import llm
+        from llm import LLMResult
         from backend.features.execution import provider_batch
         in_flight, release = threading.Event(), threading.Event()
         cancelled = []
@@ -622,9 +622,9 @@ class TestTheCoalescerInFrontOfTheProvider:
         def slow_provider(name, inputs, **kwargs):
             in_flight.set()
             assert release.wait(60)
-            return ["ok"] * len(inputs)
+            return [LLMResult(content="ok") for _ in inputs]
 
-        monkeypatch.setattr(llm, "batch", slow_provider, raising=False)
+        monkeypatch.setattr(llm, "batch_result", slow_provider, raising=False)
         monkeypatch.setattr(llm, "cancel_batch", lambda name: cancelled.append(name),
                             raising=False)
         provider_batch._pending.clear()
@@ -634,7 +634,7 @@ class TestTheCoalescerInFrontOfTheProvider:
                                   {"batch_id": "b1", "llm_batch_size": 1})
             assert in_flight.wait(10)
             outcome = provider_batch.cancel("b1")
-            assert cancelled == [provider_batch.PROVIDER]
+            assert cancelled == [provider_batch._provider()]
             assert outcome["provider_cancelled"] is True
         finally:
             release.set()
@@ -1093,11 +1093,10 @@ class TestASourceCollection:
                                                          if kind == "collect"
                                                          else real_worker(kind, payload, **kw)))
 
-        graph = {"id": "g", "tasks": [
-            {"name": "check", "kind": "evaluator", "enabled": True,
-             "evaluator": {"type": "python", "timing": "batch", "metric": "score",
-                           "code": "def evaluate(records):\n"
-                                   "    return {'metrics': {'score': len(records)}}\n"}}]}
+        graph = {"id": "g", "tasks": [], "evaluators": [
+            {"name": "check", "enabled": True, "timing": "batch", "metric": "score",
+             "config": {}, "code": "def evaluate(records):\n"
+                                   "    return {'metrics': {'score': len(records)}}\n"}]}
         job = {"id": "c3", "graph_id": "g", "mode": "prepare", "records": [], "batches": [],
                "record_count": 0, "submitted_records": 0, "batch_size": 2, "status": "collecting",
                "collection_complete": False, "phase": "collecting", "preprocess_tool": "t",

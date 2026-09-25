@@ -14,7 +14,7 @@ Previously saved readers remain compatible and are not silently rewritten. Their
 
 ### Workspace paths and splits
 
-Input uploads appear immediately under **Workspace → datasets**, preserving nested directories. Previously uploaded resources referenced by saved Inputs or evaluator labels are also visible. Workspace exposes a read-only view of the original bytes, not a duplicate. Right-click a file/folder → **Copy path** copies its absolute server path; file previews also offer **Copy full path**. Input shows the resource root with its own copy button. Manage uploaded resource deletion from Input.
+Input uploads appear immediately under **Workspace → datasets**, preserving nested directories. Previously uploaded resources referenced by saved Inputs or evaluator label resources are also visible. Workspace exposes a read-only view of the original bytes, not a duplicate. Right-click a file/folder → **Copy path** copies its absolute server path; file previews also offer **Copy full path**. Input shows the resource root with its own copy button. Manage uploaded resource deletion from Input.
 
 Declare `path` and `split` parameters in the factory (or read them from `config`); the inspector generates their form fields automatically. Paste the copied path and choose/fill split there. Named parameters are passed as keyword arguments; legacy config-based factories receive `config["path"]` and `config["split"]`. Custom code decides their meaning. The supplied JSON example accepts absolute paths or paths relative to `resource["root"]`, selects a matching split subfolder, or filters records by their `split` field. Existing code is not silently rewritten: update it or load the new example to consume these parameters. Paths refer to the server filesystem. For explicit paths, prepared-data caching is bypassed so edits to ordinary workspace files are not hidden by an old snapshot.
 
@@ -99,39 +99,72 @@ def deduplicate(records: list) -> list:
 
 A row-transform signature is `transform(record: dict)`. Preserve the downstream fields needed by the graph. Mapping uses source paths as keys and output names as values. `_dataloader` is reserved provenance, carrying the prepared snapshot, resource version, stable record identifier within that snapshot, and optional trajectory group/order.
 
-## Canvas Evaluators
+## Evaluators
 
-Add an **Evaluator** and choose a registered tool. It receives every saved execution in the selected run/batch: original inputs, final `result`, all `nodes` with statuses/errors, complete `node_outputs`, execution snapshot and provenance. Connections are provided as `focus` metadata; they never filter out unconnected nodes. Legacy runs may only have clipped previews; missing full outputs cannot be reconstructed.
+Evaluators are not canvas nodes. They belong to the workflow as a list
+(`graph["evaluators"]`) and are written in the **Evaluation & Evolve** panel:
+paste or upload Python, press **Check code**, and the parameters the code
+declares become the form that feeds it.
 
-Timing controls when these records are available:
-
-- **Node:** when connected outputs are ready; future node results do not yet exist.
-- **Run:** after a workflow execution finishes.
-- **Batch:** all saved executions in the completed batch, including failed/blocked items. Collection-driven batches wait for the complete collection.
-
-The platform does not group records into trajectories or impose a scoring unit. The selected tool owns selection, label matching, preprocessing, grouping, aggregation and scoring. Separate label resources are delivered to custom tools as `config.label_records`; they are never injected into workflow agents. User JSON configuration is passed as `config`. Tools receive copies so they cannot mutate saved executions.
+The code takes either shape:
 
 ```python
-def evaluate_outputs(records: list, config: dict) -> dict:
-    # Inspect any node, not just those connected to the evaluator.
-    successful = [r for r in records if r.get('status') == 'success']
-    return {
-        'metrics': {'completion_rate': len(successful) / len(records) if records else None},
-        'details': {'failed_run_ids': [r.get('run_id') for r in records if r.get('status') != 'success']},
-    }
+def build_evaluator(decision_field: str = "decision", threshold: float = 0.5):
+    """Typed parameters with defaults become the panel's form."""
+    class Report:
+        def evaluate(self, records: list) -> dict:
+            successful = [r for r in records if r.get("status") == "success"]
+            return {"metrics": {"completion_rate": len(successful) / len(records) if records else None}}
+    return Report()
 ```
 
-Configure the objective metric (e.g. `completion_rate`) and maximize/minimize direction for Evolve. Metrics must be finite numbers or null. `records` and `details` are optional and may use any granularity; one result per input is not required. Optional `coverage` must explicitly declare `unit`, `total`, `scored`, `unscored` with consistent nonnegative counts. The platform never infers scoring coverage from the number of executions. Generic scalar helpers (exact match, contains, required fields) remain available for simple comparisons; there is no platform trajectory evaluator.
+```python
+def evaluate(records: list, threshold: float = 0.5) -> dict:
+    return {"metrics": {"completion_rate": ...}}
+```
 
-Reports remain separate from workflow outputs; evaluator branches do not feed agents. Evolve consumes the selected metric and tool feedback and requires unchanged declared coverage when comparing candidates, as well as no fewer successful executions. If a tool omits coverage, the platform cannot verify its internal scoring population; the tool owns that definition.
+It receives every saved execution of the selected run/batch: original inputs,
+final `result`, all `nodes` with statuses/errors, complete `node_outputs`,
+execution snapshot and provenance. Legacy runs may only have clipped
+previews; missing full outputs cannot be reconstructed.
+
+Timing says when an evaluator runs by itself:
+
+- **manual:** only when run from the panel, on a saved run or batch.
+- **run:** after each workflow execution finishes.
+- **batch:** over all saved executions of the completed batch, including
+  failed and blocked items. Collection-driven batches wait for the complete
+  collection; a stopped batch still reports over what ran.
+
+The platform does not group records into trajectories or impose a scoring
+unit. The evaluator owns selection, label matching, preprocessing, grouping,
+aggregation and scoring. A separate label resource is delivered as
+`config.label_records` and is never injected into workflow agents; the
+panel's parameter values arrive as the declared arguments.
+
+Configure the objective metric (e.g. `completion_rate`) and
+maximize/minimize direction for Evolve. Metrics must be finite numbers or
+null. `records` and `details` are optional and may use any granularity; one
+result per input is not required. Optional `coverage` must declare `unit`,
+`total`, `scored`, `unscored` with consistent nonnegative counts. The
+platform never infers scoring coverage from the number of executions.
+
+Pasted code is kept as a per-workflow draft (server-side, mirrored in the
+browser) so leaving the panel — to copy a run path, say — loses nothing.
+Preview runs the code without saving anything; Run saves the report onto
+that run or batch. Reports stay separate from workflow outputs. Evolve
+consumes the selected metric and the report as feedback, requires unchanged
+declared coverage and no fewer successful executions when comparing
+candidates, and never shows the proposer a record field named by a string
+value in the evaluator's config — a label must not reach the prompt writer.
 
 ## Run, results, Chat and Evolve
 
-Run reads the canvas DataLoader settings; it does not present another copy of data selection/preprocessing controls. Run retains parallelism and the native API enable/disable choice; batch size comes from Input. Each run stores a graph/settings snapshot, actual input data, provenance and complete node outputs. Results show Evaluator reports. The batch Evaluation tab can run canvas evaluators on saved results without replaying agents.
+Run reads the canvas DataLoader settings; it does not present another copy of data selection/preprocessing controls. Run retains parallelism and the native API enable/disable choice; batch size comes from Input. Each run stores a graph/settings snapshot, actual input data, provenance and complete node outputs. Results show evaluator reports. The batch Evaluation tab runs a saved evaluator on saved results without replaying agents.
 
-**Evaluation & Evolve** supports choosing a canvas evaluator for saved runs/batches. Evaluation-only scores those outputs; prompt refinement uses the evaluator report as feedback and remains explicitly unvalidated until a new run.
+**Evaluation & Evolve** chooses one of the workflow's evaluators for saved runs/batches. Evaluation-only scores those outputs; prompt refinement uses the evaluator report as feedback and remains explicitly unvalidated until a new run.
 
-The additional **Canvas DataLoader + Evaluator** source runs the real canvas on prepared inputs. Evaluation-only performs a baseline replay. Evolution runs a bounded number of prompt proposals, replays each candidate and compares the selected objective. Inputs and separate labels are prepared once; each candidate starts with empty isolated workflow memory. A candidate is accepted only if its objective improves without reduced scoring coverage or fewer successful executions. This is a bounded evaluator-driven search, separate from the existing MIPRO path. It uses the selected data as development data; final Test evaluation remains a separate experiment.
+The **Canvas Input + evaluator** source runs the real canvas on prepared inputs. Evaluation-only performs a baseline replay. Evolution runs a bounded number of prompt proposals, replays each candidate and compares the selected objective. Inputs and separate labels are prepared once; each candidate starts with empty isolated workflow memory. A candidate is accepted only if its objective improves without reduced scoring coverage or fewer successful executions. This is a bounded evaluator-driven search, separate from the existing MIPRO path. It uses the selected data as development data; final Test evaluation remains a separate experiment.
 
 Shared Mem0 workflows are rejected for candidate replay because a copied graph ID cannot isolate shared memory. Saved-result evaluation remains available. Custom tools may have external side effects; fresh local memory does not undo those effects. Candidate histories preserve individual experiment runs.
 
@@ -151,6 +184,6 @@ Shared Mem0 workflows are rejected for candidate replay because a copied graph I
 - `backend/features/data/dataloaders.py`: reader, transform, provenance, cache and batch interface.
 - `backend/features/evaluation/evaluator_tools.py`: shared evaluator contracts and saved-result API.
 - `backend/features/evaluation/canvas_evolution.py`: evaluator-driven candidate replay.
+- `frontend/src/features/evaluation/EvaluatePanel.jsx`: writing, checking, previewing and saving evaluators.
 - `backend/features/library/data_evaluation_tools.py`: tool-registry exposure.
 - `frontend/src/features/data/DataLoaderInput.jsx`: input configuration and preview.
-- `frontend/src/features/evaluation/EvaluatorInspector.jsx`: canvas evaluator configuration.

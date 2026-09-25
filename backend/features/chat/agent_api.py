@@ -145,8 +145,8 @@ def remember(session: str, text: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _ask(messages: list) -> str:
+    from llm import ProviderError
     from llm import chat as llm_chat
-    from llm.registry import ProviderError
 
     try:
         return llm_chat(None, messages)

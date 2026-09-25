@@ -344,7 +344,7 @@ def stuck_engine(studio_data, monkeypatch):
         config = LiteLLMConfig(model="deepseek/deepseek-chat", deepseek_key="test-only")
 
     monkeypatch.setattr(runner, "execute_llm_node", hanging_llm)
-    monkeypatch.setattr(runner, "_make_llm", lambda: StubLLM())
+    monkeypatch.setattr(runner, "_make_llm", lambda **kw: StubLLM())
     monkeypatch.setattr(runner, "_prepare_ltm", lambda doc, ordered, inputs, state: ({}, ordered))
     monkeypatch.setattr(runner, "_attach_ltm", lambda *a, **k: None)
     monkeypatch.setattr(runner, "_save_ltm", lambda *a, **k: None)

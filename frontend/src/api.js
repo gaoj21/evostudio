@@ -31,12 +31,23 @@ export const api = {
   uploadDataResource: (files, graphId) => { const formData = new FormData(); if (graphId) formData.append('graph_id', graphId); Array.from(files).forEach(file => formData.append('files', file, file.webkitRelativePath || file.name)); return req('/api/data-resources', {method:'POST', formData}); },
   attachDataResource: (id, graphId) => req(`/api/data-resources/${encodeURIComponent(id)}/workspace`, {method:'POST', body:{graph_id:graphId}}),
   deleteDataResource: id => req(`/api/data-resources/${encodeURIComponent(id)}`, {method:'DELETE'}),
+  // Evaluation is written as code in the Evaluate panel: the interface call
+  // turns that code into the parameter form, and the saved ones live on the
+  // workflow document (no canvas node).
   inspectEvaluatorCode: code => req('/api/evaluators/interface', {method:'POST',body:{code}}),
-  previewEvaluatorCode: (id,body) => req(`/api/evaluators/graphs/${encodeURIComponent(id)}/preview`, {method:'POST',body}),
+  graphEvaluators: id => req(`/api/graphs/${encodeURIComponent(id)}/evaluators`),
+  saveGraphEvaluators: (id,evaluators) => req(`/api/graphs/${encodeURIComponent(id)}/evaluators`, {method:'PUT',body:{evaluators}}),
+  deleteGraphEvaluator: (id,name) => req(`/api/graphs/${encodeURIComponent(id)}/evaluators/${encodeURIComponent(name)}`, {method:'DELETE'}),
+  // preview saves nothing; run keeps the report on that batch/run.
+  previewGraphEvaluator: (id,body) => req(`/api/graphs/${encodeURIComponent(id)}/evaluators/preview`, {method:'POST',body}),
+  runGraphEvaluator: (id,body) => req(`/api/graphs/${encodeURIComponent(id)}/evaluators/run`, {method:'POST',body}),
+  // The scratch pad: one per workflow, so code pasted here survives leaving
+  // the panel to copy a path from elsewhere in Studio.
+  evaluatorDraft: id => req(`/api/graphs/${encodeURIComponent(id)}/evaluators/draft`),
+  saveEvaluatorDraft: (id,body) => req(`/api/graphs/${encodeURIComponent(id)}/evaluators/draft`, {method:'PUT',body}),
   inspectDataLoaderCode: code => req('/api/dataloaders/interface', {method:'POST',body:{code}}),
   previewDataLoader: config => req('/api/dataloaders/preview', {method:'POST',body:config}),
   stopDataLoaderPreview: id => req(`/api/dataloaders/preview/${encodeURIComponent(id)}/stop`, {method:'POST'}),
-  evaluateCanvasResults: (id,body) => req(`/api/evaluators/graphs/${encodeURIComponent(id)}/saved`, {method:'POST',body}),
   listResultRuns: g => req(`/api/graphs/${encodeURIComponent(g)}/results`),
   chatResults: (g, body, options) => assistantRequest(g, 'results', body, options),
   stopAssistant: (g, id) => req(`/api/graphs/${encodeURIComponent(g)}/assistant/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
@@ -154,8 +165,10 @@ export const api = {
   },
   // Snapshot memory to a timestamped backup, then empty it. Per workflow
   // when an id is given; refused (409) while anything is running.
-  resetMemory: (graphId) =>
-    req('/api/memory/reset', { method: 'POST', body: graphId ? { graph_id: graphId } : {} }),
+  resetMemory: (graphId, { backup = true } = {}) =>
+    req('/api/memory/reset', { method: 'POST', body: { ...(graphId ? { graph_id: graphId } : {}), ...(backup ? {} : { backup: false }) } }),
+  backupMemory: (graphId) =>
+    req('/api/memory/backup', { method: 'POST', body: graphId ? { graph_id: graphId } : {} }),
   listMemoryAgents: (id) => req(`/api/graphs/${encodeURIComponent(id)}/memory/agents`),
   searchMemory: (id, agent, q) =>
     req(`/api/graphs/${encodeURIComponent(id)}/memory?agent=${encodeURIComponent(agent)}${q ? `&q=${encodeURIComponent(q)}` : ''}`),

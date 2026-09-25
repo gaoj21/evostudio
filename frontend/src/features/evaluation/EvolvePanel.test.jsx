@@ -8,6 +8,9 @@ vi.mock('../../api.js', () => ({
     evolveMetrics: vi.fn(), evolvePresets: vi.fn(), getGraph: vi.fn(),
     previewEvolveResults: vi.fn(), listBatches: vi.fn(), listRuns: vi.fn(), startEvolveResults: vi.fn(), startEvolveUpload: vi.fn(), applyEvolve: vi.fn(),
     listEvolveTasks: vi.fn(), getEvolveTask: vi.fn(), stopEvolve: vi.fn(),
+    graphEvaluators: vi.fn(), saveGraphEvaluators: vi.fn(), deleteGraphEvaluator: vi.fn(),
+    previewGraphEvaluator: vi.fn(), runGraphEvaluator: vi.fn(), inspectEvaluatorCode: vi.fn(),
+    evaluatorDraft: vi.fn(), saveEvaluatorDraft: vi.fn(), listDataResources: vi.fn(),
   },
 }));
 const { api } = await import('../../api.js');
@@ -25,6 +28,10 @@ beforeEach(() => {
   api.startEvolveUpload.mockResolvedValue({ task_id: 't9' });
   api.listBatches.mockResolvedValue([]);
   api.listRuns.mockResolvedValue([]);
+  api.graphEvaluators.mockResolvedValue({ evaluators: [] });
+  api.evaluatorDraft.mockResolvedValue({ code: '', config: {} });
+  api.saveEvaluatorDraft.mockResolvedValue({ saved_at: '2026-01-01T00:00:00Z' });
+  api.listDataResources.mockResolvedValue({ resources: [] });
 });
 
 const labelled = () => new File(['{"inputs":{"q":"a"},"label":"b"}\n'], 'labelled.jsonl', { type: 'application/json' });
@@ -297,16 +304,51 @@ describe('a canvas candidate replay reports each round', () => {
 
 describe('labels stay out of the proposal prompt unless asked for', () => {
   it('starts a canvas evolution without sharing labels, and with them when ticked', async () => {
-    api.getGraph.mockResolvedValue({ tasks: [{ name: 'detect' }, { name: 'quality', kind: 'evaluator', evaluator: { type: 'python' } }] });
+    api.getGraph.mockResolvedValue({ tasks: [{ name: 'detect' }] });
+    api.graphEvaluators.mockResolvedValue({ evaluators: [{ name: 'quality', metric: 'accuracy', enabled: true }] });
     api.startEvolveResults.mockResolvedValue({ task_id: 'c2' });
     const { container } = render(<NewTaskForm initialSource="canvas" initialMode="evolve_evaluate" graphId="g1" onStarted={vi.fn()} onError={vi.fn()} />);
     const view = within(container);
     const user = userEvent.setup();
-    await user.selectOptions(await view.findByLabelText('Canvas evaluator'), 'quality');
+    await user.selectOptions(await view.findByLabelText('Objective evaluator'), 'quality');
     await user.click(view.getByRole('button', { name: /start optimization/i }));
     await waitFor(() => expect(api.startEvolveResults).toHaveBeenCalledWith('g1', expect.objectContaining({ share_labels: false })));
     await user.click(view.getByLabelText(/show expected answers/i));
     await user.click(view.getByRole('button', { name: /start optimization/i }));
     await waitFor(() => expect(api.startEvolveResults).toHaveBeenLastCalledWith('g1', expect.objectContaining({ share_labels: true })));
+  });
+});
+
+
+describe('the objective comes from the workflow\'s saved evaluators', () => {
+  it('lists them with their metric, never a canvas node', async () => {
+    api.getGraph.mockResolvedValue({ tasks: [{ name: 'detect' }, { name: 'judge', kind: 'evaluator' }] });
+    api.graphEvaluators.mockResolvedValue({ evaluators: [
+      { name: 'quality', metric: 'accuracy', enabled: true },
+      { name: 'old', metric: 'f1', enabled: false }] });
+    api.listBatches.mockResolvedValue([{ batch_id: 'b1', status: 'succeeded' }]);
+    const { container } = render(<NewTaskForm graphId="g1" onStarted={vi.fn()} onError={vi.fn()} />);
+    const view = within(container);
+    const options = [...(await view.findByLabelText('Objective evaluator')).querySelectorAll('option')].map(o => o.textContent);
+    expect(options).toEqual(['Use existing metric', 'quality · accuracy']);   // disabled ones are not offered
+    await userEvent.setup().selectOptions(view.getByLabelText('Objective evaluator'), 'quality');
+    await waitFor(() => expect(api.previewEvolveResults).toHaveBeenLastCalledWith('g1', expect.objectContaining({ evaluator: 'quality' })));
+    expect(container.textContent).not.toMatch(/Canvas evaluator/);
+  });
+
+  it('says so when the workflow has no saved evaluator yet', async () => {
+    api.listBatches.mockResolvedValue([{ batch_id: 'b1', status: 'succeeded' }]);
+    const { container } = render(<NewTaskForm graphId="g1" onStarted={vi.fn()} onError={vi.fn()} />);
+    expect(await within(container).findByTestId('no-saved-evaluators')).toHaveTextContent('No saved evaluators');
+  });
+});
+
+describe('the panel is where evaluation is written', () => {
+  it('opens the evaluator editor from the sidebar', async () => {
+    api.listEvolveTasks.mockResolvedValue([]);
+    render(<EvolvePanel open graphId="g1" onClose={vi.fn()} />);
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Write evaluator' }));
+    expect(await screen.findByLabelText('Python Evaluator code')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Check code' })).toBeInTheDocument();
   });
 });

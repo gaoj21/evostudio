@@ -23,13 +23,15 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__),
+                                                "..", "..", "..")))  # repo root (llm/, backend/)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__),
                                                 "..", "..")))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__),
                                                 "..")))
 
 from dotenv import load_dotenv  # noqa: E402
 
-from llm import get_evoagentx_llm  # noqa: E402
+from backend.features.model_bridge import workflow_model  # noqa: E402
 from agentic_pipeline import (AutoApprover, Obligor, ObligorRegistry,  # noqa: E402
                               RawItem, build_pipeline, weight_of_evidence)
 
@@ -82,7 +84,7 @@ FEED = [
 
 def main():
     load_dotenv()
-    llm = get_evoagentx_llm()  # default provider from llm/providers.json
+    llm = workflow_model()  # default provider from llm/providers.json
 
     pipeline = build_pipeline(llm, REGISTRY, store_dir=STORE_DIR,
                               fresh=True,

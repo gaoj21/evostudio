@@ -11,8 +11,8 @@ from backend.api.studio_config import data_path
 
 
 def make_model(provider=None):
-    from llm import get_agent_model
-    return get_agent_model(provider)
+    from backend.features.model_bridge import agent_model
+    return agent_model(provider)
 
 
 def build_tools(graph, settings, cancelled=None, deadline=None):

@@ -22,7 +22,7 @@ from backend.api import graphs as graph_store
 from backend.api import sources
 from backend.api.graphs import strip_task, topo_sort_tasks
 from backend.api.studio_config import data_path
-from backend.features.execution.token_usage import attach_model
+from backend.features.execution import token_usage
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -182,8 +182,9 @@ _orig_lm_init = _MiproLMWrapper.__init__
 def _patched_lm_init(self, model, *args, **kwargs):
     _orig_lm_init(self, model, *args, **kwargs)
     self.eax_model = model
-    self.model = getattr(getattr(model, "config", None), "model",
-                         "deepseek/deepseek-v4-flash")
+    # dspy wants a model-NAME string here; the bridge's config carries the id
+    # the deployment's provider is configured with. No model is named here.
+    self.model = str(getattr(getattr(model, "config", None), "model", None) or "studio")
 
 
 def _patched_lm_forward(self, prompt=None, messages=None, **kwargs):
@@ -203,10 +204,9 @@ def _patched_lm_copy(self, **kwargs):
             setattr(new_config, key, value)
         if (key in self.kwargs) or (not hasattr(self, key)):
             new_kwargs[key] = value
+    # The copied config carries the run's usage key, so a model built from it
+    # reports to the same hook as the original — nothing to re-attach.
     new_model = self.eax_model.__class__(config=new_config)
-    counted = getattr(self.eax_model, "_studio_usage_state", None)
-    if counted is not None:
-        attach_model(new_model, counted)
     return _MiproLMWrapper(new_model, **new_kwargs)
 
 
@@ -389,10 +389,16 @@ def _stage(state: dict, name: str) -> None:
 
 
 def _attach_agents(agent_manager, state: dict) -> None:
-    """Count what every agent's model reports, as each call returns."""
+    """Count what every agent's model reports, as each call returns.
+
+    An agent rebuilt for a candidate is built from the config Evolve handed
+    over, which already carries this task's usage key; this covers a rebuild
+    that was handed none.
+    """
+    key = state.get("_usage_key")
     for agent in getattr(agent_manager, "agents", None) or []:
         if getattr(agent, "llm", None) is not None:
-            attach_model(agent.llm, state)
+            token_usage.attach_usage(agent.llm, key)
 
 
 def _finish(state: dict) -> None:
@@ -405,7 +411,10 @@ def _finish(state: dict) -> None:
 def _execute_evolve(task_id: str, graph_doc: dict, metric: str, params: dict, task_dir: Path) -> None:
     """Run one task on this thread, with its Stop visible to the optimizer."""
     with stoppable(_tasks[task_id]):
-        _run_task(task_id, graph_doc, metric, params, task_dir)
+        try:
+            _run_task(task_id, graph_doc, metric, params, task_dir)
+        finally:
+            token_usage.release_usage(_tasks[task_id])
 
 
 def _run_task(task_id: str, graph_doc: dict, metric: str, params: dict, task_dir: Path) -> None:
@@ -431,12 +440,9 @@ def _run_task(task_id: str, graph_doc: dict, metric: str, params: dict, task_dir
             if params.get("mode") != "evaluate":
                 from backend.api import runner
                 _stage(state, "proposing prompts")
-                llm = runner._make_llm()
-                attach_model(llm, state)
+                llm = runner._make_llm(usage_key=token_usage.usage_key(state))
                 # Scores reach the proposer; expected answers only if the user said so.
-                evaluator_cfg = next((t.get("evaluator") or {} for t in graph_doc.get("tasks", [])
-                                      if t.get("name") == params.get("evaluator")), {})
-                hidden = [params.get("label_key"), evaluator_cfg.get("label_field")]
+                hidden = [params.get("label_key")]
                 updated, diff, used = saved.propose(graph_doc, records, params["nodes"], llm, feedback=state["baseline"],
                                                     share_labels=bool(params.get("share_labels")), hidden_inputs=hidden)
                 # The proposal call was already sent when Stop arrived; it
@@ -452,10 +458,9 @@ def _run_task(task_id: str, graph_doc: dict, metric: str, params: dict, task_dir
         from evoagentx.prompts import MiproPromptTemplate
         from evoagentx.workflow.workflow_graph import SequentialWorkFlowGraph, WorkFlowGraph
 
-        llm = runner_mod._make_llm()
-        attach_model(llm, state)
+        llm = runner_mod._make_llm(usage_key=token_usage.usage_key(state))
         ordered = topo_sort_tasks(graph_doc.get("tasks", []) or [], graph_doc.get("edges", []) or [])
-        ordered = [t for t in ordered if t.get("kind") not in ("source", "tool", "evaluator")]  # source/tool nodes are not optimizable
+        ordered = [t for t in ordered if t.get("kind") not in ("source", "tool")]  # source/tool nodes are not optimizable
         input_keys = [w["name"] for w in graph_store.compute_workflow_inputs(ordered)]
 
         # canvas prompt -> optimizable MiproPromptTemplate instruction, for
@@ -623,8 +628,10 @@ def _extract_instructions(data) -> dict:
 
 def _persist(state: dict) -> None:
     try:
+        # Internal handles (the usage hook's key) are not part of the record.
+        saved = {k: v for k, v in state.items() if not k.startswith("_")}
         with open(_task_dir(state["task_id"]) / "result.json", "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2, ensure_ascii=False, default=str)
+            json.dump(saved, f, indent=2, ensure_ascii=False, default=str)
     except OSError:
         pass
 
@@ -635,14 +642,14 @@ def _live(state: dict) -> dict:
     A canvas Run's usage is settled into the task in the same step that
     clears `current_run`, so a snapshot holds one or the other.
     """
-    snapshot = dict(state)
+    snapshot = {k: v for k, v in state.items() if not k.startswith("_")}
     if not snapshot.get("current_run"):
-        return state
+        return snapshot
     from backend.api import runner
     from backend.features.execution.token_usage import combined
     run = runner.get_run(snapshot["current_run"]) or {}
     usage = combined(snapshot.get("token_usage"), run.get("token_usage"))
-    return {**snapshot, "token_usage": usage} if usage != snapshot.get("token_usage") else state
+    return {**snapshot, "token_usage": usage} if usage != snapshot.get("token_usage") else snapshot
 
 
 def get_task(task_id: str) -> dict | None:
@@ -751,10 +758,11 @@ async def preview_saved_evaluation(graph_id: str, request: Request):
         records, selection = saved.resolve(graph_id, body)
         if body.get('evaluator'):
             from backend.features.evaluation.canvas_evolution import select
+            from backend.features.evaluation.evaluator_tools import evaluator_name
             select(graph_store.load_graph(graph_id) or {}, body['evaluator'])
-            return {**selection, 'suggested_metric': 'canvas:' + body['evaluator'],
+            return {**selection, 'suggested_metric': 'canvas:' + evaluator_name(body['evaluator']),
                     'scoring': {'scored': None, 'unscored': None, 'total': len(records)},
-                    'note': 'Canvas evaluator will score saved outputs. Preview does not execute evaluator tools.'}
+                    'note': 'The chosen evaluator will score saved outputs. Preview does not run the evaluation code.'}
         metric = body.get('metric') or saved.default_metric(selection)
         if not any(m['name'] == metric for m in available_metrics()):
             raise sources.SourceError('Choose an available metric.')
@@ -811,14 +819,15 @@ async def start_evolve_task(graph_id: str, request: Request):
                 metric = body.get("metric") or saved.default_metric(source)
                 if body.get('evaluator'):
                     from backend.features.evaluation.canvas_evolution import select
+                    from backend.features.evaluation.evaluator_tools import evaluator_name
                     select(graph, body['evaluator'])
-                    metric = 'canvas:' + body['evaluator']
+                    metric = 'canvas:' + evaluator_name(body['evaluator'])
                 elif not any(m["name"] == metric for m in available_metrics()):
                     raise sources.SourceError("Choose an available metric.")
                 mode = body.get("mode", "evaluate")
                 if mode not in ("evaluate", "evolve_evaluate"):
                     raise sources.SourceError("Choose evaluation or evolution with evaluation.")
-                available = [t["name"] for t in ordered if t.get("kind") not in ("source", "tool", "evaluator")]
+                available = [t["name"] for t in ordered if t.get("kind") not in ("source", "tool")]
                 chosen = [] if mode == "evaluate" else body.get("nodes", available)
                 if not isinstance(chosen, list) or any(n not in available for n in chosen):
                     raise sources.SourceError("Choose valid nodes to improve.")
@@ -828,6 +837,8 @@ async def start_evolve_task(graph_id: str, request: Request):
                     raise sources.SourceError("share_labels must be true or false.")
                 params = {"mode": mode, "source": source, "nodes": chosen, "n_dev": len(records), "n_train": 0, "evaluator": body.get("evaluator"),
                           "label_key": body.get("label_key") or None, "share_labels": body.get("share_labels", False)}
+                from backend.features.evaluation.evaluator_tools import evaluator_name
+                params["evaluator"] = evaluator_name(params["evaluator"]) if params.get("evaluator") else None
                 return {"task_id": start_evolve(graph, records, metric, params)}
             raise sources.SourceError(
                 "Choose the data: the canvas Input with an evaluator, saved results, or an uploaded labelled file.")
@@ -841,7 +852,7 @@ async def start_evolve_task(graph_id: str, request: Request):
             raise sources.SourceError("An optimization needs at least 2 records: one to learn from, one to judge by.")
         # every record's inputs must cover the graph's required workflow inputs
         sources.map_to_workflow_inputs([r["inputs"] for r in records], workflow_inputs)
-        llm_nodes = [t.get("name") for t in ordered if t.get("kind") not in ("source", "tool", "evaluator")]
+        llm_nodes = [t.get("name") for t in ordered if t.get("kind") not in ("source", "tool")]
         params = {**resolve_params(params, len(records), llm_nodes), "source": source}
     except sources.SourceError as e:
         raise HTTPException(status_code=422, detail=str(e))

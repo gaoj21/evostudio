@@ -10,13 +10,15 @@ FEATURES = ['llm', 'workflow', 'execution', 'chat', 'agents', 'memory', 'evaluat
 
 
 def files_for(feature, part):
-    folders = [ROOT / 'backend/llm'] if feature == 'llm' else []
+    folders = [ROOT / 'llm', ROOT / 'backend/features/model_bridge.py'] if feature == 'llm' else []
     if feature != 'llm':
         if part != 'frontend': folders.append(ROOT / 'backend/features' / feature)
         if part != 'backend': folders.append(ROOT / 'frontend/src/features' / feature)
     files = []
     for folder in folders:
-        if folder.is_dir():
+        if folder.is_file():
+            files.append(folder)
+        elif folder.is_dir():
             files.extend(p for p in folder.rglob('*') if p.is_file() and p.suffix in {'.py', '.js', '.jsx', '.md', '.css'} and '__pycache__' not in p.parts and '.test.' not in p.name)
     return sorted(files)
 

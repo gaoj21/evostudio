@@ -127,7 +127,7 @@ export const DATASET_EXAMPLES = [
   { label: 'Group by entity and period', code: AGGREGATE_EXAMPLE },
 ];
 
-export default function PythonDatasetEditor({code, onChange, disabled, kind='Dataset', example=DATASET_EXAMPLE, examples, onDirtyChange}) {
+export default function PythonDatasetEditor({code, onChange, disabled, kind='Dataset', example=DATASET_EXAMPLE, examples, onDirtyChange, onDraftChange}) {
   const choices = examples || (kind === 'Dataset' ? DATASET_EXAMPLES : [{ label: 'Example', code: example }]);
   const [choice, setChoice] = useState(0);
   const input = useRef(null);
@@ -136,6 +136,9 @@ export default function PythonDatasetEditor({code, onChange, disabled, kind='Dat
   const dirty = draft !== (code || '');
   useEffect(()=>{setDraft(code || '');setError('');},[code]);
   useEffect(()=>{onDirtyChange?.(dirty);},[dirty,onDirtyChange]);
+  // The live text, unconfirmed included: the Evaluate panel keeps it as a
+  // draft so pasted code survives leaving the panel.
+  useEffect(()=>{onDraftChange?.(draft);},[draft,onDraftChange]);
   async function load(file) {
     if (!file) return;
     if (!file.name.toLowerCase().endsWith('.py')) {setError('Choose a Python (.py) file.');return;}

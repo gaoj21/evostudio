@@ -23,7 +23,8 @@ def test_import_preserves_explicit_wiring_and_graph_configuration():
                        memory_resources=[{'space_id':'a'*32,'name':'Notes'}], memory_positions={'mem:a':{'x':10,'y':20}})
     graph['edges'] = [{'source':'a','target':'b','control_only':True}]
     result = asyncio.run(import_graph(UploadFile(filename='graph.json', file=io.BytesIO(json.dumps(graph).encode()))))
-    assert result['flow_version'] == 2
+    from backend.api import graphs as graph_store
+    assert result['flow_version'] == graph_store.FLOW_VERSION
     assert result['edges'] == graph['edges']
     for key in ('preprocess','memory_resources','memory_positions'):
         assert result[key] == graph[key]

@@ -32,7 +32,7 @@ def test_saved_engine_proposes_without_runner_or_optimizer(tmp_path, monkeypatch
     start = Mock(side_effect=AssertionError('must not replay'))
     monkeypatch.setattr(runner, 'start_run', start)
     llm = SimpleNamespace(generate=Mock(return_value=SimpleNamespace(content='{"prompts":{"a":"Improved prompt"}}')))
-    monkeypatch.setattr(runner, '_make_llm', lambda: llm)
+    monkeypatch.setattr(runner, '_make_llm', lambda **kw: llm)
     graph = {'id': 'g', 'tasks': [{'name': 'a', 'prompt': 'Original'}]}
     evolve_api._execute_evolve('saved', graph, 'exact_match', {'mode': 'evolve_evaluate', 'source': {'type': 'saved_run'}, 'nodes': ['a']}, tmp_path)
     assert state['status'] == 'done', state.get('error')

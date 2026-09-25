@@ -383,12 +383,38 @@ def save_graph(graph_id: str, body: dict) -> dict:
         "memory_positions": body.get("memory_positions", existing.get("memory_positions", {})),
         # Which outputs go to human review (backend/features/execution/review.py).
         "review": review_rule(body.get("review", existing.get("review"))),
+        # Evaluation lives in the Evaluate & Evolve panel, not on the canvas:
+        # the workflow's evaluators are the user's Python code, kept here.
+        # A client that does not send the list keeps the stored one.
+        "evaluators": evaluator_list(body.get("evaluators", existing.get("evaluators", []))),
         "flow_version": body.get("flow_version", 0),
         "tasks": body.get("tasks", []),
         "edges": body.get("edges", []),
     }
     with _lock:
         _save(graph)
+    return load_graph(graph_id)
+
+
+def evaluator_list(evaluators):
+    """Validate the workflow's evaluators, as review_rule does for review."""
+    from backend.features.evaluation.evaluator_tools import validate_evaluators
+    try:
+        return validate_evaluators(evaluators)
+    except Exception as exc:
+        raise GraphValidationError([str(exc)]) from None
+
+
+def set_evaluators(graph_id: str, evaluators) -> dict:
+    """Replace a workflow's evaluators, leaving the canvas untouched."""
+    graph = load_graph(graph_id)
+    if graph is None:
+        raise GraphValidationError(["Workflow not found."])
+    graph["evaluators"] = evaluator_list(evaluators)
+    with _lock:
+        _save(graph)
+    from backend.features.evaluation.evaluator_tools import clear_saved_drafts
+    clear_saved_drafts(graph_id, graph["evaluators"])
     return load_graph(graph_id)
 
 
@@ -665,7 +691,7 @@ def compute_workflow_inputs(ordered_tasks: list[dict],
         if e.get("source") not in parked and e.get("target") not in parked])
     workflow_inputs, seen = [], set()
     for task in active:
-        if is_source_task(task) or task.get("kind") == "evaluator":
+        if is_source_task(task):
             continue
         fed = bindings.get(task.get("name"), {})
         for inp in task.get("inputs", []) or []:
@@ -712,11 +738,7 @@ def validate_graph(graph: dict, check_memory: bool = True) -> tuple[list[dict], 
     graph = migrate_flow(copy.deepcopy(graph))
     tasks = graph.get("tasks", []) or []
     edges = graph.get("edges", []) or []
-    from backend.features.evaluation.evaluator_tools import validate_graph as validate_evaluators
-    try:
-        validate_evaluators(graph)
-    except Exception as exc:
-        raise GraphValidationError([str(exc)]) from exc
+    evaluator_list(graph.get("evaluators"))
     validate_harness_tasks(tasks)
     validate_source_tasks(tasks)
     validate_tool_tasks(tasks)
@@ -733,7 +755,7 @@ def validate_graph(graph: dict, check_memory: bool = True) -> tuple[list[dict], 
     # demanded output names unique across nodes and inferred edges from
     # them, and the edges are the canvas's to decide now.
     for task in ordered:
-        if is_source_task(task) or is_tool_task(task) or task.get("kind") == "evaluator" or task["name"] in parked:
+        if is_source_task(task) or is_tool_task(task) or task["name"] in parked:
             continue
         try:
             SequentialWorkFlowGraph(goal=graph.get("goal", ""), tasks=[strip_task(task)])
@@ -751,11 +773,48 @@ def validate_graph(graph: dict, check_memory: bool = True) -> tuple[list[dict], 
 # Flow semantics (Phase 3): edges carry data, nodes say whether they take part
 # ---------------------------------------------------------------------------
 
-FLOW_VERSION = 2
+FLOW_VERSION = 3
 
 
 def _fields(task: dict, side: str) -> list[str]:
     return [p.get("name") for p in (task.get(side) or []) if p.get("name")]
+
+
+def lift_evaluators(graph: dict) -> dict:
+    """Move evaluator nodes off the canvas into `graph["evaluators"]`.
+
+    Evaluation is not part of the workflow graph any more: the node's
+    `evaluator` configuration becomes the entry (its old `node` timing, which
+    meant "as soon as the outputs wired to me are ready", becomes `run`), the
+    node goes, and so does every edge that touched it. Idempotent: a graph
+    with no evaluator node is left as it is, and an entry already in the list
+    is never added twice.
+    """
+    tasks = graph.get("tasks") or []
+    nodes = [t for t in tasks if t.get("kind") == "evaluator"]
+    if not nodes:
+        graph.setdefault("evaluators", graph.get("evaluators") or [])
+        return graph
+    from backend.features.evaluation.evaluator_tools import normalize
+    lifted = list(graph.get("evaluators") or [])
+    taken = {e.get("name") for e in lifted}
+    names = set()
+    for task in nodes:
+        names.add(task.get("name"))
+        if task.get("name") in taken:
+            continue
+        config = copy.deepcopy(task.get("evaluator") or {})
+        timing = config.get("timing") or "run"
+        entry = normalize({**config, "name": task.get("name"),
+                           "description": task.get("description", ""),
+                           "timing": "run" if timing == "node" else timing,
+                           "enabled": task.get("enabled", True)})
+        lifted.append(entry)
+    graph["evaluators"] = lifted
+    graph["tasks"] = [t for t in tasks if t.get("kind") != "evaluator"]
+    graph["edges"] = [e for e in (graph.get("edges") or [])
+                      if e.get("source") not in names and e.get("target") not in names]
+    return graph
 
 
 def migrate_flow(graph: dict) -> dict:
@@ -769,9 +828,17 @@ def migrate_flow(graph: dict) -> dict:
     - an edge with nothing in common becomes control-only, with a warning;
     - nodes the old parked rule would have left out become `enabled: false`.
 
+    Version 3 takes evaluation off the canvas: an `evaluator` node becomes an
+    entry in `graph["evaluators"]` and its node and edges are dropped.
+
     A graph already at FLOW_VERSION is returned untouched.
     """
     if not isinstance(graph, dict) or graph.get("flow_version", 0) >= FLOW_VERSION:
+        return graph
+    version = graph.get("flow_version", 0)
+    lift_evaluators(graph)
+    if version >= 2:
+        graph["flow_version"] = FLOW_VERSION
         return graph
     tasks = graph.get("tasks") or []
     edges = graph.get("edges") or []

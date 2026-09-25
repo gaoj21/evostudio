@@ -22,12 +22,12 @@ export default function ToolNode({ id, data, selected }) {
         </button>
       )}
       <div className="node-title">⚙ {id}</div>
-      <div className="node-desc">{data.kind === 'evaluator' ? `Evaluator · ${data.evaluator?.type || 'exact_match'}` : data.tool || 'tool'}</div>
+      <div className="node-desc">{data.tool || 'tool'}</div>
       {data.batchBadge && <div className="node-tools batch-badge">{data.batchBadge}</div>}
       {status && <div className={`node-status status-${status}`}>{status}</div>}
-      {data.kind !== 'evaluator' && <Handle type="source" position={Position.Right} />}
+      <Handle type="source" position={Position.Right} />
       <Handle type="target" id="t-in" position={Position.Top} className="handle-memory" />
-      {data.kind !== 'evaluator' && <Handle type="source" id="b-out" position={Position.Bottom} className="handle-memory" style={{ left: '38%' }} />}
+      <Handle type="source" id="b-out" position={Position.Bottom} className="handle-memory" style={{ left: '38%' }} />
       <Handle type="target" id="b-in" position={Position.Bottom} className="handle-memory" style={{ left: '62%' }} />
     </div>
   );

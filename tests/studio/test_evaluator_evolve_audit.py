@@ -1,4 +1,4 @@
-"""Canvas evaluators and the Evolve that uses them: what must not leak,
+"""A workflow's evaluators and the Evolve that uses them: what must not leak,
 what must not be lost, and what a draft may not block."""
 import copy
 import json
@@ -14,12 +14,41 @@ from backend.features.evaluation import saved_result_evolution as saved
 SECRET = 'answer-that-must-stay-hidden'
 
 
-def graph(evaluator, prompt='old'):
-    return {'id': 'audit', 'name': 'Audit', 'goal': 'g', 'flow_version': 2,
-            'tasks': [{'name': 'work', 'prompt': prompt, 'inputs': [{'name': 'text'}], 'outputs': [{'name': 'answer'}]},
-                      {'name': 'quality', 'kind': 'evaluator', 'evaluator': evaluator,
-                       'inputs': [{'name': 'prediction'}, {'name': 'expected'}], 'outputs': []}],
-            'edges': [{'source': 'work', 'target': 'quality', 'mappings': [{'from': 'answer', 'to': 'prediction'}]}]}
+MATCH = '''def evaluate(records, label_field: str = "expected"):
+    """Score each run's answer against the label that came with its inputs."""
+    scores = []
+    for record in records:
+        expected = (record.get("inputs") or {}).get(label_field)
+        produced = ((record.get("node_outputs") or {}).get("work") or {}).get("answer")
+        scores.append(None if record.get("status") != "success" or expected is None
+                      else float(produced == expected))
+    scored = [s for s in scores if s is not None]
+    return {"metrics": {"score": sum(scored) / len(scored) if scored else None},
+            "records": [{"id": r["id"], "score": s} for r, s in zip(records, scores)],
+            "coverage": {"unit": "records", "total": len(scores), "scored": len(scored),
+                         "unscored": len(scores) - len(scored)}}
+'''
+
+
+def evaluator(code=None, **extra):
+    return {'name': 'quality', 'code': MATCH if code is None else code, 'metric': 'score',
+            'config': {'label_field': 'expected'}, 'timing': 'run', **extra}
+
+
+def graph(evaluator_entry, prompt='old'):
+    return {'id': 'audit', 'name': 'Audit', 'goal': 'g', 'flow_version': 3,
+            'tasks': [{'name': 'work', 'prompt': prompt, 'inputs': [{'name': 'text'}], 'outputs': [{'name': 'answer'}]}],
+            'edges': [], 'evaluators': [evaluator_entry]}
+
+
+@pytest.fixture(autouse=True)
+def _evaluator_worker_in_process(monkeypatch):
+    from backend.features.chat import chat_control
+    from backend.features.evaluation.python_evaluator import execute_with_logs
+    real = chat_control.worker
+    monkeypatch.setattr(chat_control, 'worker',
+                        lambda kind, payload, **kw: execute_with_logs(payload)
+                        if kind == 'evaluate_python' else real(kind, payload, **kw))
 
 
 class FakeLLM:
@@ -38,8 +67,8 @@ def fake_runs(monkeypatch):
         answer = 'yes' if candidate['tasks'][0]['prompt'] == 'new' else 'no'
         runs[kw['run_id']] = {'status': 'success', 'inputs': row, 'result': {'answer': answer},
                               'node_outputs': {'work': {'answer': answer}}, 'nodes': [],
-                              'evaluated_in_run': [t['name'] for t in candidate['tasks']
-                                                   if t.get('kind') == 'evaluator' and t.get('enabled', True)]}
+                              'evaluated_in_run': [e['name'] for e in (candidate.get('evaluators') or [])
+                                                   if e.get('enabled', True)]}
         return kw['run_id']
     monkeypatch.setattr(runner, 'start_run', start)
     monkeypatch.setattr(runner, 'get_run', lambda id: runs.get(id))
@@ -51,15 +80,15 @@ class TestProposalsNeverSeeLabels:
         fake_runs(monkeypatch)
         monkeypatch.setattr(dataloaders, 'records', lambda cfg: [{'id': '0', 'expected': SECRET}])
 
-        def tool(name, args):
-            assert args['config']['label_records'][0]['expected'] == SECRET
-            ok = [r['prediction'] == 'yes' for r in args['records']]
-            return {'metrics': {'score': sum(ok) / len(ok)},
-                    'records': [{'id': r['id'], 'score': float(o), 'expected': SECRET} for r, o in zip(args['records'], ok)]}
-        monkeypatch.setattr(tools_registry, 'call_tool', tool)
+        code = '''def evaluate(records, label_records=None):
+    ok = [r["prediction"] == {"answer": "yes"} for r in records]
+    return {"metrics": {"score": sum(ok) / len(ok)},
+            "records": [{"id": r["id"], "score": float(o),
+                         "expected": label_records[0]["expected"]} for r, o in zip(records, ok)]}
+'''
         llm = FakeLLM()
-        monkeypatch.setattr(runner, '_make_llm', lambda: llm)
-        g = graph({'type': 'tool', 'tool': 'custom', 'metric': 'score', 'timing': 'batch', 'labels': {'resource_id': 'r'}})
+        monkeypatch.setattr(runner, '_make_llm', lambda **kw: llm)
+        g = graph(evaluator(code, timing='batch', labels='r', config={}))
         state = {'task_id': 't1', 'execution_graph': copy.deepcopy(g)}
         canvas_evolution.execute(state, g, [{'text': 'q', 'id': '0'}],
                                  {'evaluator': 'quality', 'mode': 'evolve_evaluate', 'nodes': ['work'], 'rounds': 1}, lambda s: None)
@@ -71,9 +100,8 @@ class TestProposalsNeverSeeLabels:
     def test_a_label_read_from_the_inputs_is_hidden_from_the_proposer(self, monkeypatch):
         fake_runs(monkeypatch)
         llm = FakeLLM()
-        monkeypatch.setattr(runner, '_make_llm', lambda: llm)
-        g = graph({'type': 'exact_match', 'timing': 'run', 'label_field': 'expected', 'prediction_path': 'answer'})
-        g['edges'][0]['mappings'] = []
+        monkeypatch.setattr(runner, '_make_llm', lambda **kw: llm)
+        g = graph(evaluator())
         state = {'task_id': 't2', 'execution_graph': copy.deepcopy(g)}
         canvas_evolution.execute(state, g, [{'text': 'q', 'expected': SECRET}],
                                  {'evaluator': 'quality', 'mode': 'evolve_evaluate', 'nodes': ['work'], 'rounds': 1}, lambda s: None)
@@ -85,19 +113,19 @@ class TestProposalsNeverSeeLabels:
                     'label': SECRET, 'prediction': 'no', 'nodes': []}]
         feedback = {'metrics': {'score': 0}, 'records': {'0': {**records[0], 'metrics': {'score': 0}}}}
         llm = FakeLLM()
-        saved.propose(graph({'type': 'exact_match'}), records, ['work'], llm, feedback=feedback, hidden_inputs=['gold'])
+        saved.propose(graph(evaluator()), records, ['work'], llm, feedback=feedback, hidden_inputs=['gold'])
         assert SECRET not in llm.prompts[0]
         assert '"score": 0' in llm.prompts[0]
         allowed = FakeLLM()
-        saved.propose(graph({'type': 'exact_match'}), records, ['work'], allowed, share_labels=True)
+        saved.propose(graph(evaluator()), records, ['work'], allowed, share_labels=True)
         assert SECRET in allowed.prompts[0]
 
 
 class TestCandidateReplay:
     def test_candidate_runs_do_not_execute_evaluators_twice(self, monkeypatch):
         runs = fake_runs(monkeypatch)
-        monkeypatch.setattr(runner, '_make_llm', lambda: FakeLLM())
-        g = graph({'type': 'exact_match', 'timing': 'run', 'label_field': 'expected'})
+        monkeypatch.setattr(runner, '_make_llm', lambda **kw: FakeLLM())
+        g = graph(evaluator())
         state = {'task_id': 't3', 'execution_graph': copy.deepcopy(g)}
         canvas_evolution.execute(state, g, [{'text': 'q', 'expected': 'yes'}],
                                  {'evaluator': 'quality', 'mode': 'evaluate', 'nodes': [], 'rounds': 1}, lambda s: None)
@@ -106,8 +134,8 @@ class TestCandidateReplay:
 
     def test_candidates_are_recorded_with_their_prompts(self, monkeypatch):
         fake_runs(monkeypatch)
-        monkeypatch.setattr(runner, '_make_llm', lambda: FakeLLM())
-        g = graph({'type': 'exact_match', 'timing': 'run', 'label_field': 'expected'})
+        monkeypatch.setattr(runner, '_make_llm', lambda **kw: FakeLLM())
+        g = graph(evaluator())
         state = {'task_id': 't4', 'execution_graph': copy.deepcopy(g)}
         canvas_evolution.execute(state, g, [{'text': 'q', 'expected': 'yes'}],
                                  {'evaluator': 'quality', 'mode': 'evolve_evaluate', 'nodes': ['work'], 'rounds': 1}, lambda s: None)
@@ -118,17 +146,25 @@ class TestCandidateReplay:
 
 class TestDrafts:
     def test_a_disabled_or_codeless_evaluator_does_not_block_saving(self):
-        g = graph({'type': 'python', 'timing': 'batch'})
-        evaluator_tools.validate_graph(g)            # a new node, no code yet
-        g['tasks'][1]['evaluator'] = {'type': 'python', 'code': 'def broken(:', 'timing': 'batch'}
-        g['tasks'][1]['enabled'] = False
+        g = graph(evaluator(code='', timing='batch'))
+        evaluator_tools.validate_graph(g)            # written, not typed into yet
+        g['evaluators'][0].update(code='def broken(:', enabled=False)
         evaluator_tools.validate_graph(g)
-        g['tasks'][1]['enabled'] = True
+        g['evaluators'][0]['enabled'] = True
         with pytest.raises(sources.SourceError, match="quality"):
             evaluator_tools.validate_graph(g)
 
+    def test_two_evaluators_may_not_share_a_name(self):
+        g = graph(evaluator())
+        g['evaluators'].append(evaluator())
+        with pytest.raises(sources.SourceError, match='unique'):
+            evaluator_tools.validate_graph(g)
+        g['evaluators'] = [evaluator(), {**evaluator(), 'name': ''}]
+        with pytest.raises(sources.SourceError, match='needs a name'):
+            evaluator_tools.validate_graph(g)
+
     def test_a_codeless_evaluator_reports_itself_and_cannot_be_an_objective(self):
-        g = graph({'type': 'python', 'timing': 'run', 'metric': 'score'})
+        g = graph(evaluator(code=''))
         report = evaluator_tools.evaluate_runs(g, [{'status': 'success'}])['quality']
         assert report['status'] == 'failed' and 'code' in report['error']
         with pytest.raises(sources.SourceError, match='code'):
@@ -172,13 +208,10 @@ def test_a_real_candidate_replay_runs_the_workflow_and_scores_it_once(monkeypatc
     started = []
     real_start = runner.start_run
     monkeypatch.setattr(runner, 'start_run', lambda *a, **kw: started.append(real_start(*a, **kw)) or started[-1])
-    g = {'id': 'replay', 'name': 'Replay', 'goal': 'g', 'flow_version': 2,
+    g = {'id': 'replay', 'name': 'Replay', 'goal': 'g', 'flow_version': 3,
          'tasks': [{'name': 'work', 'kind': 'tool', 'tool': 'echo', 'inputs': [{'name': 'text', 'type': 'str', 'required': True}],
-                    'outputs': [{'name': 'answer', 'type': 'str', 'required': True}]},
-                   {'name': 'quality', 'kind': 'evaluator', 'enabled': True,
-                    'evaluator': {'type': 'exact_match', 'timing': 'run', 'label_field': 'expected'},
-                    'inputs': [{'name': 'prediction', 'type': 'any'}], 'outputs': []}],
-         'edges': [{'source': 'work', 'target': 'quality', 'mappings': [{'from': 'answer', 'to': 'prediction'}]}]}
+                    'outputs': [{'name': 'answer', 'type': 'str', 'required': True}]}],
+         'edges': [], 'evaluators': [evaluator()]}
     state = {'task_id': 'real', 'execution_graph': copy.deepcopy(g)}
     canvas_evolution.execute(state, g, [{'text': 'hi', 'expected': 'HI'}, {'text': 'no', 'expected': 'other'}],
                              {'evaluator': 'quality', 'mode': 'evaluate', 'nodes': [], 'rounds': 1}, lambda s: None)
@@ -225,8 +258,8 @@ class TestCandidateIsolation:
         monkeypatch.setattr(runner, 'start_run', start)
         monkeypatch.setattr(runner, 'get_run', lambda id: {'status': 'success', 'result': {'answer': 'yes'},
                                                            'node_outputs': {'work': {'answer': 'yes'}}, 'nodes': []})
-        monkeypatch.setattr(runner, '_make_llm', lambda: FakeLLM())
-        g = graph({'type': 'exact_match', 'timing': 'run', 'label_field': 'expected'})
+        monkeypatch.setattr(runner, '_make_llm', lambda **kw: FakeLLM())
+        g = graph(evaluator())
         state = {'task_id': 'iso', 'execution_graph': copy.deepcopy(g)}
         canvas_evolution.execute(state, g, [{'text': 'q', 'expected': 'yes'}],
                                  {'evaluator': 'quality', 'mode': 'evolve_evaluate', 'nodes': ['work'], 'rounds': 1}, lambda s: None)
@@ -246,7 +279,7 @@ class TestCandidateIsolation:
         monkeypatch.setattr(evolve_api, 'EVOLVE_DIR', tmp_path / 'evolve')
         monkeypatch.setattr(evolve_api, '_tasks', {})
         monkeypatch.setattr(runner, 'start_run', lambda *a, **kw: (_ for _ in ()).throw(RuntimeError('boom')))
-        g = graph({'type': 'exact_match', 'timing': 'run', 'label_field': 'expected'})
+        g = graph(evaluator())
         state = {'task_id': 'failing', 'execution_graph': copy.deepcopy(g)}
         (memory_store.MEMORY_DIR / '_evolve-failing-baseline').mkdir(parents=True)
         with pytest.raises(RuntimeError):
@@ -262,7 +295,7 @@ class TestCandidateIsolation:
 
 class TestSharedMemoryIsRefused:
     def test_a_node_that_only_reads_mem0_is_refused_with_what_to_do(self):
-        g = graph({'type': 'exact_match', 'timing': 'run'})
+        g = graph(evaluator())
         g['tasks'][0].update(use_long_term_memory=True, memory={'read_from': ['remember']})
         # The Mem0 node itself does not remember anything; 'work' only reads it.
         g['tasks'].append({'name': 'remember', 'prompt': 'p', 'inputs': [], 'outputs': [],
@@ -274,13 +307,15 @@ class TestSharedMemoryIsRefused:
 
 
 class TestDirection:
-    def test_a_built_in_evaluator_honours_the_chosen_direction(self, monkeypatch):
-        report = evaluator_tools.report({'type': 'exact_match', 'direction': 'minimize'},
-                                        [{'id': '0', 'prediction': 'a', 'expected': 'b'}])
-        assert report['objective'] == {'metric': 'accuracy', 'direction': 'minimize'}
+    def test_an_evaluator_honours_the_chosen_direction(self, monkeypatch):
+        report = evaluator_tools.report({'code': MATCH, 'metric': 'score', 'direction': 'minimize',
+                                         'config': {}},
+                                        [{'id': '0', 'status': 'success', 'inputs': {'expected': 'b'},
+                                          'node_outputs': {'work': {'answer': 'a'}}}])
+        assert report['objective'] == {'metric': 'score', 'direction': 'minimize'}
         fake_runs(monkeypatch)
-        monkeypatch.setattr(runner, '_make_llm', lambda: FakeLLM())
-        g = graph({'type': 'exact_match', 'timing': 'run', 'label_field': 'expected', 'direction': 'minimize'})
+        monkeypatch.setattr(runner, '_make_llm', lambda **kw: FakeLLM())
+        g = graph(evaluator(direction='minimize'))
         state = {'task_id': 'dir', 'execution_graph': copy.deepcopy(g)}
         # The candidate answers 'yes' where the baseline answered 'no'; with a
         # minimized objective the worse-matching baseline is the one kept.

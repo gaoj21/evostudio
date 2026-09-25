@@ -23,7 +23,7 @@
 
 - 只改本功能时先提供涉及文件；HTTP 合同变化再附 `frontend/src/api.js` 与对应前端 feature。
 - 数据路径取自 `backend/api/studio_config.py`；不要移动运行数据。
-- 模型 API/SDK 的差异放在 `backend/llm/adapters`，不要写在业务函数中。
+- 模型 API/SDK 的差异放在仓库根目录的 `llm/adapters`，不要写在业务函数中；`backend/` 里不出现供应商名字或 SDK。框架模型类由 `backend/features/model_bridge.py` 提供。
 - 功能间仍有依赖；缺少依赖文件时让对话 LLM 明确列出，不要让它猜测接口。
 
 ## 验证

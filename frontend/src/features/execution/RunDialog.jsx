@@ -510,7 +510,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
   const [workers, setWorkers] = useState(2);
   const [apiBatch, setApiBatch] = useState(false);
   const [apiBatchSize, setApiBatchSize] = useState(32);
-  // Scoring is done by canvas Evaluator nodes; the batch-start metric is gone.
+  // Scoring is done by the workflow's saved evaluators; the batch-start metric is gone.
   // empty runs it as an ordinary batch.
   const metric = '';
   const labelKey = '';
@@ -743,7 +743,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
       />
       {error && <div className="muted small batch-error">{String(error)}</div>}
       <p className="muted small" data-testid="evaluation-note">
-        Evaluation runs the Evaluator nodes on the canvas (your own code), at the timing each one sets.
+        Evaluation runs the evaluators saved on this workflow (your own code), at the timing each one sets.
         A finished batch can also be evaluated later from its Evaluation tab, without rerunning the workflow.
       </p>
       <div className="field">

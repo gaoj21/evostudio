@@ -17,7 +17,7 @@ export default function TopBar({
   watching,
   onToggleWatch,
   showImplied = false, onToggleImplied, impliedCount = 0,
-  showMemory = true, onToggleMemory, onResetMemory, resetMemoryKeys = '',
+  showMemory = true, onToggleMemory, onResetMemory, onBackupMemory, resetMemoryKeys = '',
   onWorkspace,
   onExport,
   onImport,
@@ -118,6 +118,12 @@ export default function TopBar({
           key: 'watch',
           label: watching ? 'Stop watching' : 'Watch sources',
           onClick: onToggleWatch,
+          disabled: !graphId,
+        },
+        {
+          key: 'backup-memory',
+          label: 'Back up memory',
+          onClick: onBackupMemory,
           disabled: !graphId,
         },
         {

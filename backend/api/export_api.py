@@ -156,21 +156,34 @@ def _py(value) -> str:
     return pprint.pformat(value, width=88, sort_dicts=False)
 
 
-def _default_model() -> tuple[str, str, str]:
-    """The provider Studio is configured with: (model, base_url, key env var)."""
+def _default_provider() -> tuple[str, str, list[str]]:
+    """The provider Studio is configured with: (name, model, env vars it needs).
+
+    Read from the `llm` package's own configuration, which is all the export
+    needs to write a .env.example. No endpoint and no SDK is involved, so a
+    deployment backed by a different provider exports the same way.
+    """
     try:
-        from llm.registry import get_provider
+        from llm import get_provider
 
         cfg = get_provider(None)
-        return (cfg.get("model", ""), (cfg.get("base_url") or ""),
-                cfg.get("api_key_env", ""))
     except Exception:
-        return "", "", ""
+        return "", "", []
+    env = [cfg["api_key_env"]] if cfg.get("api_key_env") else []
+    env += [name for name in (cfg.get("requires") or []) if name not in env]
+    return cfg.get("name") or "", cfg.get("model") or "", env
 
 
 # Vendored so the project deploys without this repo: `evoagentx` here carries
-# local changes (the skills module among them) that a PyPI install does not.
-VENDOR_TREES = ["evoagentx", "llm", "memory"]
+# local changes (the skills module among them) that a PyPI install does not,
+# and `llm` is the model boundary the exported workflow calls. Each maps the
+# name it gets under vendor/ to where it lives in this checkout -- `llm` is a
+# package at the repository root, the others sit under backend/.
+VENDOR_TREES = {
+    "evoagentx": "backend/evoagentx",
+    "llm": "llm",
+    "memory": "backend/memory",
+}
 SKIP_DIRS = {"__pycache__", ".versions", ".git", "node_modules", ".pytest_cache"}
 MAX_VENDOR_FILE = 4 * 1024 * 1024
 MAX_DATA_FILE = 8 * 1024 * 1024
@@ -434,7 +447,7 @@ def project_files(graph: dict, include_vendor: bool = True) -> tuple[dict, dict]
     # enabled flags made explicit, the same way a stored graph is on load.
     graph = migrate_flow(copy.deepcopy(graph))
     tasks = graph.get("tasks", []) or []
-    if any(t.get('kind') == 'evaluator' or (t.get('source') or {}).get('type') == 'dataloader' for t in tasks):
+    if graph.get('evaluators') or any((t.get('source') or {}).get('type') == 'dataloader' for t in tasks):
         raise HTTPException(422, 'DataLoader and Evaluator workflows run in Studio. Export the graph JSON to preserve their configuration; standalone Python export is not supported.')
     if any((t.get('harness') or {}).get('engine') == 'deepagents' for t in tasks):
         raise HTTPException(422, 'Standalone export of Deep Agents harness nodes is not supported yet. Run this workflow in the platform.')
@@ -486,7 +499,7 @@ def project_files(graph: dict, include_vendor: bool = True) -> tuple[dict, dict]
     all_skills = {s["name"]: s for s in skills_api.list_skills()}
     bundled_skills = [all_skills[s] for s in used_skills if s in all_skills]
 
-    model, base_url, key_env = _default_model()
+    provider, model, key_envs = _default_provider()
     sample = _sample_from_runs(graph_id)
 
     files: dict[str, str] = {}
@@ -510,17 +523,19 @@ def project_files(graph: dict, include_vendor: bool = True) -> tuple[dict, dict]
     if tool_requirements:
         files["requirements.txt"] += ("\n# What the bundled custom tools declared:\n"
                                       + "\n".join(tool_requirements) + "\n")
+    # Every model call goes through the bundled `llm` package, so the only
+    # thing this file configures is which provider that package uses and the
+    # secrets that provider needs. There is no second path and no endpoint.
     files[".env.example"] = (
-        "# The bundled provider layer (vendor/llm/providers.json) reads the key\n"
-        "# for the provider it selects. This is the default path.\n"
-        f"{key_env or 'DEEPSEEK_API_KEY'}=sk-...\n"
-        "# EAX_PROVIDER=openai        # pick a non-default provider\n"
-        "# EAX_MEMORY_BACKEND=langchain  # default: framework\n"
+        "# The bundled llm package (vendor/llm/providers.json) decides where\n"
+        "# model calls go. Set the variables the chosen provider needs; the\n"
+        f"# default here is {provider or 'the package default'}.\n"
+        + "".join(f"{name}=...\n" for name in key_envs or ["DEEPSEEK_API_KEY"])
+        + "\n"
+        "# A different provider from vendor/llm/providers.json:\n"
+        "# EAX_PROVIDER=openrouter\n"
         "\n"
-        "# Or bypass that layer entirely and talk to one endpoint:\n"
-        f"# EAX_MODEL={model or 'deepseek/deepseek-chat'}\n"
-        "# EAX_API_KEY=sk-...\n"
-        + (f"# EAX_BASE_URL={base_url}\n" if base_url else "# EAX_BASE_URL=https://.../v1\n")
+        "# EAX_MEMORY_BACKEND=langchain  # default: framework\n"
     )
     files["README.md"] = _readme(
         name, goal, llm_tasks, tool_nodes, source_nodes, edges,
@@ -606,12 +621,17 @@ def project_files(graph: dict, include_vendor: bool = True) -> tuple[dict, dict]
     # and whatever repo modules the bundled toolkits actually import.
     if not include_vendor:
         return files, binary_files
-    for tree in VENDOR_TREES:
-        root = _REPO_ROOT / "backend" / tree
+    for tree, location in VENDOR_TREES.items():
+        root = _REPO_ROOT / location
         if not root.is_dir():
             continue
         for path in _iter_tree(root):
-            binary_files[f"vendor/{path.relative_to(_REPO_ROOT / 'backend')}"] = path.read_bytes()
+            binary_files[f"vendor/{tree}/{path.relative_to(root).as_posix()}"] = path.read_bytes()
+    # The bridge that turns the `llm` package into the model class the
+    # framework instantiates. The exported workflow.py imports it, so the
+    # project reaches the provider the same way Studio does.
+    from backend.features import model_bridge
+    files["vendor/model_bridge.py"] = Path(model_bridge.__file__).read_text(encoding="utf-8")
 
     reached = _repo_modules_reached(local_tools)
     for path in sorted(reached):
@@ -634,8 +654,8 @@ def vendor_fingerprint() -> str:
     import hashlib
 
     digest = hashlib.sha1()
-    for tree in VENDOR_TREES:
-        root = _REPO_ROOT / "backend" / tree
+    for location in VENDOR_TREES.values():
+        root = _REPO_ROOT / location
         if not root.is_dir():
             continue
         for path in _iter_tree(root):

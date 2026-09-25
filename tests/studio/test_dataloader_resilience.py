@@ -59,7 +59,7 @@ def env(tmp_path, monkeypatch):
     class StubLLM:
         config = LiteLLMConfig(model="deepseek/deepseek-chat", deepseek_key="test-only")
     monkeypatch.setattr(runner, "execute_llm_node", fake_llm)
-    monkeypatch.setattr(runner, "_make_llm", lambda: StubLLM())
+    monkeypatch.setattr(runner, "_make_llm", lambda **kw: StubLLM())
     graph = {"id": "resilience", "name": "Resilience", "goal": "g", "flow_version": 2, "tasks": [
         {"name": "input", "kind": "source",
          "source": {"type": "dataloader", "loader": "python", "resource_id": resource["id"], "code": CODE,

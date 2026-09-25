@@ -467,10 +467,10 @@ describe('the batch preview is authoritative', () => {
       .toBeInTheDocument();
   });
 
-  it('leaves scoring to the canvas evaluators', async () => {
+  it('leaves scoring to the saved evaluators', async () => {
     const user = open();
     await batchTab(user);
-    expect(await screen.findByTestId('evaluation-note')).toHaveTextContent('Evaluator nodes on the canvas');
+    expect(await screen.findByTestId('evaluation-note')).toHaveTextContent('evaluators saved on this workflow');
     expect(screen.queryByLabelText(/score the results/i)).not.toBeInTheDocument();
     await waitFor(() => expect(api.previewBatchCanvas).toHaveBeenCalled());
     expect(api.previewBatchCanvas.mock.calls.at(-1)[1]).not.toHaveProperty('metric');

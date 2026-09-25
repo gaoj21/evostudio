@@ -25,8 +25,8 @@ def test_typed_inputs_reject_wrong_values():
 
 def test_python_owns_all_records_and_unjoined_labels(monkeypatch):
     monkeypatch.setattr(chat_control, 'worker', lambda kind, payload, **kw: execute(payload))
-    graph = {'tasks': [{'name': 'quality', 'kind': 'evaluator', 'evaluator': {
-        'type': 'python', 'code': CODE, 'metric': 'accuracy', '_label_records': [{'x': 1}, {'x': 1}]}}], 'edges': []}
+    graph = {'tasks': [], 'edges': [], 'evaluators': [{'name': 'quality', 'code': CODE,
+             'metric': 'accuracy', '_label_records': [{'x': 1}, {'x': 1}]}]}
     runs = [{'status': 'success', 'node_outputs': {'hidden': {'value': 1}}},
             {'status': 'failed', 'node_outputs': {'hidden': {'value': 0}}}]
     report = evaluators.evaluate_runs(graph, runs)['quality']
@@ -37,28 +37,33 @@ def test_python_owns_all_records_and_unjoined_labels(monkeypatch):
 
 
 def test_preview_saved_batch_scopes_and_never_reruns(monkeypatch):
+    """A preview runs pasted code over saved results and saves nothing."""
     from backend.api.app import app
-    graph = {'id': 'demo', 'tasks': [{'name': 'quality', 'kind': 'evaluator', 'evaluator': {'type': 'python', 'code': CODE}}], 'edges': []}
-    monkeypatch.setattr(graphs, 'load_graph', lambda _: graph)
+    graph = {'id': 'demo', 'tasks': [], 'edges': [], 'evaluators': []}
+    monkeypatch.setattr(graphs, 'load_graph', lambda gid: graph if gid == 'demo' else None)
     monkeypatch.setattr(batch, 'get_batch', lambda _: {'graph_id': 'demo', 'status': 'success', 'items': [{'run_id': 'r'}]})
     monkeypatch.setattr(runner, 'get_run', lambda _: {'status': 'success', 'node_outputs': {'hidden': {'value': 1}}})
     monkeypatch.setattr(runner, 'start_run', lambda *a, **kw: pytest.fail('Must not rerun'))
+    saved = []
+    monkeypatch.setattr(batch, 'set_evaluations', lambda *a, **kw: saved.append(a))
     monkeypatch.setattr(chat_control, 'worker', lambda kind, payload, **kw: execute(payload))
     client = TestClient(app)
-    response = client.post('/api/evaluators/graphs/demo/preview', json={'batch_id': 'b', 'evaluator': 'quality', 'graph': graph})
+    response = client.post('/api/graphs/demo/evaluators/preview', json={'batch_id': 'b', 'code': CODE})
     assert response.status_code == 200, response.text
     assert response.json()['report']['objective']['metric'] == 'accuracy'
+    assert [m['name'] for m in response.json()['metrics']] == ['accuracy']
     assert response.json()['execution_count'] == 1
-    assert '_preview' not in graph['tasks'][0]['evaluator']
-    response = client.post('/api/evaluators/graphs/another/preview', json={'batch_id': 'b', 'evaluator': 'quality', 'graph': graph})
+    # Nothing saved: not onto the batch, and not onto the workflow.
+    assert saved == [] and graph['evaluators'] == []
+    response = client.post('/api/graphs/another/evaluators/preview', json={'batch_id': 'b', 'code': CODE})
     assert response.status_code == 404
 
 
 def test_uploaded_evaluator_is_an_evolve_objective(monkeypatch):
     from backend.features.evaluation.canvas_evolution import score_saved
     monkeypatch.setattr(chat_control, 'worker', lambda kind, payload, **kw: execute(payload))
-    graph = {'tasks': [{'name': 'quality', 'kind': 'evaluator', 'evaluator': {
-        'type': 'python', 'code': CODE, 'metric': 'accuracy'}}], 'edges': []}
+    graph = {'tasks': [], 'edges': [],
+             'evaluators': [{'name': 'quality', 'code': CODE, 'metric': 'accuracy'}]}
     result = score_saved(graph, [{'status': 'success', 'node_outputs': {'hidden': {'value': 1}}}], 'quality')
     assert result['metrics']['score'] == 1
 
@@ -66,7 +71,7 @@ def test_uploaded_evaluator_is_an_evolve_objective(monkeypatch):
 @pytest.mark.parametrize('value', ['float("nan")', 'True', '"high"'])
 def test_invalid_metric_values_cannot_become_objectives(monkeypatch, value):
     monkeypatch.setattr(chat_control, 'worker', lambda kind, payload, **kw: execute(payload))
-    cfg = {'type': 'python', 'code': 'def evaluate(records):\n    return {"metrics": {"score": '+value+'}}'}
+    cfg = {'code': 'def evaluate(records):\n    return {"metrics": {"score": '+value+'}}'}
     with pytest.raises((ValueError, evaluators.SourceError)):
         evaluators.report(cfg, [])
 

@@ -1,6 +1,6 @@
-"""An evaluator is the user's own code: what it can rely on."""
-import asyncio
-import json
+"""An evaluator is the user's own code, kept with the workflow: what it can
+rely on. Evaluation is not on the canvas — the list lives on the graph
+document and the Evaluate & Evolve panel owns it."""
 import time
 
 import pytest
@@ -12,14 +12,14 @@ RUN = {"run_id": "r1", "status": "success", "inputs": {"text": "hi"},
        "nodes": [{"name": "work", "output": {"answer": "HI"}}], "result": {"answer": "HI"}}
 
 
-def graph(cfg, edges=None):
-    return {"tasks": [{"name": "work", "inputs": [], "outputs": [{"name": "answer"}]},
-                      {"name": "check", "kind": "evaluator", "evaluator": cfg, "inputs": [], "outputs": []}],
-            "edges": edges or []}
+def graph(entry):
+    return {"tasks": [{"name": "work", "inputs": [], "outputs": [{"name": "answer"}]}],
+            "edges": [], "evaluators": [{"name": "check", **entry}]}
 
 
-def evaluate(code, runs=(RUN,), **cfg):
-    return tools.evaluate_runs(graph({"type": "python", "code": code, "timing": "batch", **cfg}), list(runs), timing={"batch"})["check"]
+def evaluate(code, runs=(RUN,), **entry):
+    doc = graph({"code": code, "timing": "batch", **entry})
+    return tools.evaluate_runs(doc, list(runs), timing={"batch"})["check"]
 
 
 RATE = '''def evaluate(records):
@@ -40,28 +40,38 @@ class TestTheObjective:
 
     def test_evolve_needs_the_objective_chosen(self):
         from backend.features.evaluation import canvas_evolution
-        g = graph({"type": "python", "code": RATE, "timing": "batch"})
+        g = graph({"code": RATE, "timing": "batch"})
         with pytest.raises(SourceError, match="Choose the objective metric"):
             canvas_evolution.select(g, "check")
-        g["tasks"][1]["evaluator"]["metric"] = "completion_rate"
+        g["evaluators"][0]["metric"] = "completion_rate"
         assert canvas_evolution.select(g, "check")["name"] == "check"
+
+    def test_evolve_accepts_the_canvas_prefixed_name_and_the_bare_one(self):
+        from backend.features.evaluation import canvas_evolution
+        g = graph({"code": RATE, "timing": "batch", "metric": "completion_rate"})
+        assert canvas_evolution.select(g, "check")["name"] == "check"
+        assert canvas_evolution.select(g, "canvas:check")["name"] == "check"
 
 
 class TestTiming:
     def test_one_default_everywhere(self):
         assert tools.timing_of({}) == "run" == tools.DEFAULT_TIMING
-        assert tools.evaluate_runs(graph({"type": "python", "code": RATE}), [RUN], timing={"run"})
-        assert tools.evaluate_runs(graph({"type": "python", "code": RATE}), [RUN], timing={"batch"}) == {}
+        assert tools.evaluate_runs(graph({"code": RATE}), [RUN], timing={"run"})
+        assert tools.evaluate_runs(graph({"code": RATE}), [RUN], timing={"batch"}) == {}
 
-    def test_ready_outputs_timing_needs_a_connection(self):
-        with pytest.raises(SourceError, match="nothing is connected"):
-            tools.validate_graph(graph({"type": "python", "code": RATE, "timing": "node"}))
-        tools.validate_graph(graph({"type": "python", "code": RATE, "timing": "node"},
-                                   edges=[{"source": "work", "target": "check", "mappings": []}]))
+    def test_manual_runs_only_when_asked(self):
+        g = graph({"code": RATE, "timing": "manual"})
+        assert tools.evaluate_runs(g, [RUN], timing={"run"}) == {}
+        assert tools.evaluate_runs(g, [RUN], timing={"batch"}) == {}
+        assert tools.evaluate_runs(g, [RUN], ["check"])["check"]["status"] == "success"
+
+    def test_the_node_timing_is_gone(self):
+        with pytest.raises(SourceError, match="timing must be one of"):
+            tools.validate_graph(graph({"code": RATE, "timing": "node"}))
 
     @pytest.mark.parametrize("value,ok", [(120, True), (10, True), (3600, True), (5, False), (True, False)])
     def test_time_limit_bounds(self, value, ok):
-        g = graph({"type": "python", "code": RATE, "timeout": value})
+        g = graph({"code": RATE, "timeout": value})
         if ok:
             tools.validate_graph(g)
         else:
@@ -127,15 +137,14 @@ class TestFailedRunsAreEvaluatedToo:
         class Stub:
             config = LiteLLMConfig(model="deepseek/deepseek-chat", deepseek_key="test-only")
         monkeypatch.setattr(runner, "execute_llm_node", failing)
-        monkeypatch.setattr(runner, "_make_llm", lambda: Stub())
+        monkeypatch.setattr(runner, "_make_llm", lambda **kw: Stub())
         c = TestClient(studio_app.app)
         gid = c.post("/api/graphs", json={"name": "fails", "goal": "g"}).json()["id"]
-        g = {"id": gid, "name": "fails", "goal": "g", "flow_version": 2, "edges": [], "tasks": [
+        g = {"id": gid, "name": "fails", "goal": "g", "flow_version": 3, "edges": [], "tasks": [
             {"name": "work", "description": "d", "prompt": "{text}", "parse_mode": "json",
              "inputs": [{"name": "text", "type": "str", "description": "t", "required": True}],
-             "outputs": [{"name": "answer", "type": "str", "description": "a", "required": True}]},
-            {"name": "check", "kind": "evaluator", "inputs": [], "outputs": [],
-             "evaluator": {"type": "python", "code": RATE, "timing": "run", "metric": "completion_rate"}}]}
+             "outputs": [{"name": "answer", "type": "str", "description": "a", "required": True}]}],
+            "evaluators": [{"name": "check", "code": RATE, "timing": "run", "metric": "completion_rate"}]}
         assert c.put(f"/api/graphs/{gid}", json=g).status_code == 200
         plan = c.post(f"/api/graphs/{gid}/run-plan", json={"start_at": [], "mode": "single"}).json()
         rid = c.post(f"/api/graphs/{gid}/run", json={"inputs": {"text": "x"}, "plan_id": plan["plan_id"]}).json()["run_id"]
@@ -155,7 +164,7 @@ class TestEvaluatingASavedBatch:
         from backend.api import app as studio_app, graphs as graph_store, runner, batch
         monkeypatch.setattr(batch, "BATCHES_DIR", tmp_path / "batches")
         batch._batches.clear()
-        g = graph({"type": "python", "code": RATE, "timing": "batch", "metric": "completion_rate"})
+        g = graph({"code": RATE, "timing": "batch", "metric": "completion_rate"})
         g.update(id="g1", name="g1")
         monkeypatch.setattr(graph_store, "load_graph", lambda gid: g if gid == "g1" else None)
         batch._persist_batch({"batch_id": "b1", "graph_id": "g1", "status": "succeeded", "created_at": "t",
@@ -165,7 +174,7 @@ class TestEvaluatingASavedBatch:
         runs = {"r1": {**RUN, "graph_id": "g1"}, "r2": {**RUN, "run_id": "r2", "status": "failed", "graph_id": "g1"}}
         monkeypatch.setattr(runner, "get_run", lambda rid: runs.get(rid))
         c = TestClient(studio_app.app)
-        res = c.post("/api/evaluators/graphs/g1/saved", json={"batch_id": "b1"})
+        res = c.post("/api/graphs/g1/evaluators/run", json={"batch_id": "b1"})
         assert res.status_code == 200, res.text
         assert res.json()["evaluations"]["check"]["metrics"]["completion_rate"] == 0.5
         assert batch.get_batch("b1")["evaluations"]["check"]["metrics"]["completion_rate"] == 0.5
@@ -178,16 +187,17 @@ class TestEvaluatingASavedBatch:
         c = TestClient(studio_app.app)
         assert c.post("/api/batches/b1/evaluate").status_code in (404, 405)
         assert c.get("/api/batches/b1/evaluation").status_code in (404, 405)
+        # The canvas-era routes, too.
+        assert c.post("/api/evaluators/graphs/g1/saved", json={}).status_code in (404, 405)
+        assert c.post("/api/evaluators/graphs/g1/preview", json={}).status_code in (404, 405)
 
 
 def test_a_misconfigured_evaluator_reports_itself_and_never_raises():
     """A bad evaluator must not turn a successful run into a failed one: the
     runner calls evaluate_runs on the success path."""
-    from backend.features.evaluation import evaluator_tools
-    graph = {"tasks": [
-        {"name": "bad", "kind": "evaluator", "evaluator": {"type": "python", "code": "x = (", "timing": "run"}, "inputs": [], "outputs": []},
-        {"name": "late", "kind": "evaluator", "evaluator": {"type": "exact_match", "timing": "node"}, "inputs": [], "outputs": []},
-    ], "edges": []}
-    reports = evaluator_tools.evaluate_runs(graph, [{"run_id": "r1", "status": "success", "inputs": {}, "result": {}}])
-    assert reports["bad"]["status"] == "failed"
-    assert reports["late"]["status"] == "failed" and "nothing is connected" in reports["late"]["error"]
+    doc = {"tasks": [], "edges": [], "evaluators": [
+        {"name": "bad", "code": "x = (", "timing": "run"},
+        {"name": "empty", "code": "", "timing": "run"}]}
+    reports = tools.evaluate_runs(doc, [{"run_id": "r1", "status": "success", "inputs": {}, "result": {}}])
+    assert reports["bad"]["status"] == "failed" and "syntax error" in reports["bad"]["error"]
+    assert reports["empty"]["status"] == "failed" and "no code yet" in reports["empty"]["error"]

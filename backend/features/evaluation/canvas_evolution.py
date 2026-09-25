@@ -1,4 +1,4 @@
-"""Run the actual canvas and use an attached evaluator as the objective.
+"""Run the actual canvas and use one of the workflow's evaluators as the objective.
 
 Candidates use identical prepared inputs and fresh, isolated workflow memory.
 No provider implementation is embedded here. Saved-result proposals remain a
@@ -55,22 +55,24 @@ def discard_candidate_stores(task_id=None, keep=()):
 
 
 def select(graph, name):
+    """The workflow evaluator Evolve optimizes, by name."""
+    name = evaluator_tools.evaluator_name(name)
     evaluator_tools.validate_graph(graph)
-    task = next((t for t in graph.get('tasks', []) if t.get('name') == name and t.get('kind') == 'evaluator' and t.get('enabled', True)), None)
-    if task is None:
-        raise SourceError('Choose an enabled canvas evaluator.')
+    entry = next((e for e in evaluator_tools.entries(graph)
+                  if e.get('name') == name and e.get('enabled', True)), None)
+    if entry is None:
+        raise SourceError('Choose an enabled evaluator of this workflow.')
     # Saving tolerates a draft; an objective has to be complete.
-    evaluator_tools.validate_task(graph, task)
-    cfg = task.get('evaluator') or {}
+    evaluator_tools.validate_entry(entry)
     # A run may fall back to the first metric the code returns; an
     # optimization objective must be the one the user chose.
-    # Legacy tool evaluators keep their documented default objective, 'score'.
-    if cfg.get('type') == 'python' and not cfg.get('metric'):
-        raise SourceError(f"Choose the objective metric of evaluator '{name}' first: open it, preview it on saved results and pick the metric Evolve should optimize.")
-    return task
+    if not entry.get('metric'):
+        raise SourceError(f"Choose the objective metric of evaluator '{name}' first: preview it on saved results and pick the metric Evolve should optimize.")
+    return entry
 
 
 def score_saved(graph, records, name):
+    name = evaluator_tools.evaluator_name(name)
     select(graph, name)
     runs = copy.deepcopy(records)
     result = evaluator_tools.evaluate_runs(graph, runs, [name])[name]
@@ -80,10 +82,6 @@ def score_saved(graph, records, name):
     return {'metrics': {'score': result['metrics'].get(metric), **(result.get('coverage') or {})},
             'records': {str(r.get('id', i)): {'metrics': {'score': r.get('score')}, 'reason': r.get('reason')} for i, r in enumerate(result.get('records', []))},
             'evaluations': {name: result}, 'objective': result['objective']}
-
-
-def _evaluator_config(graph, name):
-    return next((t.get('evaluator') or {} for t in graph.get('tasks', []) if t.get('name') == name), {})
 
 
 def _shared_memory(graph):
@@ -118,7 +116,7 @@ def prepare(graph, body):
             f"Canvas candidate replay requires isolated memory, and '{shared[0]}' {shared[1]} shared Mem0 memory"
             f"{'' if shared[2] == shared[0] else f' of {shared[2]!r}'}. Candidates would read and write the same store, "
             'so their scores would not be comparable. Switch those nodes to table or local memory, or evaluate saved results instead.')
-    available = [t['name'] for t in graph['tasks'] if t.get('kind') not in ('source', 'tool', 'evaluator')]
+    available = [t['name'] for t in graph['tasks'] if t.get('kind') not in ('source', 'tool')]
     chosen = [] if mode == 'evaluate' else body.get('nodes', available)
     if not isinstance(chosen, list) or any(n not in available for n in chosen) or (mode != 'evaluate' and not chosen):
         raise SourceError('Choose valid prompt nodes to optimize.')
@@ -134,7 +132,7 @@ def prepare(graph, body):
     share_labels = body.get('share_labels', False)
     if not isinstance(share_labels, bool):
         raise SourceError('share_labels must be true or false.')
-    return rows, {'mode': mode, 'nodes': chosen, 'evaluator': body['evaluator'], 'rounds': rounds, 'share_labels': share_labels,
+    return rows, {'mode': mode, 'nodes': chosen, 'evaluator': evaluator_tools.evaluator_name(body['evaluator']), 'rounds': rounds, 'share_labels': share_labels,
                   'source': {'type': 'canvas', 'node': main['name'], 'config': copy.deepcopy(main['source'])},
                   'n_dev': len(rows), 'n_train': 0, 'memory_start': 'empty isolated stores'}
 
@@ -167,16 +165,15 @@ def _workspace_for(state, graph):
 
 def _execute(state, graph, rows, params, stage):
     from backend.api import runner
-    from backend.features.execution.token_usage import attach_model, combined
+    from backend.features.execution.token_usage import combined, usage_key
     from . import saved_result_evolution as saved
     # Freeze external labels once, just like prepared workflow inputs.
     graph = copy.deepcopy(graph)
-    for task in graph['tasks']:
-        cfg = task.get('evaluator') or {}
-        if cfg.get('labels'):
+    for entry in evaluator_tools.entries(graph):
+        if entry.get('labels'):
             from backend.features.data.dataloaders import records
-            cfg['_label_records'] = records(cfg.pop('labels'))
-    name = params['evaluator']
+            entry['_label_records'] = records(evaluator_tools.label_config(entry.pop('labels')))
+    name = evaluator_tools.evaluator_name(params['evaluator'])
     workspace_id = _workspace_for(state, graph)
     def run(candidate, generation):
         candidate = copy.deepcopy(candidate)
@@ -187,9 +184,7 @@ def _execute(state, graph, rows, params, stage):
         candidate['preprocess'] = None  # already prepared, once for the experiment
         # Scored once, below, over every record; evaluators inside each run
         # would only repeat that work (and their time limits) per record.
-        for task in candidate['tasks']:
-            if task.get('kind') == 'evaluator':
-                task['enabled'] = False
+        candidate['evaluators'] = []
         records = []
         blocked = set()
         # The same ordering a batch uses: an Input's trajectories and the
@@ -232,12 +227,15 @@ def _execute(state, graph, rows, params, stage):
     direction = best['objective']['direction']
     state['candidates'] = []
     # What would give the answers away: a label read from the inputs.
-    label_field = _evaluator_config(graph, name).get('label_field')
-    hidden = [label_field] if label_field else []
+    # A field the evaluation code was pointed at is treated as a label: the
+    # proposer sees the score, never the answer. Generic on purpose — the
+    # parameter names are the user's, so every string parameter value that
+    # names a record input is withheld.
+    entry = evaluator_tools.find(graph, name) or {}
+    hidden = sorted({v for v in (entry.get('config') or {}).values() if isinstance(v, str)})
     for round_no in range(params['rounds']):
         stage(f'proposing candidate {round_no+1}')
-        llm = runner._make_llm()
-        attach_model(llm, state)
+        llm = runner._make_llm(usage_key=usage_key(state))
         candidate, diff, _ = saved.propose(best_graph, evidence, params['nodes'], llm, feedback=best,
                                            share_labels=params.get('share_labels', False), hidden_inputs=hidden)
         traces, result = run(candidate, f'candidate-{round_no+1}')
@@ -257,9 +255,7 @@ def _execute(state, graph, rows, params, stage):
     best_graph['id'] = graph['id']
     best_graph.pop('_workspace_id', None)
     original_tasks = {t['name']: t for t in state['execution_graph']['tasks']}
-    for task in best_graph['tasks']:
-        if task.get('kind') == 'evaluator':
-            task['evaluator'] = copy.deepcopy(original_tasks[task['name']].get('evaluator', {}))
+    best_graph['evaluators'] = copy.deepcopy(state['execution_graph'].get('evaluators') or [])
     state['optimized'] = best
     state['optimized_graph'] = best_graph
     state['validation_status'] = 'evaluated'

@@ -7,7 +7,7 @@
 
 | 功能 | 后端实现 | 前端实现 |
 | --- | --- | --- |
-| 更换模型 API、鉴权、请求/返回格式 | `backend/llm/` | 通常不改 |
+| 更换模型 API、鉴权、请求/返回格式 | `llm/`（仓库根目录的独立包） | 通常不改 |
 | workflow 图、字段映射、节点执行 | `backend/features/workflow/` | `frontend/src/features/canvas/` |
 | Run、Batch、停止、调度、结果 | `backend/features/execution/` | `frontend/src/features/execution/` |
 | 画布/结果聊天、会话、计算 | `backend/features/chat/` | `frontend/src/features/chat/` |
@@ -47,17 +47,39 @@ Studio 是通用平台。只对某个任务有意义的代码（领域数据集 
 
 ## 更换 LLM API：最重要的一组文件
 
-先读 `backend/llm/README.md`。公开入口只有三类：
+模型调用只有一个边界：仓库根目录的独立包 `llm/`（契约见 [llm/README.md](llm/README.md)）。
+**`backend/` 和 `frontend/` 里不允许出现供应商名字、供应商 SDK 的 import，或读取供应商返回结构的代码。**
+旧的 `backend/llm/`（`get_evoagentx_llm` / `get_agent_model` / `llm.registry` / `llm.adapters`）已删除。
 
-1. `chat(provider, messages, **kwargs) -> str`：普通对话请求。调用方负责业务上下文。
-2. `get_evoagentx_llm(provider) -> BaseLLM`：workflow、规划器、原有 MIPRO 等框架调用。
-3. `get_agent_model(provider) -> BaseChatModel`：Deep Agents / LangGraph，需要结构化 tool calls。
+公开入口只有这些，全部从顶层 `llm` 导入：
 
-这三种框架合同不同，不能把任意 HTTP 返回字符串直接塞进 Deep Agents。新增供应商只在 `backend/llm/adapters/<vendor>.py` 实现所需合同，再在配置中指定 `adapter` 模块。业务模块不应新增 OpenAI/其他供应商 SDK 初始化或 URL 拼接。
+1. `chat(provider, messages, **kwargs) -> str` / `chat_result(...) -> LLMResult`：普通对话请求，后者带 token usage。
+2. `batch` / `batch_result`，以及 `achat` / `achat_result` / `abatch` / `abatch_result`：批量与异步，结果顺序与入参一致。
+3. `list_providers()` / `get_provider(name)` / `default_provider()` / `ProviderError`：配置与错误。
+4. `LLMResult` / `LLMUsage` / `UsageTracker`：返回值与用量计费。
 
-底层框架已有模型类仍在 `backend/evoagentx/models/`。当前内置适配器复用它们，避免改变现有重试、解析和计费行为。如果新 API 协议完全不同，可在新适配器里返回自定义 BaseLLM/BaseChatModel，无需改 workflow、chat、memory UI。
+框架侧需要的不是文本而是模型类，这一层适配集中在 `backend/features/model_bridge.py`，不要绕过它：
 
-Mem0 当前使用本地 embedding / 配置对象（见 memory 模块）；它不是上述三类聊天请求。以后更换 embedding 模型，要另外检查向量维度和存量索引，不能仅换聊天 API。
+- `workflow_model(provider=None, usage_key=None)`：注册为 `StudioLLM` 的框架 `BaseLLM`。agent 在子进程里只靠 `llm_config` 重建，也仍然走 `llm` 包。
+- `agent_model(provider=None, usage_key=None)`：Deep Agents / LangGraph 用的 LangChain `BaseChatModel`，`usage_metadata` 来自 `LLMResult.usage`。
+- `usage_hook(callback) -> key` / `release_usage_hook(key)`：Run、Batch、digest 的 token 统计来源。配置里带的是 key 而不是 callable，所以能穿过子进程。
+
+**换供应商**：只改 `llm/providers.json` 的 `default`，或设环境变量 `LLM_PROVIDER`（Studio 另认 `EAX_PROVIDER`，优先级更高）。新增供应商在 `llm/adapters/<vendor>.py` 实现 `complete`（可选 `acomplete`、`native_batch`），并在配置里用 `adapter` 指向该模块。业务模块不应新增供应商 SDK 初始化或 URL 拼接。
+
+**在 SafeChain 机器上**：只有 `llm/providers.json` 和它需要的环境变量不同，供应商名叫 `safechain`。`backend/`、`frontend/`、`tests/`、`projects/` 以及导出的独立项目都不需要改。
+
+改完 `providers.json` 或换机器后跑一次真实冒烟（会计费）：
+
+```sh
+set -a; . ./.env; set +a
+.venv/bin/python llm/examples_terminal.py
+```
+
+测试从不真的请求供应商：`tests/llm/` 把 transport 打桩。
+
+底层框架已有模型类仍在 `backend/evoagentx/models/`，`model_bridge` 只是把 `llm` 包包装成框架认得的类，不改框架自身的重试、解析行为；计费统一由 `llm.UsageTracker` 按环境变量里的单价计算，不读供应商返回里的金额。
+
+Mem0 当前使用本地 embedding / 配置对象（见 memory 模块）；它不是上述聊天请求。以后更换 embedding 模型，要另外检查向量维度和存量索引，不能仅换聊天 API。
 
 ## 交给对话 LLM 的操作方式
 

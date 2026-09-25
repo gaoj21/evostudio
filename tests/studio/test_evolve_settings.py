@@ -102,7 +102,7 @@ def test_evaluation_only_executes_without_optimizer(tmp_path, monkeypatch):
     from evoagentx.optimizers.mipro_optimizer import WorkFlowMiproOptimizer
     records = [{"id": str(i), "inputs": {"text": str(i)}, "label": str(i)} for i in range(3)]
     (tmp_path / "dataset.jsonl").write_text("\n".join(__import__('json').dumps(r) for r in records))
-    monkeypatch.setattr(runner, "_make_llm", lambda: SimpleNamespace(config=None))
+    monkeypatch.setattr(runner, "_make_llm", lambda **kw: SimpleNamespace(config=None))
     monkeypatch.setattr(AgentManager, "add_agents_from_workflow", lambda *a, **kw: None)
     monkeypatch.setattr(tools_registry, "resolve_tools", lambda *a, **kw: [])
     monkeypatch.setattr(Evaluator, "__init__", lambda *a, **kw: None)

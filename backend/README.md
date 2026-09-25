@@ -1,6 +1,6 @@
 # EvoAgentX Studio
 
-维护与模块入口：[MAINTENANCE.md](../MAINTENANCE.md)。业务实现按功能放在 `features/`，模型调用在 `llm/`；`api/` 保留路由装配和旧路径兼容门面。
+维护与模块入口：[MAINTENANCE.md](../MAINTENANCE.md)。业务实现按功能放在 `features/`；模型调用全部走仓库根目录的独立包 `llm/`（契约见 [llm/README.md](../llm/README.md)），框架模型类由 `features/model_bridge.py` 提供 —— `backend/` 与 `frontend/` 里不出现供应商名字、供应商 SDK 或供应商返回结构。`api/` 保留路由装配和旧路径兼容门面。
 
 Studio is the visual application in this repository. Its stable core edits and
 runs workflow graphs; domain presets and prompt optimization are integrations

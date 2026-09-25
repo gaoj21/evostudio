@@ -4,7 +4,6 @@ import JsonView from '../../components/JsonView.jsx';
 import { api } from '../../api.js';
 import MemorySettings from '../memory/MemorySettings.jsx';
 import DataLoaderInput from '../data/DataLoaderInput.jsx';
-import EvaluatorInspector from '../evaluation/EvaluatorInspector.jsx';
 import DatasetInput from '../data/DatasetInput.jsx';
 
 const PARSE_MODES = ['str', 'json', 'title', 'xml'];
@@ -503,7 +502,6 @@ export default function Inspector({ node, runInfo, runMode, onUpdate, onRename, 
 
   const d = node.data;
 
-  if (d.kind === 'evaluator') return <EvaluatorInspector node={node} onUpdate={onUpdate} onRename={onRename} getGraph={getGraph} />;
   if (d.kind === 'source') {
     return <SourceInspector node={node} onUpdate={onUpdate} onRename={onRename} getGraph={getGraph} />;
   }
