@@ -1427,20 +1427,49 @@ def get_run(run_id: str) -> dict | None:
 
 
 def list_runs(graph_id: str | None = None, limit: int | None = 20) -> list[dict]:
-    """Recent runs (newest first, cap 20), merging in-memory and persisted runs."""
-    by_id: dict[str, dict] = {}
+    """Recent runs (newest first, cap 20), merging in-memory and persisted runs.
+
+    Which runs those are is decided on a small cached view of each file (its
+    workflow and start time); only the runs returned are read in full.
+    """
+    return list_run_views(graph_id, limit, view=None)
+
+
+def _run_meta(run: dict) -> dict:
+    return {"graph_id": run.get("graph_id"), "created_at": run.get("created_at", "")}
+
+
+def list_run_views(graph_id: str | None = None, limit: int | None = 20, view=None,
+                   view_name: str | None = None) -> list:
+    """Recent runs, newest first, each as `view(run)` — the whole run when
+    `view` is None. A named view is cached per version of each run's file."""
+    from backend.features.persistence import file_view
+    found: dict[str, tuple] = {}
     if RUNS_DIR.is_dir():
         for path in RUNS_DIR.glob("*.json"):
-            try:
-                with open(path, encoding="utf-8") as f:
-                    by_id[path.stem] = json.load(f)
-            except (json.JSONDecodeError, OSError):
-                continue
+            meta = file_view(path, "run-meta", _run_meta)
+            if meta is not None:
+                found[path.stem] = (meta, path)
     with _lock:
-        for run_id, state in _runs.items():
-            by_id[run_id] = _public(state)
-    runs = list(by_id.values())
-    if graph_id:
-        runs = [r for r in runs if r.get("graph_id") == graph_id]
-    runs.sort(key=lambda r: r.get("created_at", ""), reverse=True)
-    return runs if limit is None else runs[:limit]
+        live = {run_id: _public(state) for run_id, state in _runs.items()}
+    for run_id, run in live.items():
+        found[run_id] = (_run_meta(run), None)
+    chosen = [(run_id, meta, path) for run_id, (meta, path) in found.items()
+              if not graph_id or meta.get("graph_id") == graph_id]
+    chosen.sort(key=lambda row: row[1].get("created_at") or "", reverse=True)
+    if limit is not None:
+        chosen = chosen[:limit]
+    out = []
+    for run_id, _meta, path in chosen:
+        if path is None:
+            run = live[run_id]
+            out.append(view(run) if view else run)
+        elif view is not None and view_name:
+            value = file_view(path, view_name, view)
+            if value is not None:
+                out.append(value)
+        else:
+            run = _read_run(run_id)
+            if run is not None:
+                out.append(view(run) if view else run)
+    return out

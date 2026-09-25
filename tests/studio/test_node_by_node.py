@@ -284,3 +284,25 @@ def test_a_node_shows_done_as_soon_as_the_chunk_has_finished_it(batches, calls, 
     progress = seen[0]["batch"]["node_progress"]
     assert progress["a"]["completed"] == 16
     assert progress["c"]["completed"] == 0
+
+
+def test_a_batch_that_breaks_says_why_even_when_the_error_has_no_message(batches, calls, monkeypatch):
+    """A failure of the batch itself — not of a record — must never leave it
+    reading 'failed' with nothing to say, nor 'running' for ever."""
+    monkeypatch.setattr(batches, '_execute_batch', lambda *a, **kw: (_ for _ in ()).throw(KeyError()))
+    batch_id = batches.start_batch(three_nodes(), [{'id': 'r0'}], {'type': 'upload'}, mode='node')
+    assert batches.wait_for(batch_id, timeout=20)
+    batch = batches.get_batch(batch_id)
+    assert batch['status'] == 'failed'
+    assert batch['error'] == 'KeyError (no message)'
+    assert 'Traceback' in batch['error_detail']
+
+
+def test_a_stream_that_breaks_says_why(batches, calls):
+    def chunks(cancelled, on_info=None):
+        yield [{'id': 'r0'}], None, 1
+        raise StopIteration                       # str() of this is empty
+    batch_id = batches.start_batch(three_nodes(), [], {'type': 'canvas'}, record_chunks=chunks, mode='node')
+    assert batches.wait_for(batch_id, timeout=20)
+    batch = batches.get_batch(batch_id)
+    assert batch['status'] == 'failed' and batch['error'].startswith('RuntimeError')

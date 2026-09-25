@@ -1484,6 +1484,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
                   : `batch ${batch.status}`}
               {` · ${describeBatch(batch.status, batch.counts || batchProgress).label}`}
               {batchProgress.failed > 0 && ` · ${batchProgress.failed}✗`}
+              {batch.error && ` · ${batch.error.length > 90 ? `${batch.error.slice(0, 90)}…` : batch.error}`}
               {batch.summary?.mean != null && ` · score ${batch.summary.mean}`}
               {tokenSuffix(batch.token_usage, !isSettled(BATCH_SETTLED, batch.status))}
             </button>
@@ -1933,6 +1934,8 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
                 : 'Initializing Dataset; total count is not available yet.'}</p>}
               {batch?.polling_error && <p role="alert" className="chat-error">{batch.polling_error}</p>}
               {batch?.error && <pre role="alert" className="chat-error">{batch.error}</pre>}
+              {batch?.error_detail && <details><summary className="muted small">Where it failed</summary>
+                <pre className="json-view run-error">{batch.error_detail}</pre></details>}
               {(batch?.items || []).length === 0 && !batch?.error && (
                 <p className="muted small">{isSettled(BATCH_SETTLED, batch.status)
                   ? 'No records were processed.'

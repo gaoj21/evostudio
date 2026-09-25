@@ -115,8 +115,9 @@ export const api = {
       startAt.length ? `?start_at=${encodeURIComponent(startAt.join(','))}` : ''
     }`),
   getRun: (runId) => req(`/api/runs/${encodeURIComponent(runId)}`),
+  // Summaries: what a list shows. Opening a run loads it in full.
   listRuns: (graphId) =>
-    req(`/api/runs${graphId ? `?graph_id=${encodeURIComponent(graphId)}` : ''}`),
+    req(`/api/runs?summary=1${graphId ? `&graph_id=${encodeURIComponent(graphId)}` : ''}`),
   runBatchUpload: (id, file, params = {}) => {
     const formData = new FormData();
     formData.append('file', file);

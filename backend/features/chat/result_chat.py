@@ -121,7 +121,9 @@ def _scalars(value, limit=120):
 def summary(run, sources=None):
     """A run as a list shows it: ids, status and times, and the short fields
     it is labelled by — never its outputs, which made the list hundreds of MB."""
+    error = run.get('error')
     return {**{k: run[k] for k in SUMMARY_KEYS if k in run},
+            **({'error': str(error)[:300]} if error else {}),
             'inputs': _scalars(run.get('inputs')) or {},
             **({'input_summary': _scalars(run['input_summary'])} if _scalars(run.get('input_summary')) else {}),
             # The Input's record labels a run; other nodes' outputs never do.
@@ -132,13 +134,15 @@ def summary(run, sources=None):
 
 @router.get('/graphs/{graph_id}/results')
 def list_results(graph_id: str, summary_only: bool = Query(default=False, alias='summary')):
-    rows = records(graph_id)
-    if not summary_only:
-        return rows
+    if summary_only is not True:            # a direct call passes the Query default
+        return records(graph_id)
     from backend.api import graphs
     graph = graphs.load_graph(graph_id) or {}
     sources = {t.get('name') for t in graph.get('tasks') or [] if t.get('kind') == 'source'} if graph else None
-    return [summary(r, sources) for r in rows]
+    # Each run's summary is kept until its file changes; the Input nodes it
+    # keeps are part of the cache key.
+    name = 'run-summary:' + ','.join(sorted(sources)) if sources is not None else 'run-summary:*'
+    return runner.list_run_views(graph_id, limit=None, view=lambda run: summary(run, sources), view_name=name)
 
 
 @router.post('/graphs/{graph_id}/results/chat')

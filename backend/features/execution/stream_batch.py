@@ -89,8 +89,14 @@ def _run(batch_id, graph, workers, chunks, rerun=()):
             raise ValueError('DataLoader produced no records.')
         batch._finish_batch(state, graph)
     except Exception as exc:
+        import traceback
+        detail = traceback.format_exc()
+        # Never an empty reason: str() of many exceptions is ''.
+        reason = f"{type(exc).__name__}: {exc}" if str(exc) else f"{type(exc).__name__} (no message)"
+        print(f"[batch {batch_id}] failed: {reason}\n{detail}", flush=True)
         with batch._lock:
-            state.update(status='cancelled' if state.get('cancel_requested') else 'failed', error=str(exc))
+            state.update(status='cancelled' if state.get('cancel_requested') else 'failed',
+                         error=reason, error_detail=detail[-8000:])
             batch._persist_batch(state)
     finally:
         if iterator is not None:

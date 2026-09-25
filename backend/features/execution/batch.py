@@ -123,7 +123,7 @@ def start_batch(graph: dict, records: list[dict], source: dict, gray_zone=None,
         thread = threading.Thread(target=execute_stream, args=(batch_id,graph,record_chunks,workers),daemon=True)
     else:
         thread = threading.Thread(
-        target=_execute_batch,
+        target=_run_batch_thread,
         args=(batch_id, graph, list(zip(state["items"], records)), workers), daemon=True
     )
     with _lock:
@@ -190,6 +190,23 @@ def _set_stage(state: dict, stage: dict | None) -> None:
 def _retryable(item: dict, run: dict | None) -> bool:
     node_error = (run or {}).get("node_error") or {}
     return item.get("status") == "failed" and bool(node_error.get("retryable"))
+
+
+def _run_batch_thread(batch_id: str, graph: dict, pairs: list, workers: int) -> None:
+    """A batch's own thread: whatever goes wrong, the batch ends saying what."""
+    try:
+        _execute_batch(batch_id, graph, pairs, workers)
+    except Exception as exc:
+        import traceback
+        detail = traceback.format_exc()
+        reason = f"{type(exc).__name__}: {exc}" if str(exc) else f"{type(exc).__name__} (no message)"
+        print(f"[batch {batch_id}] failed: {reason}\n{detail}", flush=True)
+        state = _batches.get(batch_id)
+        if state is not None:
+            with _lock:
+                state.update(status="cancelled" if state.get("cancel_requested") else "failed",
+                             error=reason, error_detail=detail[-8000:], stage=None)
+                _persist_batch(state)
 
 
 def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finalize=True) -> None:
@@ -678,7 +695,7 @@ def resume_batch(batch_id: str, graph: dict) -> dict:
         thread = threading.Thread(target=resume_stream, args=(batch_id, graph, pairs, chunks, workers), daemon=True)
     else:
         thread = threading.Thread(
-            target=_execute_batch, args=(batch_id, graph, pairs, workers), daemon=True)
+            target=_run_batch_thread, args=(batch_id, graph, pairs, workers), daemon=True)
     # A fresh stop signal and a coalescer that accepts this batch again: the
     # earlier stop must not carry over into the resumed run.
     from backend.features.execution import provider_batch
@@ -940,12 +957,18 @@ def list_batches(graph_id: str | None = None, limit: int = 50) -> list[dict]:
     evaluation stays reachable after a restart — which is the point of keeping
     them on disk at all.
     """
+    from backend.features.persistence import file_view
     by_id: dict[str, dict] = {}
+    with _lock:
+        live = set(_batches)
     if BATCHES_DIR.is_dir():
         for path in BATCHES_DIR.glob("*.json"):
-            state = _read_batch(path.stem)
-            if state is not None:
-                by_id[path.stem] = _digest(state)
+            if path.stem in live:
+                continue            # its live state is below; its file keeps changing
+            # Parsed once per version of the file, not on every call.
+            digest = file_view(path, "batch-digest", _digest)
+            if digest is not None:
+                by_id[path.stem] = digest
     with _lock:
         for batch_id, state in _batches.items():
             by_id[batch_id] = _digest(_live(state))
