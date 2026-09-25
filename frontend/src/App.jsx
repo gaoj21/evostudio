@@ -1475,9 +1475,10 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
                 `run-${describeBatch(batch.status, batch.counts || batchProgress).tone}`}`}
             >
               {batchStageText
-                // Node by node, no record is finished before the last node:
-                // the stage is the progress, the record count comes after.
-                ? `batch · ${batchStageText} · records ${batchProgress.done}/${batchProgress.total ?? '?'}`
+                // Node by node, no record is finished before the last node,
+                // so a record count reads 0/16 until the whole flow is done:
+                // the stage is the progress. Records done are in the drawer.
+                ? `batch · ${batchStageText}`
                 : batchProgress.total
                   ? `batch ${batchProgress.done}/${batchProgress.total}`
                   : `batch ${batch.status}`}
