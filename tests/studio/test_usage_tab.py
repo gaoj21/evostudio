@@ -115,3 +115,16 @@ def test_a_call_with_no_usage_is_counted_not_dropped():
     none = usage_api._entry({"unreported_calls": 2})
     assert none == {"reported": False, "unreported_calls": 2}
     assert token_usage.combined({"unreported_calls": 2}, usage(1, 1))["unreported_calls"] == 2
+
+
+def test_usage_that_only_answers_as_dict_is_read():
+    """SafeChain's LLMUsage: `result.usage.as_dict()` is how its counts come out."""
+    class AsDictOnly:
+        __slots__ = ()
+
+        def as_dict(self):
+            return {"input_tokens": 12, "output_tokens": 5, "total_tokens": 17,
+                    "cache_read_tokens": 4, "reasoning_tokens": None}
+
+    assert token_usage.reported_usage(AsDictOnly()) == {
+        "input_tokens": 12, "output_tokens": 5, "total_tokens": 17, "cache_read_tokens": 4}
