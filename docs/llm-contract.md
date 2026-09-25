@@ -1,4 +1,16 @@
-# `llm` — the model boundary (llm-v12)
+# The LLM transport contract (`llm-v12`)
+
+**This package is not in the repository.** Every machine supplies its own
+`llm/` at the repo root — DeepSeek-backed on one, SafeChain-backed on
+another — and `backend`, `frontend` and the data travel unchanged between
+them. What must match is the interface below. `.gitignore` excludes `/llm/`;
+this file is the specification, and a package's own tests live inside it
+(`llm/tests/`, run with `.venv/bin/python -m pytest llm/tests`).
+
+Studio adapts these results to the workflow engine and the agent harness in
+exactly one place, `backend/features/model_bridge.py`, which is tracked and
+tested (`tests/llm/test_model_bridge.py`). Nothing else in the backend may
+import a provider SDK, name a provider, or read a provider's response.
 
 Every model call the project makes goes through this package. It is a
 standalone package at the repository root: it imports nothing from `backend/`

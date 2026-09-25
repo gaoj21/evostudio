@@ -149,6 +149,11 @@ projects/credit_risk/dataset/**
 !projects/credit_risk/dataset/*.md
 !projects/credit_risk/dataset/**/*.md
 projects/credit_risk/output/
+# The LLM transport package is supplied per machine: DeepSeek-backed here,
+# SafeChain-backed elsewhere. Only its contract is tracked
+# (docs/llm-contract.md); the implementation is not.
+/llm/
+
 # Anchored: an unanchored `data/` would also swallow studio-data/graphs.
 /data/
 

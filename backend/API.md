@@ -886,7 +886,7 @@ backend parses, validates and applies itself.
 - Node output captured after run from the workflow `Environment`
   execution data (best effort per node output name).
 - LLM: `backend.features.model_bridge.workflow_model()`. Every model call in
-  the backend goes through the standalone `llm` package (`llm/README.md`);
+  the backend goes through the standalone `llm` package, which each machine supplies itself (contract: `docs/llm-contract.md`);
   nothing in `backend/` or `frontend/` names a provider, imports a provider
   SDK or reads a provider's response. Which provider is used comes from
   `llm/providers.json` and `EAX_PROVIDER`/`LLM_PROVIDER`; secrets come from

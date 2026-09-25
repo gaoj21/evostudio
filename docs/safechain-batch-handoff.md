@@ -1,6 +1,6 @@
 # SafeChain 批量调用：Studio 外层接入
 
-模型边界是仓库根目录的独立包 `llm/`（由公司维护，契约见 [../llm/README.md](../llm/README.md)）。旧的 `backend/llm/` 已删除。Studio 直接使用它的公开入口，不再要求模型工厂接受 `batch_size` 或 `batch_id`：
+模型边界是仓库根目录的独立包 `llm/`（由公司维护、不在本仓库内，契约见 [llm-contract.md](llm-contract.md)）。旧的 `backend/llm/` 已删除。Studio 直接使用它的公开入口，不再要求模型工厂接受 `batch_size` 或 `batch_id`：
 
 ```python
 from llm import batch

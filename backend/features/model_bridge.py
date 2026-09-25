@@ -1,6 +1,7 @@
 """Every model call Studio makes goes through the standalone `llm` package.
 
-The package's contract is text in, `LLMResult` out (`llm/README.md`). Two
+The package is supplied per machine and is not in the repository; its
+contract is text in, `LLMResult` out (`docs/llm-contract.md`). Two
 consumers need something else:
 
 - the workflow engine builds its agents from an `LLMConfig` and instantiates

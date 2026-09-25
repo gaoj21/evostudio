@@ -7,7 +7,7 @@
 
 | 功能 | 后端实现 | 前端实现 |
 | --- | --- | --- |
-| 更换模型 API、鉴权、请求/返回格式 | `llm/`（仓库根目录的独立包） | 通常不改 |
+| 更换模型 API、鉴权、请求/返回格式 | `llm/`（仓库根目录的独立包，**不在版本控制内**，每台机器自备） | 通常不改 |
 | workflow 图、字段映射、节点执行 | `backend/features/workflow/` | `frontend/src/features/canvas/` |
 | Run、Batch、停止、调度、结果 | `backend/features/execution/` | `frontend/src/features/execution/` |
 | 画布/结果聊天、会话、计算 | `backend/features/chat/` | `frontend/src/features/chat/` |
@@ -47,7 +47,7 @@ Studio 是通用平台。只对某个任务有意义的代码（领域数据集 
 
 ## 更换 LLM API：最重要的一组文件
 
-模型调用只有一个边界：仓库根目录的独立包 `llm/`（契约见 [llm/README.md](llm/README.md)）。
+模型调用只有一个边界：仓库根目录的独立包 `llm/`。该包不随仓库分发（`.gitignore` 排除 `/llm/`）：本机是 DeepSeek 实现，另一台是 SafeChain 实现，两边只需接口一致，`backend`、`frontend` 和数据可以直接互换。契约见 [docs/llm-contract.md](docs/llm-contract.md)；包自带的测试放在包内 `llm/tests/`，用 `.venv/bin/python -m pytest llm/tests` 跑。
 **`backend/` 和 `frontend/` 里不允许出现供应商名字、供应商 SDK 的 import，或读取供应商返回结构的代码。**
 旧的 `backend/llm/`（`get_evoagentx_llm` / `get_agent_model` / `llm.registry` / `llm.adapters`）已删除。
 
