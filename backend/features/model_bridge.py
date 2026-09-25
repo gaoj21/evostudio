@@ -172,26 +172,49 @@ def is_transient(error: BaseException | None) -> bool:
     return False
 
 
+def _stopped_while_waiting(delay: float) -> bool:
+    """Wait out a retry pause — or less, when the run or batch doing the call
+    is stopped meanwhile. True when it was stopped."""
+    from backend.features.chat import chat_control
+    control = chat_control.current.get()
+    if control is None:
+        import time
+        time.sleep(delay)
+        return False
+    return control.event.wait(delay)
+
+
 def _retrying(call):
-    """`call()` again after each pause while it fails transiently."""
-    import time
+    """`call()` again after each pause while it fails transiently — never
+    after a stop: a stopped record makes no further model call."""
+    from backend.features.chat import chat_control
     for delay in (*TRANSIENT_RETRY_DELAYS, None):
         try:
             return call()
         except Exception as error:
             if delay is None or not is_transient(error):
                 raise
-            time.sleep(delay)
+            if _stopped_while_waiting(delay):
+                raise chat_control.Cancelled() from error
 
 
 async def _aretrying(call):
+    from backend.features.chat import chat_control
     for delay in (*TRANSIENT_RETRY_DELAYS, None):
         try:
             return await call()
         except Exception as error:
             if delay is None or not is_transient(error):
                 raise
-            await asyncio.sleep(delay)
+            control = chat_control.current.get()
+            waited = 0.0
+            while waited < delay:               # cancellable, and polls the stop
+                if control is not None and control.event.is_set():
+                    raise chat_control.Cancelled() from error
+                await asyncio.sleep(min(0.25, delay - waited))
+                waited += 0.25
+            if control is not None and control.event.is_set():
+                raise chat_control.Cancelled() from error
 
 
 def _call(provider: str | None, messages: list, options: dict) -> LLMResult:

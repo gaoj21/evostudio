@@ -87,3 +87,29 @@ def test_a_node_that_timed_out_is_marked_for_the_batch_to_run_again():
     error.__cause__ = ProviderError(DEADLINE)
     assert 'deadline exceeded' in runner._unreachable(error)
     assert runner._unreachable(RuntimeError('Expected a JSON object')) is None
+
+
+def test_a_stop_ends_the_retries_at_once(monkeypatch):
+    """A stopped record makes no further model call, and does not wait out
+    the pause: the stop reaches the retry through the run's control."""
+    import threading
+    import time
+    from backend.features.chat import chat_control
+    monkeypatch.setattr(model_bridge, 'TRANSIENT_RETRY_DELAYS', (30, 30))
+    attempts = []
+
+    def chat_result(provider, messages, **options):
+        attempts.append(1)
+        raise ProviderError(DEADLINE)
+    monkeypatch.setattr(model_bridge, 'chat_result', chat_result)
+    control = chat_control.Control()
+    token = chat_control.current.set(control)
+    try:
+        threading.Timer(0.2, control.event.set).start()
+        started = time.monotonic()
+        with pytest.raises(chat_control.Cancelled):
+            model_bridge._call('p', [], {})
+        assert time.monotonic() - started < 5
+    finally:
+        chat_control.current.reset(token)
+    assert len(attempts) == 1
