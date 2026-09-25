@@ -61,3 +61,57 @@ def test_the_route_wants_exactly_one_target(studio_data):
     assert client.get("/api/usage").status_code == 422
     assert client.get("/api/usage?run_id=a&batch_id=b").status_code == 422
     assert client.get("/api/usage?run_id=missing").status_code == 404
+
+
+def test_usage_is_read_from_any_class_that_carries_the_contract_fields():
+    """The contract names LLMUsage's fields, not its class: another machine's
+    package may use a slots dataclass or a plain object."""
+    from dataclasses import dataclass
+
+    @dataclass(slots=True)
+    class Slotted:
+        input_tokens: int
+        output_tokens: int
+        total_tokens: int
+        cache_read_tokens: int | None = None
+        reasoning_tokens: int | None = None
+
+    class Plain:
+        __slots__ = ("prompt_tokens", "completion_tokens")
+
+        def __init__(self):
+            self.prompt_tokens, self.completion_tokens = 7, 3
+
+    class Named:
+        @property
+        def input_tokens(self): return 11
+        @property
+        def output_tokens(self): return 4
+        @property
+        def total_tokens(self): return 15
+
+    assert token_usage.reported_usage(Slotted(10, 5, 15, 6))["cache_read_tokens"] == 6
+    assert token_usage.reported_usage(Plain())["total_tokens"] == 10
+    assert token_usage.reported_usage(Named())["input_tokens"] == 11
+    assert token_usage.reported_usage(None) is None
+
+
+def test_a_call_with_no_usage_is_counted_not_dropped():
+    from types import SimpleNamespace
+    from backend.features import model_bridge
+    state = {"_usage_node": {}}
+    key = token_usage.usage_key(state)
+    try:
+        model_bridge._report(key, SimpleNamespace(content="x", usage=None))
+        model_bridge._report(key, SimpleNamespace(content="y", usage={"input_tokens": 3, "output_tokens": 1}))
+    finally:
+        token_usage.release_usage(state)
+
+    assert state["token_usage"]["unreported_calls"] == 1
+    assert state["token_usage"]["reported_calls"] == 1
+    assert state["_usage_node"]["token_usage"]["unreported_calls"] == 1
+    entry = usage_api._entry(state["token_usage"])
+    assert entry["reported"] and entry["unreported_calls"] == 1
+    none = usage_api._entry({"unreported_calls": 2})
+    assert none == {"reported": False, "unreported_calls": 2}
+    assert token_usage.combined({"unreported_calls": 2}, usage(1, 1))["unreported_calls"] == 2

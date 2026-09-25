@@ -234,9 +234,9 @@ async def run_workflow_node(task, inputs, state, recall):
     message += '\nReturn a JSON object with exactly these output fields: ' + json.dumps(outputs, ensure_ascii=False)
     event = threading.Event()
     def emit(item):
-        if item.get('type') == 'token_usage' and item.get('content'):
+        if item.get('type') == 'token_usage':
             from backend.features.execution.token_usage import record
-            record(state, item['content'])
+            record(state, item.get('content'))
         activity = state.setdefault('harness_events', {}).setdefault(task['name'], [])
         activity.append(item)
         del activity[:-200]

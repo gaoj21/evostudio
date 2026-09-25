@@ -19,14 +19,28 @@ export function usageVersion(target) {
   const usage = target.token_usage || {};
   const stage = target.stage || {};
   const counts = target.counts ? JSON.stringify(target.counts) : '';
-  return [target.status, usage.total_tokens, usage.reported_calls, stage.node, stage.done, counts].join('|');
+  return [target.status, usage.total_tokens, usage.reported_calls, usage.unreported_calls,
+    stage.node, stage.done, counts].join('|');
+}
+
+// Calls the llm package returned with `usage=None`: they happened, and
+// nothing says what they cost.
+function Unreported({ calls }) {
+  if (!calls) return null;
+  return <p className="muted small" data-testid="usage-unreported">
+    {count(calls)} model call{calls === 1 ? '' : 's'} came back without usage
+    (the llm package returned <code>usage=None</code>), so {calls === 1 ? 'it is' : 'they are'} not in these figures.
+  </p>;
 }
 
 function Summary({ total, running }) {
   if (!total?.reported) {
-    return <p className="muted small" data-testid="usage-none">{running
-      ? 'No provider usage reported yet. Figures appear as each model call returns.'
-      : 'No provider usage was reported for this one.'}</p>;
+    return <>
+      {!total?.unreported_calls && <p className="muted small" data-testid="usage-none">{running
+        ? 'No provider usage reported yet. Figures appear as each model call returns.'
+        : 'No provider usage was reported for this one.'}</p>}
+      <Unreported calls={total?.unreported_calls}/>
+    </>;
   }
   const cached = total.cache_read_tokens;
   const reasoning = total.reasoning_tokens;
@@ -49,6 +63,7 @@ function Summary({ total, running }) {
         ? `Priced by the llm package: input ${total.cost.input_price_per_1m}/1M, output ${total.cost.output_price_per_1m}/1M${total.cost.cached_input_ratio != null ? `, cached input ×${total.cost.cached_input_ratio}` : ''}.`
         : 'Cost is shown when the llm package can price it.'}
     </p>
+    <Unreported calls={total.unreported_calls}/>
   </>;
 }
 
@@ -68,7 +83,8 @@ function Row({ label, status, usage, share }) {
       <td>{count(usage.reported_calls)}</td>
       <td>{money(usage.cost)}</td>
       <td className="usage-share"><Bar share={share}/>{percent(share)}</td>
-    </> : <td colSpan={6} className="muted small">not reported</td>}
+    </> : <td colSpan={6} className="muted small">not reported{usage.unreported_calls
+      ? ` · ${count(usage.unreported_calls)} call${usage.unreported_calls === 1 ? '' : 's'} without usage` : ''}</td>}
   </tr>;
 }
 

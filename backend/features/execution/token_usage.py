@@ -16,26 +16,79 @@ DETAIL_KEYS = ('cache_read_tokens', 'reasoning_tokens')
 
 def _detail(value: dict, flat: str, *nested: tuple[str, str]):
     """A detail count, flat (LLMUsage) or nested (provider payload shapes)."""
-    found = value.get(flat)
-    if isinstance(found, int) and not isinstance(found, bool) and found >= 0:
+    found = _count(value.get(flat))
+    if found is not None:
         return found
     for section, name in nested:
-        block = value.get(section)
-        if isinstance(block, dict):
-            found = block.get(name)
-            if isinstance(found, int) and not isinstance(found, bool) and found >= 0:
-                return found
+        block = _as_mapping(value.get(section))
+        found = _count(block.get(name))
+        if found is not None:
+            return found
     return None
 
 
-def reported_usage(value):
-    if not isinstance(value, dict):
-        value = value.model_dump() if hasattr(value, 'model_dump') else vars(value) if hasattr(value, '__dict__') else {}
-    inp, out = value.get('input_tokens', value.get('prompt_tokens')), value.get('output_tokens', value.get('completion_tokens'))
-    if any(isinstance(n, bool) or not isinstance(n, int) or n < 0 for n in (inp, out)):
+# The names an LLMUsage — or a provider payload — may carry its counts under.
+_USAGE_FIELDS = ('input_tokens', 'output_tokens', 'total_tokens', 'prompt_tokens',
+                 'completion_tokens', 'cache_read_tokens', 'reasoning_tokens',
+                 'input_token_details', 'output_token_details',
+                 'prompt_tokens_details', 'completion_tokens_details')
+
+
+def _as_mapping(value) -> dict:
+    """A usage object's counts as a dict, whatever class carries them.
+
+    The contract fixes the field names of `LLMUsage`, not its class: a
+    dataclass (with or without slots), a pydantic model, a plain object or a
+    dict are all valid, so every one is read, the fields last of all.
+    """
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    for method in ('as_dict', 'to_dict', 'model_dump', 'dict'):
+        convert = getattr(value, method, None)
+        if callable(convert):
+            try:
+                found = convert()
+            except Exception:
+                continue
+            if isinstance(found, dict):
+                return found
+    import dataclasses
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        try:
+            return dataclasses.asdict(value)
+        except Exception:
+            pass
+    found = {}
+    for name in _USAGE_FIELDS:
+        try:
+            field = getattr(value, name)
+        except Exception:
+            continue
+        if field is not None and not callable(field):
+            found[name] = field
+    return found
+
+
+def _count(value):
+    """A token count, or None: ints (and whole floats) of zero or more."""
+    if isinstance(value, bool):
         return None
-    total = value.get('total_tokens')
-    usage = {'input_tokens':inp, 'output_tokens':out, 'total_tokens':total if isinstance(total,int) and total >= inp + out else inp + out}
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    return value if isinstance(value, int) and value >= 0 else None
+
+
+def reported_usage(value):
+    """What a provider reported for one call, or None when it reported nothing."""
+    value = _as_mapping(value)
+    inp = _count(value.get('input_tokens', value.get('prompt_tokens')))
+    out = _count(value.get('output_tokens', value.get('completion_tokens')))
+    if inp is None or out is None:
+        return None
+    total = _count(value.get('total_tokens'))
+    usage = {'input_tokens':inp, 'output_tokens':out, 'total_tokens':total if total is not None and total >= inp + out else inp + out}
     cache = _detail(value, 'cache_read_tokens', ('input_token_details', 'cache_read'),
                     ('prompt_tokens_details', 'cached_tokens'))
     reasoning = _detail(value, 'reasoning_tokens', ('output_token_details', 'reasoning'),
@@ -47,7 +100,17 @@ def reported_usage(value):
     return usage
 
 
+def has_usage(usage) -> bool:
+    """Whether a usage record says anything: reported calls, or calls that
+    came back without a report (those are counted, never priced as free)."""
+    return bool(usage and (usage.get('reported_calls') or usage.get('unreported_calls')))
+
+
 def add_usage(target, usage):
+    if usage.get('unreported_calls'):
+        target['unreported_calls'] = target.get('unreported_calls', 0) + usage['unreported_calls']
+    if 'input_tokens' not in usage:
+        return
     for key in ('input_tokens','output_tokens','total_tokens'):
         target[key] = target.get(key, 0) + usage[key]
     for key in DETAIL_KEYS:
@@ -89,15 +152,18 @@ def combined(*usages):
     """The sum of several usage records; None when none of them reported any."""
     total = {}
     for usage in usages:
-        if usage and usage.get('reported_calls'):
+        if has_usage(usage):
             add_usage(total, usage)
     return total or None
 
 
 def record(state, usage):
-    """Add one reported call to the run, and to the node running it if any."""
-    if not usage:
-        return
+    """Add one model call to the run, and to the node running it if any.
+
+    A call the provider reported nothing for is counted as such — the Usage
+    tab says how many — rather than dropped, which read as "usage never
+    updates" on a provider that sends none."""
+    usage = usage or {'unreported_calls': 1}
     with _lock:
         for target in (state, state.get('_usage_node')):
             if isinstance(target, dict):
@@ -118,7 +184,7 @@ def usage_key(state) -> str:
     key = state.get('_usage_key')
     if key:
         return key
-    key = model_bridge.usage_hook(lambda result: record(state, reported_usage(result.usage)))
+    key = model_bridge.usage_hook(lambda result: record(state, reported_usage(getattr(result, 'usage', None))))
     state['_usage_key'] = key
     return key
 

@@ -1358,15 +1358,13 @@ def retry_persistence(run_id):
 
 
 def _public(state: dict) -> dict:
-    """Run state for the API: live node statuses while running, public keys."""
+    """Run state for the API: its public keys. Node statuses are the walk's
+    own — it marks each node running, completed or failed the moment that
+    happens — never the framework graph's, which the walk does not drive and
+    which would read "pending" until the whole run is over."""
     out = {k: v for k, v in state.items() if not k.startswith("_")}
-    graph = state.get("_graph")
-    if out["status"] == "running" and graph is not None:
-        live = {node.name: node.status.value for node in graph.nodes}
-        out["nodes"] = [
-            {**n, "status": live.get(n["name"], n["status"])}
-            for n in out["nodes"]
-        ]
+    # Copies: the walk goes on changing its own while this is read elsewhere.
+    out["nodes"] = [dict(n) for n in out.get("nodes") or []]
     return out
 
 

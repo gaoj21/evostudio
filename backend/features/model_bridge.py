@@ -175,7 +175,9 @@ def _batch(provider: str | None, items: list, options: dict) -> list:
 
 
 def _report(key: str | None, result: LLMResult) -> LLMResult:
-    if not key or result.usage is None:
+    """Tell the key's hook about every call, reported usage or not: a call
+    with `usage=None` is counted as unreported, never passed over."""
+    if not key:
         return result
     with _lock:
         callback = _hooks.get(key)

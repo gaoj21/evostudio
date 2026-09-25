@@ -1474,11 +1474,14 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
               className={`run-badge ${
                 `run-${describeBatch(batch.status, batch.counts || batchProgress).tone}`}`}
             >
-              {batchProgress.total
-                ? `batch ${batchProgress.done}/${batchProgress.total}`
-                : `batch ${batch.status}`}
+              {batchStageText
+                // Node by node, no record is finished before the last node:
+                // the stage is the progress, the record count comes after.
+                ? `batch · ${batchStageText} · records ${batchProgress.done}/${batchProgress.total ?? '?'}`
+                : batchProgress.total
+                  ? `batch ${batchProgress.done}/${batchProgress.total}`
+                  : `batch ${batch.status}`}
               {` · ${describeBatch(batch.status, batch.counts || batchProgress).label}`}
-              {batchStageText && ` · ${batchStageText}`}
               {batchProgress.failed > 0 && ` · ${batchProgress.failed}✗`}
               {batch.summary?.mean != null && ` · score ${batch.summary.mean}`}
               {tokenSuffix(batch.token_usage, !isSettled(BATCH_SETTLED, batch.status))}
@@ -1854,8 +1857,8 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
                   <span className={`node-status ${toneClass(describeBatch(batch.status, batch.counts || batchProgress).tone)}`}>
                     {describeBatch(batch.status, batch.counts || batchProgress).label}
                   </span>
-                  {` · ${batchProgress.done}/${batchProgress.total ?? '?'} done`}
                   {batchStageText && ` · ${batchStageText}`}
+                  {` · ${batchProgress.done}/${batchProgress.total ?? '?'} records done`}
                   {batchProgress.failed > 0 && ` · ${batchProgress.failed} failed`}
                   {batch.metric && ` · metric ${batch.metric}`}
                   {` · logs → ${graph?.output_dir || 'runs'}/<started-at>/nodes/<node>.jsonl`}

@@ -259,3 +259,28 @@ def test_one_failure_blocks_its_own_subject_not_the_batch(batches, calls):
                 for item in batches.get_batch(batch_id)["items"]}
 
     assert statuses == {"r0": "success", "r1": "failed", "r2": "success", "r3": "success"}
+
+
+def test_a_node_shows_done_as_soon_as_the_chunk_has_finished_it(batches, calls, monkeypatch):
+    """While the chunk is on b, a already reads completed for every record —
+    not pending until the whole batch is over."""
+    from backend.api import runner
+    seen: list[dict] = []
+    answer = runner.execute_llm_node
+
+    async def watching(agent, task, inputs, state):
+        if task["name"] == "b" and not seen:
+            (batch_id,) = list(batches._batches)
+            seen.append({"run": runner.get_run(state["run_id"]),
+                         "batch": batches.get_batch(batch_id)})
+        return await answer(agent, task, inputs, state)
+
+    monkeypatch.setattr(runner, "execute_llm_node", watching)
+    run(batches, [{"id": f"r{i}"} for i in range(16)], workers=4)
+
+    run_nodes = {n["name"]: n["status"] for n in seen[0]["run"]["nodes"]}
+    assert run_nodes["a"] == "completed"
+    assert run_nodes["b"] == "running"
+    progress = seen[0]["batch"]["node_progress"]
+    assert progress["a"]["completed"] == 16
+    assert progress["c"]["completed"] == 0

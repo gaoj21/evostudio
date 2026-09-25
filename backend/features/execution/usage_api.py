@@ -19,9 +19,12 @@ RUNNING = ("pending", "queued", "running", "cancelling", "stopping")
 
 
 def _entry(usage: dict | None) -> dict:
-    """A usage figure with its cost, or an explicit 'not reported'."""
+    """A usage figure with its cost, or an explicit 'not reported' — with
+    how many calls came back without a report, when there were any."""
+    unreported = (usage or {}).get("unreported_calls")
+    extra = {"unreported_calls": unreported} if unreported else {}
     if not usage or not usage.get("reported_calls"):
-        return {"reported": False}
+        return {"reported": False, **extra}
     return {"reported": True, **usage, "cost": token_usage.priced(usage)}
 
 

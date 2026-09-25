@@ -221,8 +221,8 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
         def settle_usage(usage) -> None:
             # Called under the lock, in the same step that settles the item,
             # so the live view moves this Run from in-flight to settled at once.
-            if usage and usage.get("reported_calls"):
-                from backend.features.execution.token_usage import add_usage
+            from backend.features.execution.token_usage import add_usage, has_usage
+            if has_usage(usage):
                 add_usage(state.setdefault('token_usage', {}), usage)
                 item['token_usage'] = usage
 
@@ -1001,10 +1001,11 @@ def _in_flight_usage(item: dict) -> dict | None:
 
 def _live(state: dict) -> dict:
     """The batch as it stands: settled items' usage plus in-flight Runs'."""
+    from backend.features.execution.token_usage import has_usage
     items, in_flight = [], []
     for item in state.get("items") or []:
         usage = _in_flight_usage(item)
-        if usage and usage.get("reported_calls"):
+        if has_usage(usage):
             in_flight.append(usage)
             item = {**item, "token_usage": usage}
         items.append(item)

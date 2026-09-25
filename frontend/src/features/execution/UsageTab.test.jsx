@@ -96,3 +96,15 @@ it('keeps trying after a failed refresh and says when it last updated', async ()
   expect(screen.getByTestId('usage-summary').textContent).toContain('33');
   vi.useRealTimers();
 });
+
+it('says how many calls came back without usage, instead of showing nothing', async () => {
+  api.getUsage.mockResolvedValue({ kind: 'batch', running: true,
+    total: { reported: false, unreported_calls: 12 },
+    by_node: [{ node: 'a', usage: { reported: false, unreported_calls: 12 }, share: null }], by_record: [] });
+
+  render(<UsageTab batchId="b1" />);
+
+  expect(await screen.findByTestId('usage-unreported')).toHaveTextContent('12 model calls came back without usage');
+  expect(screen.queryByTestId('usage-none')).toBeNull();
+  expect(screen.getByTestId('usage-by-node').textContent).toContain('12 calls without usage');
+});
