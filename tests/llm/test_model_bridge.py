@@ -6,6 +6,8 @@ end up calling the package — and that the token usage the package reported
 arrives where the run, the batch and the digest read it.
 """
 
+import asyncio
+
 import pytest
 
 from llm import LLMResult, LLMUsage
@@ -32,10 +34,10 @@ def package(monkeypatch):
 
     monkeypatch.setattr(model_bridge, "chat_result", chat_result)
     monkeypatch.setattr(model_bridge, "batch_result", batch_result)
-    monkeypatch.setattr(model_bridge, "achat_result", achat_result)
+    monkeypatch.setattr(model_bridge, "_achat_result", achat_result)
     monkeypatch.setattr(model_bridge, "get_provider",
                         lambda name=None: {"model": "stub/model"})
-    monkeypatch.setattr(model_bridge, "default_provider", lambda: "stub")
+    monkeypatch.setattr(model_bridge, "_default_provider", lambda: "stub")
     monkeypatch.delenv(model_bridge.PROVIDER_ENV, raising=False)
     return calls
 
@@ -210,3 +212,78 @@ def test_run_async_refuses_to_nest_inside_a_running_loop(package):
     import asyncio
 
     asyncio.run(inner())
+
+
+# ---------------------------------------------------------------------------
+# a package that offers only what the contract promises
+# ---------------------------------------------------------------------------
+
+class TestTheNarrowestPackage:
+    """docs/llm-contract.md promises `abatch_result`, not an async single
+    call, and says nothing about options or a default-provider helper. A
+    package that offers exactly the contract — the other machine's — must
+    work, which is why the bridge imports no more than that.
+    """
+
+    @pytest.fixture
+    def narrow(self, monkeypatch):
+        calls = []
+
+        def chat_result(provider, messages):           # no **options
+            calls.append((provider, messages))
+            return LLMResult(content="hello", provider=provider, model="narrow/model",
+                             usage=LLMUsage(input_tokens=11, output_tokens=17,
+                                            total_tokens=28, cache_read_tokens=0,
+                                            reasoning_tokens=10))
+
+        def batch_result(provider, items):
+            return [chat_result(provider, item) for item in items]
+
+        async def abatch_result(provider, items):
+            return batch_result(provider, items)
+
+        monkeypatch.setattr(model_bridge, "chat_result", chat_result)
+        monkeypatch.setattr(model_bridge, "batch_result", batch_result)
+        monkeypatch.setattr(model_bridge, "abatch_result", abatch_result)
+        monkeypatch.setattr(model_bridge, "_achat_result", None)
+        monkeypatch.setattr(model_bridge, "_default_provider", None)
+        monkeypatch.setattr(model_bridge, "list_providers",
+                            lambda: {"theirs": {"enabled": True, "available": True}})
+        monkeypatch.setattr(model_bridge, "get_provider",
+                            lambda name=None: {"model": "narrow/model"})
+        monkeypatch.delenv(model_bridge.PROVIDER_ENV, raising=False)
+        monkeypatch.delenv("LLM_PROVIDER", raising=False)
+        return calls
+
+    def test_the_provider_is_read_from_the_package_listing(self, narrow):
+        assert model_bridge.provider_name() == "theirs"
+
+    def test_a_sync_call_drops_options_the_package_cannot_take(self, narrow):
+        model = model_bridge.workflow_model()
+
+        assert model.single_generate([{"role": "user", "content": "hi"}],
+                                     temperature=0.2) == "hello"
+        assert narrow[-1][1] == [{"role": "user", "content": "hi"}]
+
+    def test_an_async_call_uses_a_batch_of_one(self, narrow):
+        model = model_bridge.workflow_model()
+
+        assert asyncio.run(model.single_generate_async(
+            [{"role": "user", "content": "hi"}])) == "hello"
+
+    def test_usage_still_reaches_the_hook(self, narrow):
+        seen = []
+        key = model_bridge.usage_hook(lambda result: seen.append(result.usage.total_tokens))
+        try:
+            model_bridge.workflow_model(usage_key=key).single_generate(
+                [{"role": "user", "content": "hi"}])
+        finally:
+            model_bridge.release_usage_hook(key)
+
+        assert seen == [28]
+
+    def test_the_langchain_model_works_too(self, narrow):
+        answer = model_bridge.agent_model().invoke([{"role": "user", "content": "hi"}])
+
+        assert answer.content == "hello"
+        assert answer.usage_metadata["total_tokens"] == 28

@@ -38,7 +38,7 @@ def package(monkeypatch):
         return [chat_result(provider, item, **options) for item in items]
 
     monkeypatch.setattr(model_bridge, "chat_result", chat_result)
-    monkeypatch.setattr(model_bridge, "achat_result", achat_result)
+    monkeypatch.setattr(model_bridge, "_achat_result", achat_result)
     monkeypatch.setattr(model_bridge, "batch_result", batch_result)
     return calls
 

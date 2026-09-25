@@ -439,9 +439,15 @@ class TestABatchThatIsStillEvaluating:
         runs_started = []
         running = threading.Event()
 
+        release = threading.Event()
+
         def fake_start_run(graph, inputs, background=True, run_id=None, **_kw):
             runs_started.append(inputs)
             running.set()
+            # Hold the first record until the stop has been asked for: with
+            # instant runs the batch could otherwise finish all six first,
+            # and the test would be measuring nothing.
+            release.wait(10)
             runner._runs[run_id] = {"run_id": run_id, "status": "success", "result": inputs,
                                     "nodes": [], "error": None, "review_status": None}
             return run_id
@@ -453,9 +459,13 @@ class TestABatchThatIsStillEvaluating:
                                            {"type": "manual"}, workers=1)
         assert running.wait(10)
         batch_store.cancel_batch(batch_id)
+        release.set()
         assert batch_store.wait_for(batch_id, timeout=30)
         after_stop = len(runs_started)
         time.sleep(1)
+
+        # The evaluator ran over what did run, and started nothing itself.
+        assert batch_store.get_batch(batch_id)["evaluations"]["check"]["status"] == "success"
         assert len(runs_started) == after_stop < 6
 
 

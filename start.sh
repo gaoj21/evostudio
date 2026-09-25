@@ -144,8 +144,37 @@ if [[ -f llm/__init__.py && ! -e llm/providers.json ]]; then
     echo "Note: llm/providers.json is absent; your package may configure providers another way (docs/llm-contract.md)."
 fi
 
-# Never overwrite existing credentials and never execute .env as shell code.
-if [[ ! -e .env ]]; then
+# Credentials: the repository's own .env, or one kept beside the checkout
+# (a shared .env one level up is a common way to hold company credentials).
+# Parsed, never executed as shell code, and a variable already exported wins.
+ENV_FILE=""
+for candidate in .env ../.env; do
+    [[ -f "$candidate" ]] && { ENV_FILE="$candidate"; break; }
+done
+if [[ -n "$ENV_FILE" ]]; then
+    echo "Model credentials: $ENV_FILE"
+    ENV_EXPORTS="$(mktemp)"
+    trap 'rm -f "$ENV_EXPORTS"' EXIT
+    "$PY" - "$ENV_FILE" > "$ENV_EXPORTS" <<'ENVPY'
+import shlex
+import sys
+
+for raw in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    line = raw.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    name, value = line.split("=", 1)
+    name = name.strip()
+    if not name or not name.replace("_", "").isalnum() or name[0].isdigit():
+        continue
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1]
+    # Only when the shell has not exported one already.
+    print(f': "${{{name}:={shlex.quote(value)[1:-1] if value else ""}}}"; export {name}')
+ENVPY
+    . "$ENV_EXPORTS"
+else
     (umask 077; printf '# Model credentials. Not committed.\n# Each provider names the variables it needs; see llm/providers.json\n# and docs/llm-contract.md.\n' > .env)
     echo "Created local .env. Add the variables your provider needs before using model features."
 fi

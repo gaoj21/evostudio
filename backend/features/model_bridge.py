@@ -25,16 +25,30 @@ import threading
 import uuid
 from typing import Any, Iterator
 
-from llm import (
+# Only what docs/llm-contract.md guarantees. A machine's package may offer
+# more (an async single call, a default-provider helper); this asks for none
+# of it, because importing a name the contract does not promise is how a
+# perfectly good package fails at start-up.
+from llm import (  # noqa: F401
     LLMResult,
     ProviderError,
-    achat_result,
+    abatch_result,
     batch_result,
     chat_result,
-    default_provider,
     get_provider,
     list_providers,
 )
+
+# Optional extras, used when the local package happens to have them.
+try:                                    # a real async single call
+    from llm import achat_result as _achat_result
+except ImportError:
+    _achat_result = None
+try:                                    # the package's own default choice
+    from llm import default_provider as _default_provider
+except ImportError:
+    _default_provider = None
+
 
 __all__ = [
     "ProviderError",
@@ -58,7 +72,31 @@ _lock = threading.Lock()
 
 
 def provider_name(provider: str | None = None) -> str | None:
-    return provider or os.getenv(PROVIDER_ENV) or default_provider()
+    """Which provider to call: what the caller named, what the environment
+    says, the package's own default, else the one configured provider that
+    can run. Studio never hard-codes a provider name."""
+    if provider:
+        return provider
+    chosen = os.getenv(PROVIDER_ENV) or os.getenv("LLM_PROVIDER")
+    if chosen:
+        return chosen
+    if _default_provider is not None:
+        try:
+            chosen = _default_provider()
+        except Exception:
+            chosen = None
+        if chosen:
+            return chosen
+    try:
+        configured = list_providers() or {}
+    except Exception:
+        return None
+    usable = [name for name, config in configured.items()
+              if isinstance(config, dict) and config.get("default")]
+    usable = usable or [name for name, config in configured.items()
+                        if isinstance(config, dict) and config.get("available")]
+    usable = usable or list(configured)
+    return usable[0] if len(usable) >= 1 else None
 
 
 def provider_model(provider: str | None = None) -> str:
@@ -86,6 +124,54 @@ def release_usage_hook(key: str | None) -> None:
         return
     with _lock:
         _hooks.pop(key, None)
+
+
+def _call(provider: str | None, messages: list, options: dict) -> LLMResult:
+    """One completion. Sampling options are passed when the package accepts
+    them; a package whose signature is just (provider, messages) is equally
+    valid under the contract."""
+    if not options:
+        return chat_result(provider, messages)
+    try:
+        return chat_result(provider, messages, **options)
+    except TypeError as error:
+        if "unexpected keyword" not in str(error):
+            raise
+        return chat_result(provider, messages)
+
+
+async def _acall(provider: str | None, messages: list, options: dict) -> LLMResult:
+    """The same, awaited. The contract promises `abatch_result`, not an async
+    single call, so a batch of one is the portable form."""
+    if _achat_result is not None:
+        try:
+            return await (_achat_result(provider, messages, **options) if options
+                          else _achat_result(provider, messages))
+        except TypeError as error:
+            if "unexpected keyword" not in str(error):
+                raise
+            return await _achat_result(provider, messages)
+    try:
+        results = await (abatch_result(provider, [messages], **options) if options
+                         else abatch_result(provider, [messages]))
+    except TypeError as error:
+        if "unexpected keyword" not in str(error):
+            raise
+        results = await abatch_result(provider, [messages])
+    if not results:
+        raise ProviderError("The provider returned no result for one request.")
+    return results[0]
+
+
+def _batch(provider: str | None, items: list, options: dict) -> list:
+    if not options:
+        return batch_result(provider, items)
+    try:
+        return batch_result(provider, items, **options)
+    except TypeError as error:
+        if "unexpected keyword" not in str(error):
+            raise
+        return batch_result(provider, items)
 
 
 def _report(key: str | None, result: LLMResult) -> LLMResult:
@@ -150,15 +236,15 @@ def _model_class():
                     if key in allowed and value is not None}
 
         def single_generate(self, messages: list[dict], **kwargs) -> str:
-            result = chat_result(self.provider, messages, **self._options(kwargs))
+            result = _call(self.provider, messages, self._options(kwargs))
             return _report(self.usage_key, result).content
 
         def batch_generate(self, batch_messages: list[list[dict]], **kwargs) -> list[str]:
-            results = batch_result(self.provider, batch_messages, **self._options(kwargs))
+            results = _batch(self.provider, batch_messages, self._options(kwargs))
             return [_report(self.usage_key, result).content for result in results]
 
         async def single_generate_async(self, messages: list[dict], **kwargs) -> str:
-            result = await achat_result(self.provider, messages, **self._options(kwargs))
+            result = await _acall(self.provider, messages, self._options(kwargs))
             return _report(self.usage_key, result).content
 
         def get_completion_cost(self, *args, **kwargs) -> float:
@@ -235,13 +321,13 @@ def _chat_model_class():
             return ChatResult(generations=[ChatGeneration(message=message)])
 
         def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
-            result = chat_result(provider_name(self.provider), self._payload(messages),
-                                 **({"stop": stop} if stop else {}))
+            result = _call(provider_name(self.provider), self._payload(messages),
+                           {"stop": stop} if stop else {})
             return self._as_result(_report(self.usage_key, result))
 
         async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
-            result = await achat_result(provider_name(self.provider), self._payload(messages),
-                                        **({"stop": stop} if stop else {}))
+            result = await _acall(provider_name(self.provider), self._payload(messages),
+                                  {"stop": stop} if stop else {})
             return self._as_result(_report(self.usage_key, result))
 
         def _stream(self, messages, stop=None, run_manager=None, **kwargs) -> Iterator:

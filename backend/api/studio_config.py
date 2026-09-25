@@ -13,6 +13,29 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# Credentials live in a .env, either in the checkout or beside it — a shared
+# file one level up is a common way to keep company credentials out of the
+# repository. Loaded here because this module is imported before anything
+# that needs them, and never over an already-exported value.
+ENV_PATHS = (REPO_ROOT / ".env", REPO_ROOT.parent / ".env")
+
+
+def load_env() -> list[str]:
+    """Load the first .env found; returns the paths it read."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return []
+    read = []
+    for path in ENV_PATHS:
+        if path.is_file() and load_dotenv(path, override=False):
+            read.append(str(path))
+            break
+    return read
+
+
+LOADED_ENV = load_env()
+
 # The server process loads several native packages that each bundle an
 # OpenMP runtime (torch, faiss, scikit-learn). Set before any of them is
 # imported; a value the deployment exported wins. See
