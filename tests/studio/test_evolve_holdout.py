@@ -160,3 +160,52 @@ def test_starting_an_evolve_does_not_wait_for_the_input(monkeypatch, tmp_path):
             break
         import time; time.sleep(0.02)
     assert task['status'] == 'done' and task['params']['n_dev'] == 1
+
+
+DATED = [{'entity': f'e{i}', 'as_of': f'2025-0{m}-01', 'text': f'e{i}-{m}', 'expected': 'yes'}
+         for m in range(1, 6) for i in range(4)]
+
+
+def test_hold_out_the_latest_values_of_a_chosen_field(monkeypatch):
+    """Split on time: dev is the earlier dates, val the latest — every
+    entity is on both sides, and each date wholly on one."""
+    runs = replays(monkeypatch, lambda prompt, entity: 'yes' if prompt == 'new' else 'no')
+    llm = FakeLLM()
+    monkeypatch.setattr(runner, '_make_llm', lambda **kw: llm)
+    g = graph(evaluator())
+    state = {'task_id': 'dated', 'execution_graph': copy.deepcopy(g)}
+    canvas_evolution.execute(state, g, copy.deepcopy(DATED),
+                             {'evaluator': 'quality', 'mode': 'evolve_evaluate', 'nodes': ['work'], 'rounds': 1,
+                              'split_field': 'as_of', 'split_order': 'latest', 'val_fraction': 0.4}, lambda s: None)
+    split = state['split']
+    assert (split['field'], split['order'], split['dev_units'], split['val_units']) == ('as_of', 'latest', 3, 2)
+    assert split['val_records'] == 8
+    proposal = '\n'.join(str(p) for p in llm.prompts)
+    assert 'e0-1' in proposal and 'e0-4' not in proposal and 'e0-5' not in proposal
+    assert len(runs) == 2 * len(DATED)                  # every record is still replayed
+
+
+def test_split_on_any_field_at_random():
+    units, kind = canvas_evolution.split_units({}, DATED, 'entity')
+    assert kind == 'entity' and units[:4] == ['e0', 'e1', 'e2', 'e3']
+    held = canvas_evolution.held_out(units, 0.25, 0)
+    assert len(held) == 1 and held <= {'e0', 'e1', 'e2', 'e3'}
+    assert canvas_evolution.held_out([3, 10, 2, 1], 0.5, order='latest') == {3, 10}   # numbers by value
+
+
+def test_a_split_field_every_record_must_have():
+    rows = DATED + [{'entity': 'e9', 'text': 'no date'}]
+    with pytest.raises(canvas_evolution.SourceError, match="1 of 21 records have no 'as_of'"):
+        canvas_evolution.split_units({}, rows, 'as_of')
+
+
+def test_the_split_settings_are_checked(monkeypatch):
+    from backend.features.data import input_composition
+    monkeypatch.setattr(input_composition, 'primary', lambda graph: {'name': 'input', 'source': {'type': 'dataloader'}})
+    g = graph(evaluator())
+    body = {'evaluator': 'quality', 'mode': 'evolve_evaluate', 'nodes': ['work']}
+    assert canvas_evolution.settings(g, {**body, 'split_field': 'as_of', 'split_order': 'latest'})['split_field'] == 'as_of'
+    with pytest.raises(canvas_evolution.SourceError, match='needs a field'):
+        canvas_evolution.settings(g, {**body, 'split_order': 'latest'})
+    with pytest.raises(canvas_evolution.SourceError, match='at random or the latest'):
+        canvas_evolution.settings(g, {**body, 'split_field': 'as_of', 'split_order': 'sideways'})

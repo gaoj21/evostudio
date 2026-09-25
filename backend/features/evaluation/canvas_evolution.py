@@ -14,6 +14,9 @@ from . import evaluator_tools
 # dev, and val is scored once, at the end, for the baseline and the chosen
 # candidate. It never decides anything, so its score is an honest estimate.
 VAL_FRACTION = 0.3
+# How val is chosen among the values of the split: by a seeded hash (any
+# field — an entity), or the latest ones (an ordered field — a date).
+SPLIT_ORDERS = ('random', 'latest')
 # Records of one chunk a candidate replay runs at once.
 REPLAY_WORKERS = 4
 
@@ -47,8 +50,10 @@ def discard_candidate_batches(batch_ids):
         (batch.BATCHES_DIR / f'{batch_id}.json').unlink(missing_ok=True)
 
 
-def split_units(graph, rows):
-    """What dev and val are made of: one unit per entity, never per record.
+def split_units(graph, rows, field=None):
+    """What dev and val are made of: one unit per entity, never per record —
+    or, when the user chose a field of the Input's records, one per value of
+    that field (a company, a date: whatever the data has).
 
     A record's output depends on everything its entity's earlier records
     wrote to memory, so an entity's whole timeline goes to one side. The
@@ -56,6 +61,21 @@ def split_units(graph, rows):
     kept under; a record with neither stands alone. Returns (unit per row,
     what the unit is).
     """
+    if field:
+        from backend.features.data.dataloaders import get_path
+        units, missing = [], 0
+        for row in rows:
+            try:
+                value = get_path(row, field)
+            except (KeyError, IndexError, TypeError):
+                value = None
+            if value is None or value == '':
+                missing += 1
+            units.append(value)
+        if missing:
+            raise SourceError(f"{missing} of {len(rows)} records have no '{field}'. "
+                              'Split on a field every record of the Input has.')
+        return units, field
     from backend.features.execution.batch import assign_sequences
     items = [{} for _ in rows]
     assign_sequences(graph, list(zip(items, rows)))
@@ -70,14 +90,24 @@ def split_units(graph, rows):
     return units, ' / '.join(sorted(kinds)) or 'record'
 
 
-def held_out(units, fraction=VAL_FRACTION, seed=0):
-    """The val units: a fixed share of the distinct units, chosen by a hash
-    of each unit and the seed — the same split every time, whatever order
-    the data arrives in. At least one unit on each side when there are two."""
-    distinct = sorted(set(units))
+def _in_order(value):
+    """Numbers by value, everything else by its text (ISO dates sort so)."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return (0, value, '')
+    return (1, 0, str(value))
+
+
+def held_out(units, fraction=VAL_FRACTION, seed=0, order='random'):
+    """The val units: a fixed share of the distinct units — chosen by a hash
+    of each unit and the seed (the same split every time, whatever order the
+    data arrives in), or the latest ones when `order` is 'latest'. At least
+    one unit on each side when there are two."""
+    distinct = sorted(set(units), key=_in_order)
     if len(distinct) < 2:
         return set()
     size = min(len(distinct) - 1, max(1, round(len(distinct) * fraction)))
+    if order == 'latest':
+        return set(distinct[-size:])
     ranked = sorted(distinct, key=lambda u: hashlib.sha256(f'{seed}:{u}'.encode()).hexdigest())
     return set(ranked[:size])
 
@@ -212,12 +242,21 @@ def settings(graph, body):
     seed = body.get('split_seed', 0)
     if isinstance(seed, bool) or not isinstance(seed, int):
         raise SourceError('The split seed must be a whole number.')
+    field = body.get('split_field') or None
+    if field is not None and (not isinstance(field, str) or not field.strip()):
+        raise SourceError('Split on the name of a field of the Input records.')
+    order = body.get('split_order') or 'random'
+    if order not in SPLIT_ORDERS:
+        raise SourceError('Hold out values at random or the latest ones.')
+    if order == 'latest' and not field:
+        raise SourceError('Holding out the latest values needs a field to order them by.')
     from backend.api import batch
     workers = body.get('workers', REPLAY_WORKERS)
     if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= batch.MAX_WORKERS:
         raise SourceError(f'Run 1–{batch.MAX_WORKERS} records at once.')
     return {'mode': mode, 'nodes': chosen, 'evaluator': evaluator_tools.evaluator_name(body['evaluator']), 'rounds': rounds, 'share_labels': share_labels,
                   'val_fraction': float(fraction), 'split_seed': seed, 'workers': workers,
+                  'split_field': field.strip() if field else None, 'split_order': order,
                   'source': {'type': 'canvas', 'node': main['name'], 'config': copy.deepcopy(main['source'])},
                   'n_dev': None, 'n_train': 0, 'memory_start': 'empty isolated stores'}
 
@@ -321,12 +360,14 @@ def _execute(state, graph, rows, params, stage):
     # Dev and val, by entity. Every candidate replays every record — memory
     # may be read across entities — but only dev is seen, scored and chosen
     # on; val is scored once, at the end.
-    units, unit_kind = split_units(graph, rows)
-    val_units = held_out(units, params.get('val_fraction', VAL_FRACTION), params.get('split_seed', 0))
+    order = params.get('split_order') or 'random'
+    units, unit_kind = split_units(graph, rows, params.get('split_field'))
+    val_units = held_out(units, params.get('val_fraction', VAL_FRACTION), params.get('split_seed', 0), order)
     on_val = [unit in val_units for unit in units]
     def part(records, val):
         return [r for r, v in zip(records, on_val) if v == val]
-    split = {'unit': unit_kind, 'seed': params.get('split_seed', 0),
+    split = {'unit': unit_kind, 'field': params.get('split_field'), 'order': order,
+             'seed': params.get('split_seed', 0),
              'val_fraction': params.get('val_fraction', VAL_FRACTION),
              'dev_units': len(set(units) - val_units), 'val_units': len(val_units),
              'dev_records': on_val.count(False), 'val_records': on_val.count(True)}

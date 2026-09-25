@@ -11,6 +11,9 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
   const [rounds, setRounds] = useState(1);
   const [heldOut, setHeldOut] = useState(30);          // % of entities kept for validation
   const [workers, setWorkers] = useState(4);           // records of a chunk replayed at once
+  const [fields, setFields] = useState([]);            // what the Input's records carry
+  const [splitField, setSplitField] = useState('');    // '' = each Input trajectory / memory entity
+  const [splitOrder, setSplitOrder] = useState('random');
   const [mode, setMode] = useState(initialMode);
   const evaluationOnly = mode === 'evaluate';
   const [source, setSource] = useState(initialSource);
@@ -28,8 +31,13 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
   useEffect(() => {
     if (graphId) {
       api.getGraph(graphId)
-        .then((g) => setNodes((g.tasks || []).filter((t) => !['source', 'tool'].includes(t.kind)).map((t) => t.name)))
-        .catch(() => setNodes([]));
+        .then((g) => {
+          setNodes((g.tasks || []).filter((t) => !['source', 'tool'].includes(t.kind)).map((t) => t.name));
+          // Any field the Input's records carry can be what dev and val are split on.
+          setFields([...new Set((g.tasks || []).filter((t) => t.kind === 'source' && t.enabled !== false)
+            .flatMap((t) => (t.outputs || []).map((o) => (typeof o === 'string' ? o : o?.name)).filter(Boolean)))]);
+        })
+        .catch(() => { setNodes([]); setFields([]); });
       // The objective is the workflow's evaluation code, written in Evaluate.
       api.graphEvaluators(graphId)
         .then((r) => setEvaluation(workflowEvaluation((Array.isArray(r) ? r : r.evaluators || []).filter((e) => e.enabled !== false))))
@@ -72,7 +80,7 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
     setStarting(true);
     try {
       const res = source === 'canvas'
-        ? await api.startEvolveResults(graphId,{source:'canvas',mode,evaluator,nodes:evaluationOnly?[]:picked,rounds:Number(rounds),share_labels:shareLabels,workers:Number(workers),...(evaluationOnly?{}:{val_fraction:Number(heldOut)/100})})
+        ? await api.startEvolveResults(graphId,{source:'canvas',mode,evaluator,nodes:evaluationOnly?[]:picked,rounds:Number(rounds),share_labels:shareLabels,workers:Number(workers),...(evaluationOnly?{}:{val_fraction:Number(heldOut)/100,split_field:splitField||null,split_order:splitField?splitOrder:'random'})})
         : await api.startEvolveResults(graphId, {source, mode, evaluator, nodes: evaluationOnly ? [] : picked, share_labels: shareLabels, [source === 'saved_batch' ? 'batch_id' : 'run_id']: savedId});
       onStarted(res.task_id);
     } catch (err) {
@@ -103,7 +111,18 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
         {source === 'canvas' && <div className="field"><label htmlFor="canvas-workers">Records at once</label><input id="canvas-workers" type="number" min="1" max="64" value={workers} onChange={e=>setWorkers(e.target.value)} />
           <small className="muted">Each replay runs like a batch: node by node, in the Input&apos;s own batches, this many records of a batch at a time.</small></div>}
         {source === 'canvas' && !evaluationOnly && <div className="field"><label htmlFor="canvas-held-out">Held out for validation (%)</label><input id="canvas-held-out" type="number" min="10" max="50" value={heldOut} onChange={e=>setHeldOut(e.target.value)} />
-          <small className="muted">Whole entities (each Input trajectory with all its records), fixed split. Prompts are proposed and chosen on the rest; the held-out part is scored once at the end and decides nothing.</small></div>}
+          <small className="muted">Prompts are proposed and chosen on the rest; the held-out part is scored once at the end and decides nothing.</small></div>}
+        {source === 'canvas' && !evaluationOnly && <div className="field"><label htmlFor="canvas-split-field">Split dev / val by</label>
+          <select id="canvas-split-field" value={splitField} onChange={e=>{ setSplitField(e.target.value); if (!e.target.value) setSplitOrder('random'); }}>
+            <option value="">Each Input trajectory / memory entity</option>
+            {fields.map((f) => <option key={f} value={f}>{f}</option>)}
+          </select>
+          {splitField && <><label htmlFor="canvas-split-order">Held-out values</label>
+            <select id="canvas-split-order" value={splitOrder} onChange={e=>setSplitOrder(e.target.value)}>
+              <option value="random">At random (a fixed split of the {splitField} values)</option>
+              <option value="latest">The latest {splitField} values (dev is everything before)</option>
+            </select></>}
+          <small className="muted">Every record with the same value goes to the same side. Whatever the split, every candidate replays every record, so memory builds up as it would in a real run.</small></div>}
         <h4>1 · {evaluationOnly ? 'Data to evaluate' : 'Data to learn from'}</h4>
         <div className="evolve-grid">
           <div className="field">

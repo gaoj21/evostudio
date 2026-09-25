@@ -373,3 +373,31 @@ it('evolves only from the canvas Input; saved results are evaluated', async () =
   expect([...view.getByLabelText('Source').querySelectorAll('option')].map((o) => o.value)).toEqual(['canvas']);
   expect(container.textContent).toMatch(/saved results can only be evaluated/);
 });
+
+it('splits dev and val on a field the Input records carry, at random or by the latest values', async () => {
+  api.getGraph.mockResolvedValue({ tasks: [
+    { name: 'feed', kind: 'source', outputs: [{ name: 'entity' }, { name: 'as_of' }] }, { name: 'detect' }] });
+  const { container } = render(<NewTaskForm initialSource="canvas" initialMode="evolve_evaluate" graphId="g1" onStarted={vi.fn()} onError={vi.fn()} />);
+  const view = within(container);
+  const user = userEvent.setup();
+  const field = await view.findByLabelText('Split dev / val by');
+  await waitFor(() => expect([...field.querySelectorAll('option')].map((o) => o.value)).toEqual(['', 'entity', 'as_of']));
+  expect(view.queryByLabelText('Held-out values')).toBeNull();          // automatic: entities, at random
+  await user.selectOptions(field, 'as_of');
+  await user.selectOptions(view.getByLabelText('Held-out values'), 'latest');
+  await waitFor(() => expect(view.getByRole('button', { name: /start evolution/i })).toBeEnabled());
+  await user.click(view.getByRole('button', { name: /start evolution/i }));
+  await waitFor(() => expect(api.startEvolveResults).toHaveBeenCalledWith('g1', expect.objectContaining({
+    split_field: 'as_of', split_order: 'latest', val_fraction: 0.3 })));
+});
+
+it('says what val was: the latest values of the chosen field', () => {
+  const task = { task_id: 'h2', status: 'done', params: { mode: 'evolve_evaluate', source: { type: 'canvas' } },
+    baseline: { metrics: { score: 0.5 } }, optimized: { metrics: { score: 0.7 } },
+    split: { unit: 'as_of', field: 'as_of', order: 'latest', dev_units: 3, val_units: 2, dev_records: 12, val_records: 8 },
+    validation: { unit: 'as_of', field: 'as_of', order: 'latest', val_units: 2, val_records: 8, val_fraction: 0.4,
+      baseline: { score: 0.5 }, optimized: { score: 0.6 }, improved: true, changed: true }, diff: [], candidates: [] };
+  const { container } = render(<TaskDetail task={task} onApplied={vi.fn()} />);
+  expect(container.textContent).toMatch(/on dev: 3 as_of values \(12 records\)/);
+  expect(within(container).getByTestId('validation').textContent).toMatch(/on 2 as_of values \(8 records\).*latest 40% of the as_of values/);
+});
