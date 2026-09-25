@@ -1,6 +1,6 @@
 # DataLoaders and canvas Evaluators
 
-Implemented September 17, 2026. These components run outside the model-provider layer. `backend/llm/` and `backend/evoagentx/models/` are unchanged.
+Implemented September 17, 2026. These components run outside the model-provider layer. The model layer (the standalone `llm/` package) and `backend/evoagentx/models/` are unchanged.
 
 ## Input → DataLoader → workflow
 

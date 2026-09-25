@@ -188,11 +188,12 @@ credit_risk = "projects/credit_risk"
 
 [tool.setuptools.packages.find]
 where = [".", "backend", "projects"]
-include = ["backend", "backend.api*", "evoagentx*", "llm*", "memory*", "credit_risk*", "projects"]
-exclude = ["credit_risk.dataset*", "credit_risk.output*"]
+include = ["backend", "backend.api*", "evoagentx*", "memory*", "credit_risk*", "projects"]
+exclude = ["credit_risk.dataset*", "credit_risk.output*", "llm*"]
 
-# `llm` is a package at the repository root (not under backend/), so it needs
-# no package-dir entry -- but its provider configuration is data and has to
-# travel with it, or an installed copy has no providers to select from.
-[tool.setuptools.package-data]
-llm = ["providers.json"]
+# `llm` is deliberately not part of this distribution. Each machine supplies
+# its own transport package at the repository root (see docs/llm-contract.md),
+# so an installed mapping for `llm` would either point at a path that does not
+# exist or freeze one machine's implementation into the install. It is
+# imported from the repository root, which is on sys.path for the server, the
+# workers and the tests.

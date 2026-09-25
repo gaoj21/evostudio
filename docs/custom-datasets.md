@@ -49,7 +49,7 @@ JSON 示例：
 实现位于 `backend/features/data/user_datasets.py` 和 `frontend/src/features/data/DatasetInput.jsx`。
 装配涉及 `backend/api/app.py`、`backend/features/data/{source_apis,sources}.py`、
 `frontend/src/api.js`、`frontend/src/features/canvas/Inspector.jsx`。
-不涉及 `backend/llm/`；公司侧模型接口可原样保留。
+不涉及模型层 `llm/`（每台机器自备的独立包）；公司侧模型接口可原样保留。
 
 ## 新闻 + 内部 obligor list 双输入
 
