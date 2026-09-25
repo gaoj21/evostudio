@@ -19,7 +19,7 @@ is what you could actually deploy:
 and everything its runs produce:
 
 - runs/<run_id>/input.json        — the effective inputs, source records merged
-- runs/nodes/<name>.jsonl — one file per node, appended by every run
+- runs/<started-at>/nodes/<name>.jsonl — one file per node of that run or batch
 - runs/<run_id>/output.json       — the result, plus every node's full output
 - files/                          — working dir for storage-backed toolkits
   (StorageToolkit / CMDToolkit / PythonInterpreterToolkit are pointed here via
@@ -201,14 +201,15 @@ def _session_stamp(state: dict) -> str:
 
 
 def write_run_artifacts(graph_id: str, state: dict, output_dir: str = "runs") -> None:
-    """Append this run to each node's own file, then to the run log.
+    """Append this run to its session's per-node files, then to its run log.
 
-    One file per node, `<output_dir>/nodes/<node>.jsonl`, that every run and
-    every record of every batch appends a line to: what the node was handed,
-    what it produced, and which run, batch and session it belonged to. So
-    `decide.jsonl` reads as every decision that node has ever made, in order,
-    and reading one node's history does not mean walking a folder per batch.
-    The run-level summary goes to `<output_dir>/runs.jsonl` beside `nodes/`.
+    Each run, and each batch as a whole, gets a folder named by when it
+    started — `<output_dir>/<YYYYmmdd-HHMMSS>/` — and inside it every node has
+    one file, `nodes/<node>.jsonl`, that each record of that session appends a
+    line to: what the node was handed, what it produced, which run and batch
+    it was. A batch of a hundred records is one folder, and its `decide.jsonl`
+    reads as every decision of that batch in order. The run-level summary goes
+    to `runs.jsonl` beside `nodes/`.
 
     JSON lines rather than one JSON array: appending to an array means
     rewriting the whole file every run. Nodes whose task sets
@@ -217,13 +218,13 @@ def write_run_artifacts(graph_id: str, state: dict, output_dir: str = "runs") ->
     """
     try:
         save_flags = state.get("_save_output_flags") or {}
-        base = _resolve_in_workspace(graph_id, output_dir)
+        base = _resolve_in_workspace(graph_id, f"{output_dir}/{_session_stamp(state)}")
         (base / "nodes").mkdir(parents=True, exist_ok=True)
         node_io = state.get("_node_io") or {}
         source_records = state.get("_source_records") or {}
         now = datetime.now(timezone.utc).isoformat()
-        # `session` is when this run or batch started: the lines of one batch
-        # share it, which is what the folder per batch used to say.
+        # `session` is when this run or batch started — the folder's name,
+        # repeated on every line so a line still says where it came from.
         common = {"run_id": state["run_id"], "graph_id": graph_id,
                   "batch_id": state.get("batch_id"), "session": _session_stamp(state),
                   "at": now}

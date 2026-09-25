@@ -12,6 +12,16 @@ const money = (cost) => (cost?.total_cost == null ? '—'
 const percent = (share) => (share == null ? '' : `${(share * 100).toFixed(share < 0.1 ? 1 : 0)}%`);
 const RECORDS_SHOWN = 50;
 
+// What the page showing a run or batch polls anyway: when any of it changes,
+// the Usage tab fetches again, so it moves with the status bar.
+export function usageVersion(target) {
+  if (!target) return '';
+  const usage = target.token_usage || {};
+  const stage = target.stage || {};
+  const counts = target.counts ? JSON.stringify(target.counts) : '';
+  return [target.status, usage.total_tokens, usage.reported_calls, stage.node, stage.done, counts].join('|');
+}
+
 function Summary({ total, running }) {
   if (!total?.reported) {
     return <p className="muted small" data-testid="usage-none">{running
@@ -73,30 +83,36 @@ function Table({ title, rows, labelOf, testid }) {
   </section>;
 }
 
-export default function UsageTab({ runId, batchId, live = false }) {
+export default function UsageTab({ runId, batchId, live = false, version = '' }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [byTokens, setByTokens] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState(null);
 
+  // Fetched again whenever the run or batch the page is showing moves on
+  // (`version`: its status, tokens and stage), and every two seconds while it
+  // runs. A request that fails is retried, not the end of the updates.
   useEffect(() => {
     if (!runId && !batchId) return undefined;
     let active = true;
     let timer = null;
     const load = async () => {
+      let running = true;
       try {
         const next = await api.getUsage(batchId ? { batchId } : { runId });
         if (!active) return;
-        setData(next); setError('');
-        // Keep up with a run in progress; stop asking once it has settled.
-        if (next.running) timer = setTimeout(load, 2000);
+        setData(next); setError(''); setUpdatedAt(new Date());
+        running = next.running;
       } catch (err) {
-        if (active) setError(err?.body?.detail || err.message);
+        if (!active) return;
+        setError(err?.body?.detail || err.message);
       }
+      if (active && running) timer = setTimeout(load, 2000);
     };
     load();
     return () => { active = false; clearTimeout(timer); };
-  }, [runId, batchId, live]);
+  }, [runId, batchId, live, version]);
 
   const records = useMemo(() => {
     const rows = [...(data?.by_record || [])];
@@ -105,11 +121,15 @@ export default function UsageTab({ runId, batchId, live = false }) {
   }, [data, byTokens]);
 
   if (!runId && !batchId) return <div className="drawer-body"><p className="muted small">Nothing has run yet.</p></div>;
-  if (error) return <div className="drawer-body"><p role="alert" className="chat-error">{error}</p></div>;
+  if (error && !data) return <div className="drawer-body"><p role="alert" className="chat-error">{error}</p></div>;
   if (!data) return <div className="drawer-body"><p className="muted small">Loading usage…</p></div>;
 
   const shown = showAll ? records : records.slice(0, RECORDS_SHOWN);
   return <div className="drawer-body usage-tab">
+    <p className="muted small" data-testid="usage-updated">
+      {data.running ? 'Live · ' : ''}updated {updatedAt ? updatedAt.toLocaleTimeString() : '—'}
+      {error ? ` · last refresh failed: ${error}` : ''}
+    </p>
     <Summary total={data.total} running={data.running}/>
     {(data.by_node || []).length > 0 && (
       <Table title="By node" rows={data.by_node} labelOf={(row) => row.node} testid="usage-by-node"/>

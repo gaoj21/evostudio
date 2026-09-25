@@ -17,6 +17,7 @@ EAX_MEMORY_BACKEND starts a fresh memory for existing stores.
 
 import hashlib
 import json
+import threading
 import os
 import time
 import uuid
@@ -38,14 +39,24 @@ _INDEX_DIR = "faiss_index"
 _ENTRIES_FILE = "entries.jsonl"
 
 
-def _embeddings():
-    from langchain_huggingface import HuggingFaceEmbeddings
+_EMBEDDINGS = None
+_EMBEDDINGS_LOCK = threading.Lock()
 
-    return HuggingFaceEmbeddings(
-        model_name=EMBEDDING_MODEL,
-        model_kwargs={"device": "cpu"},
-        encode_kwargs={"normalize_embeddings": True},
-    )
+
+def _embeddings():
+    """Loaded once per process and shared: building HuggingFaceEmbeddings
+    loads the model's weights, and every store opened did it again."""
+    global _EMBEDDINGS
+    with _EMBEDDINGS_LOCK:
+        if _EMBEDDINGS is None:
+            from langchain_huggingface import HuggingFaceEmbeddings
+
+            _EMBEDDINGS = HuggingFaceEmbeddings(
+                model_name=EMBEDDING_MODEL,
+                model_kwargs={"device": "cpu"},
+                encode_kwargs={"normalize_embeddings": True},
+            )
+        return _EMBEDDINGS
 
 
 def _content_of(message) -> str:

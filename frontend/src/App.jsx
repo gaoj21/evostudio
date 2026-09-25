@@ -28,7 +28,7 @@ import { useLayoutMode } from './useLayoutMode.js';
 import { BATCH_SETTLED, useExecutionSession } from './features/execution/useExecutionSession.js';
 import { RUN_SETTLED, describeBatch, describeRun, isSettled, toneClass } from './features/execution/runStates.js';
 import RunOutcome from './features/execution/RunOutcome.jsx';
-import UsageTab from './features/execution/UsageTab.jsx';
+import UsageTab, { usageVersion } from './features/execution/UsageTab.jsx';
 import EvaluationTab from './features/evaluation/EvaluationTab.jsx';
 import { resumeLabel } from './features/execution/batchControl.js';
 import { batchNodeStates, stageText } from './features/execution/batchStage.js';
@@ -1858,14 +1858,14 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
                   {batchStageText && ` · ${batchStageText}`}
                   {batchProgress.failed > 0 && ` · ${batchProgress.failed} failed`}
                   {batch.metric && ` · metric ${batch.metric}`}
-                  {` · logs → ${graph?.output_dir || 'runs'}/nodes/<node>.jsonl`}
+                  {` · logs → ${graph?.output_dir || 'runs'}/<started-at>/nodes/<node>.jsonl`}
                 </>
               ) : (
                 <>
                   <span className={`node-status ${toneClass(describeRun(run.status).tone)}`}>
                     {describeRun(run.status).label}
                   </span>
-                  {` · logs → ${graph?.output_dir || 'runs'}/nodes/<node>.jsonl`}
+                  {` · logs → ${graph?.output_dir || 'runs'}/<started-at>/nodes/<node>.jsonl`}
                 </>
               )}
             </span>
@@ -2004,7 +2004,8 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
             </div>
           ) : drawerTab === 'usage' ? (
             <UsageTab runId={batch ? null : run?.run_id} batchId={batch?.batch_id}
-                      live={batch ? batch.status : run?.status} />
+                      live={batch ? batch.status : run?.status}
+                      version={usageVersion(batch || run)} />
           ) : (
             <MemoryPanel graphId={graph?.id} />
           )}

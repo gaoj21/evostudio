@@ -68,3 +68,31 @@ it('keeps asking while the batch runs and stops once it has settled', async () =
   expect(api.getUsage).toHaveBeenCalledTimes(2);
   vi.useRealTimers();
 });
+
+it('fetches again whenever the run it shows moves on', async () => {
+  api.getUsage.mockResolvedValue({ kind: 'batch', running: false, total: used(10, 1), by_node: [], by_record: [] });
+  const { rerender } = render(<UsageTab batchId="b1" live="running" version="running|10|1" />);
+  await screen.findByTestId('usage-summary');
+
+  rerender(<UsageTab batchId="b1" live="running" version="running|40|4" />);
+
+  await waitFor(() => expect(api.getUsage).toHaveBeenCalledTimes(2));
+});
+
+it('keeps trying after a failed refresh and says when it last updated', async () => {
+  vi.useFakeTimers();
+  api.getUsage
+    .mockResolvedValueOnce({ kind: 'batch', running: true, total: used(10, 1), by_node: [], by_record: [] })
+    .mockRejectedValueOnce(new Error('network'))
+    .mockResolvedValueOnce({ kind: 'batch', running: false, total: used(30, 3), by_node: [], by_record: [] });
+
+  render(<UsageTab batchId="b1" />);
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(2100);
+  expect(screen.getByTestId('usage-updated').textContent).toContain('last refresh failed');
+  await vi.advanceTimersByTimeAsync(2100);
+
+  expect(api.getUsage).toHaveBeenCalledTimes(3);
+  expect(screen.getByTestId('usage-summary').textContent).toContain('33');
+  vi.useRealTimers();
+});

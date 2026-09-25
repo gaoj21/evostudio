@@ -36,3 +36,24 @@ def test_without_a_complete_copy_it_is_the_hugging_face_id(tmp_path, monkeypatch
     monkeypatch.setattr(ltm, "LOCAL_MODEL_DIRS", (half,))
 
     assert ltm.embedding_model() == "BAAI/bge-small-en-v1.5"
+
+
+def test_the_model_is_loaded_once_per_process(monkeypatch):
+    """Every memory store opened used to load the weights again — at least
+    twice per record of a batch."""
+    loads = []
+
+    class FakeTransformer:
+        def __init__(self, name, device=None, **kwargs):
+            loads.append((name, device))
+
+    import sentence_transformers
+    monkeypatch.setattr(sentence_transformers, "SentenceTransformer", FakeTransformer)
+    monkeypatch.setattr(ltm, "_embedders", {})
+
+    first = ltm.shared_sentence_transformer("some/model", device="cpu")
+    again = ltm.shared_sentence_transformer("some/model", device="cpu")
+    other = ltm.shared_sentence_transformer("some/model", device="mps")
+
+    assert first is again and other is not first
+    assert loads == [("some/model", "cpu"), ("some/model", "mps")]

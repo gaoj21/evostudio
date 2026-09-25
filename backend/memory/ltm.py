@@ -13,6 +13,7 @@ Notes baked in from production use:
 """
 
 import json
+import threading
 import os
 import sys
 from pathlib import Path
@@ -95,6 +96,36 @@ def _make_rag_config():
     )
 
 
+# One loaded embedding model per process. The framework builds a new
+# SentenceTransformer every time a LongTermMemory is created — and a run opens
+# a store per memory node, then again inside the write lock — so every record
+# of a batch loaded the weights from disk two or more times. The model is
+# read-only once loaded; sharing it changes nothing but the time.
+_embedders: dict = {}
+_embedders_lock = threading.Lock()
+
+
+def shared_sentence_transformer(model_name, device=None, **kwargs):
+    """A loaded SentenceTransformer, the same instance for the same model,
+    device and options for the life of the process."""
+    key = (str(model_name), device, tuple(sorted((k, repr(v)) for k, v in kwargs.items())))
+    with _embedders_lock:
+        model = _embedders.get(key)
+        if model is None:
+            from sentence_transformers import SentenceTransformer
+            model = SentenceTransformer(model_name, device=device, **kwargs)
+            _embedders[key] = model
+        return model
+
+
+def _share_embedders() -> None:
+    """Point the framework's HuggingFace embedding at the shared model.
+    Done on first use, so importing memory does not import torch."""
+    from evoagentx.rag.embeddings import huggingface_embedding
+    if huggingface_embedding.SentenceTransformer is not shared_sentence_transformer:
+        huggingface_embedding.SentenceTransformer = shared_sentence_transformer
+
+
 def open_memory(store_dir, corpus_id: str, create: bool = False):
     """Open the framework LongTermMemory persisted at store_dir.
 
@@ -107,6 +138,7 @@ def open_memory(store_dir, corpus_id: str, create: bool = False):
 
     from evoagentx.memory.long_term_memory import LongTermMemory
 
+    _share_embedders()
     memory = LongTermMemory(
         storage_handler=_make_storage_handler(path),
         rag_config=_make_rag_config(),

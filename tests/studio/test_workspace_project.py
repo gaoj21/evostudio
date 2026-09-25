@@ -171,16 +171,15 @@ class TestItMatchesTheExport:
 
 
 class TestEveryNodeHasItsOwnLog:
-    """One file per node, appended to by every run and every batch record.
+    """A folder per run or batch, named by when it started, and inside it one
+    file per node that every record of that session appends to.
 
-    Open `decide.jsonl` and read every decision ever made, in order, each
-    with the inputs it was handed and the run, batch and session it belonged
-    to. The run-level summary is appended to `runs.jsonl` the same way. No
-    folder per run: reading one node's history would then mean walking every
-    batch that ever ran.
+    Open `<started>/nodes/decide.jsonl` and read every decision of that batch,
+    in order, each with the inputs it was handed and the run it belonged to.
+    The run-level summary is appended to `runs.jsonl` beside `nodes/`.
     """
 
-    STARTED = "2026-09-01T10:20:30"          # local, naive: session 20260901-102030
+    STARTED = "2026-09-01T10:20:30"          # local, naive: folder 20260901-102030
 
     @classmethod
     def state(cls, nodes, **extra):
@@ -190,8 +189,8 @@ class TestEveryNodeHasItsOwnLog:
                              for n in nodes}, **extra}
 
     @staticmethod
-    def lines(workspace, rel):
-        path = workspace.workspace_root("probe") / "runs" / rel
+    def lines(workspace, rel, folder="20260901-102030"):
+        path = workspace.workspace_root("probe") / "runs" / folder / rel
         return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l]
 
     def test_each_node_gets_a_line_in_its_own_file(self, store):
@@ -211,7 +210,9 @@ class TestEveryNodeHasItsOwnLog:
         assert self.lines(workspace, "runs.jsonl")[0]["status"] == "failed"
         assert not (workspace.workspace_root("probe") / "runs" / "r1").exists()
 
-    def test_the_records_of_one_batch_append_to_the_same_file(self, store):
+    def test_the_records_of_one_batch_share_a_folder_and_append(self, store):
+        # Two records of the same batch: same session start, same folder,
+        # each appending its line to the node's file.
         graphs, workspace = store
         for run_id, d in (("r1", 1), ("r2", 2)):
             workspace.write_run_artifacts("probe", {
@@ -219,25 +220,18 @@ class TestEveryNodeHasItsOwnLog:
                 "run_id": run_id, "batch_id": "batch-9", "created_at": "2026-09-01T10:20:3" + str(d),
                 "session_started_at": "2026-09-01T10:19:00"})
 
-        decide = self.lines(workspace, "nodes/decide.jsonl")
+        decide = self.lines(workspace, "nodes/decide.jsonl", folder="20260901-101900")
         assert [(l["run_id"], l["output"]["d"]) for l in decide] == [("r1", 1), ("r2", 2)]
         assert decide[1]["batch_id"] == "batch-9"
-        assert {l["session"] for l in decide} == {"20260901-101900"}
-        assert [l["run_id"] for l in self.lines(workspace, "runs.jsonl")] == ["r1", "r2"]
+        assert [l["run_id"] for l in self.lines(workspace, "runs.jsonl", folder="20260901-101900")] == ["r1", "r2"]
 
-    def test_later_runs_and_batches_append_to_the_same_node_file(self, store):
+    def test_a_separate_press_of_run_gets_its_own_folder(self, store):
         graphs, workspace = store
-        workspace.write_run_artifacts("probe", self.state([{"name": "a", "status": "completed", "output": {"n": 1}}]))
-        workspace.write_run_artifacts("probe", {
-            **self.state([{"name": "a", "status": "completed", "output": {"n": 2}}]),
-            "run_id": "r2", "batch_id": "batch-2", "created_at": "2026-09-02T08:00:00"})
-
-        lines = self.lines(workspace, "nodes/a.jsonl")
-        assert [l["output"]["n"] for l in lines] == [1, 2]
-        # The session tells the two apart; no folder does.
-        assert [l["session"] for l in lines] == ["20260901-102030", "20260902-080000"]
-        assert sorted(p.name for p in (workspace.workspace_root("probe") / "runs").iterdir()) \
-            == ["nodes", "runs.jsonl"]
+        workspace.write_run_artifacts("probe", self.state([{"name": "a", "status": "completed", "output": {}}]))
+        workspace.write_run_artifacts("probe", {**self.state([{"name": "a", "status": "completed", "output": {}}]),
+                                                "run_id": "r2", "created_at": "2026-09-02T08:00:00"})
+        folders = sorted(p.name for p in (workspace.workspace_root("probe") / "runs").iterdir())
+        assert folders == ["20260901-102030", "20260902-080000"]
 
     def test_a_node_that_opted_out_keeps_its_output_off_disk(self, store):
         graphs, workspace = store
@@ -251,15 +245,15 @@ class TestEveryNodeHasItsOwnLog:
         workspace.write_run_artifacts("probe", self.state(
             [{"name": "../../escape", "status": "completed", "output": {}}]))
         files = listing(workspace, "probe")
-        assert "runs/nodes/escape.jsonl" in files
+        assert "runs/20260901-102030/nodes/escape.jsonl" in files
         assert all(f.startswith("runs/") or "/" not in f or not f.startswith("..") for f in files)
 
     def test_the_logs_are_files_in_the_workspace(self, store):
         graphs, workspace = store
         workspace.write_run_artifacts("probe", self.state([{"name": "a", "status": "completed", "output": {}}]))
         files = listing(workspace, "probe")
-        assert "runs/nodes/a.jsonl" in files
-        assert "runs/runs.jsonl" in files
+        assert "runs/20260901-102030/nodes/a.jsonl" in files
+        assert "runs/20260901-102030/runs.jsonl" in files
 
 
 class TestDownloading:
