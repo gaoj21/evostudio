@@ -36,11 +36,11 @@ describe('a batch is evaluated by the workflow\'s saved evaluators', () => {
   });
 
   it('runs a saved evaluator on the saved results and shows what it returns', async () => {
-    api.runGraphEvaluator.mockResolvedValue({ report });
+    api.runGraphEvaluator.mockResolvedValue({ evaluations: { check: { status: 'success', ...report } } });
     const { container } = render(<EvaluationTab batch={{ batch_id: 'b1', graph_id: 'g', status: 'succeeded' }} />);
     const view = within(container);
     expect(view.getByTestId('no-evaluation')).toHaveTextContent('Evaluate & Evolve');
-    await userEvent.setup().click(await view.findByRole('button', { name: /run this evaluator on these results/i }));
+    await userEvent.setup().click(await view.findByRole('button', { name: /evaluate these results/i }));
     expect(api.runGraphEvaluator).toHaveBeenCalledWith('g', { name: 'check', batch_id: 'b1' });
     expect(await view.findByText(/accuracy 0.75/)).toBeInTheDocument();
   });
@@ -49,7 +49,7 @@ describe('a batch is evaluated by the workflow\'s saved evaluators', () => {
     api.runGraphEvaluator.mockRejectedValue({ body: { detail: "KeyError: 'x'\nIn your code:\n  line 4, in evaluate: total += r['x']" } });
     const { container } = render(<EvaluationTab batch={{ batch_id: 'b1', graph_id: 'g', status: 'succeeded' }} />);
     const view = within(container);
-    await userEvent.setup().click(await view.findByRole('button', { name: /run this evaluator on these results/i }));
+    await userEvent.setup().click(await view.findByRole('button', { name: /evaluate these results/i }));
     await waitFor(() => expect(view.getByRole('alert')).toHaveTextContent('line 4, in evaluate'));
   });
 
@@ -62,6 +62,6 @@ describe('a batch is evaluated by the workflow\'s saved evaluators', () => {
 
   it('waits for a running batch', async () => {
     const { container } = render(<EvaluationTab batch={{ batch_id: 'b1', graph_id: 'g', status: 'running' }} />);
-    expect(await within(container).findByRole('button', { name: /run this evaluator on these results/i })).toBeDisabled();
+    expect(await within(container).findByRole('button', { name: /evaluate these results/i })).toBeDisabled();
   });
 });

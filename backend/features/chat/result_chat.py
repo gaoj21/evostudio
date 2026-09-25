@@ -2,7 +2,7 @@
 import json
 import math
 from collections import Counter
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Query
 from backend.api import runner, model_json, batch, result_compute
 from backend.api.chat_api import _ask, _run_digest, ChatError
 from backend.api.chat_engine import ChatEngine
@@ -106,9 +106,39 @@ def scoped_records(graph_id, scope='all', run_id=None, batch_id=None):
     return rows
 
 
+SUMMARY_KEYS = ('run_id', 'graph_id', 'batch_id', 'status', 'created_at', 'finished_at', 'review_status')
+
+
+def _scalars(value, limit=120):
+    """The short scalar fields of a mapping: what a list labels a run by."""
+    if not isinstance(value, dict):
+        return None
+    kept = {k: v for k, v in value.items()
+            if isinstance(v, (int, float, bool)) or (isinstance(v, str) and len(v) <= limit)}
+    return kept or None
+
+
+def summary(run, sources=None):
+    """A run as a list shows it: ids, status and times, and the short fields
+    it is labelled by — never its outputs, which made the list hundreds of MB."""
+    return {**{k: run[k] for k in SUMMARY_KEYS if k in run},
+            'inputs': _scalars(run.get('inputs')) or {},
+            **({'input_summary': _scalars(run['input_summary'])} if _scalars(run.get('input_summary')) else {}),
+            # The Input's record labels a run; other nodes' outputs never do.
+            'nodes': [{'name': n.get('name'), 'status': n.get('status'),
+                       **({'output': _scalars(n.get('output'))} if sources is None or n.get('name') in sources else {})}
+                      for n in run.get('nodes') or []]}
+
+
 @router.get('/graphs/{graph_id}/results')
-def list_results(graph_id: str):
-    return records(graph_id)
+def list_results(graph_id: str, summary_only: bool = Query(default=False, alias='summary')):
+    rows = records(graph_id)
+    if not summary_only:
+        return rows
+    from backend.api import graphs
+    graph = graphs.load_graph(graph_id) or {}
+    sources = {t.get('name') for t in graph.get('tasks') or [] if t.get('kind') == 'source'} if graph else None
+    return [summary(r, sources) for r in rows]
 
 
 @router.post('/graphs/{graph_id}/results/chat')

@@ -90,6 +90,10 @@ export default function EvaluatePanel({ graphId, onEvaluatorsChanged }) {
   const baseline = useRef({ code: '', config: {} });
   const pending = useRef({ code: '', config: {} });
   const unsaved = useRef(false);
+  // Only what the user changes is kept: opening the page, or the code's
+  // defaults being read, never writes the workflow's evaluation back.
+  const touched = useRef(false);
+  const touch = (set) => (value) => { touched.current = true; set(value); };
 
   useEffect(() => { api.listDataResources().then((r) => setResources(rows(r, 'resources'))).catch(() => {}); }, []);
 
@@ -99,7 +103,7 @@ export default function EvaluatePanel({ graphId, onEvaluatorsChanged }) {
     setRestored(false); setCode(''); setConfig({}); setIface(null); setReport(null); setMetric('');
     baseline.current = { code: '', config: {} }; unsaved.current = false;
     if (!graphId) return undefined;
-    setKept(null); setOthers([]);
+    setKept(null); setOthers([]); touched.current = false;
     (async () => {
       let server = null;
       let list = [];
@@ -199,24 +203,35 @@ export default function EvaluatePanel({ graphId, onEvaluatorsChanged }) {
     finally { setChecking(false); }
   };
 
+  // The parameters are read from the code as soon as there is code to read:
+  // opening the page, confirming new code. Check code reads them again.
+  useEffect(() => {
+    if (restored && code.trim()) check();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restored, code]);
+
   const evaluate = async (persist) => {
     setBusy(persist ? 'run' : 'preview'); setError(''); setReport(null);
     try {
-      const body = { code, config, ...(metric ? { metric } : {}), ...targetBody() };
+      // Everything the kept evaluation runs with — labels above all: without
+      // them a labelled evaluation scores nothing and reports only nulls.
+      const body = { code, config, name: kept?.name || WORKFLOW_EVALUATION, direction,
+        timeout: Number(timeout) || 120, ...(labels ? { labels: { resource_id: labels, loader: 'auto' } } : {}),
+        ...(metric ? { metric } : {}), ...targetBody() };
       const result = persist ? await api.runGraphEvaluator(graphId, body) : await api.previewGraphEvaluator(graphId, body);
-      setReport(result); setReportLabel(persist ? 'run' : 'preview');
+      setReport(result); setReportLabel(persist ? 'saved report' : 'preview');
       const names = metricNames(result);
-      if (names.length && !names.includes(metric)) setMetric(names[0]);
+      if (names.length && !names.includes(metric)) touch(setMetric)(names[0]);
     } catch (e) { setError(message(e)); }
     finally { setBusy(''); }
   };
 
   // ---- keep it: the confirmed code and its settings are the workflow's evaluation ----
   useEffect(() => {
-    if (!graphId || !restored || !code.trim()) return undefined;
+    if (!graphId || !restored || !code.trim() || !touched.current) return undefined;
     const entry = {
       name: kept?.name || WORKFLOW_EVALUATION, code, config, metric: metric || '', direction,
-      timing: 'manual', timeout: Number(timeout) || 120,
+      timing: kept?.timing || 'manual', timeout: Number(timeout) || 120,
       labels: labels ? { resource_id: labels, loader: 'auto' } : null, enabled: true,
     };
     const same = kept && ['code', 'metric', 'direction', 'timeout'].every((k) => kept[k] === entry[k])
@@ -243,7 +258,7 @@ export default function EvaluatePanel({ graphId, onEvaluatorsChanged }) {
   return <div className="evaluate-panel">
     <section>
       <h4>1 · Evaluation code</h4>
-      <PythonDatasetEditor kind="Evaluator" code={code} onChange={setCode} onDraftChange={setLive}
+      <PythonDatasetEditor kind="Evaluator" code={code} onChange={touch(setCode)} onDraftChange={setLive}
         disabled={!!busy} example={EVALUATOR_EXAMPLE} examples={EXAMPLES} />
       <p className="muted small" role="status" data-testid="draft-status">
         {draftState === 'saving' ? 'Saving draft…'
@@ -252,7 +267,7 @@ export default function EvaluatePanel({ graphId, onEvaluatorsChanged }) {
           : draftSavedAt ? `Draft saved ${new Date(draftSavedAt).toLocaleString()}. Confirm the code to make it the workflow's evaluation.`
           : 'Nothing pasted yet. Whatever you paste is kept as a draft, so you can leave to copy a path and come back.'}
         {' '}
-        {(draftSavedAt || live.trim()) && <button type="button" className="link small" onClick={discardDraft}>Discard draft</button>}
+        {live.trim() && live !== (kept?.code || '') && <button type="button" className="link small" onClick={discardDraft}>Discard draft</button>}
       </p>
     </section>
 
@@ -262,7 +277,7 @@ export default function EvaluatePanel({ graphId, onEvaluatorsChanged }) {
         <button type="button" disabled={!code.trim() || checking} onClick={check}>{checking ? 'Checking…' : 'Check code'}</button>
         {codeChanged && <span className="muted small">Unconfirmed edits above. Confirm code, then check it again.</span>}
       </div>
-      <EvaluatorParams iface={iface} values={config} onChange={setConfig} disabled={!!busy} />
+      <EvaluatorParams iface={iface} values={config} onChange={touch(setConfig)} disabled={!!busy} />
     </section>
 
     <section>
@@ -284,7 +299,7 @@ export default function EvaluatePanel({ graphId, onEvaluatorsChanged }) {
     {report && <section>
       <h4>Report</h4>
       {metrics.length > 0 && <div className="field"><label htmlFor="evaluate-metric">Metric</label>
-        <select id="evaluate-metric" value={metric} onChange={(e) => setMetric(e.target.value)}>
+        <select id="evaluate-metric" value={metric} onChange={(e) => touch(setMetric)(e.target.value)}>
           {!metrics.includes(metric) && <option value="">{metric ? `${metric} (not in this report)` : 'Choose the metric Evolve optimizes'}</option>}
           {metrics.map((m) => <option key={m} value={m}>{m}</option>)}
         </select></div>}
@@ -295,16 +310,16 @@ export default function EvaluatePanel({ graphId, onEvaluatorsChanged }) {
       <summary>Settings</summary>
       {!metrics.length && <div className="field"><label htmlFor="evaluate-objective">Metric Evolve optimizes</label>
         <input id="evaluate-objective" value={metric} placeholder="Preview once to choose it from the report"
-          onChange={(e) => setMetric(e.target.value)} /></div>}
+          onChange={(e) => touch(setMetric)(e.target.value)} /></div>}
       <div className="field"><label htmlFor="evaluate-direction">Optimize direction</label>
-        <select id="evaluate-direction" value={direction} onChange={(e) => setDirection(e.target.value)}>
+        <select id="evaluate-direction" value={direction} onChange={(e) => touch(setDirection)(e.target.value)}>
           <option value="maximize">Maximize</option><option value="minimize">Minimize</option>
         </select></div>
       <div className="field"><label htmlFor="evaluate-timeout">Time limit (seconds)</label>
-        <NumberInput id="evaluate-timeout" type="number" min={10} max={3600} step={1} value={timeout} onChange={(e) => setTimeoutSeconds(Number(e.target.value))} /></div>
+        <NumberInput id="evaluate-timeout" type="number" min={10} max={3600} step={1} value={timeout} onChange={(e) => touch(setTimeoutSeconds)(Number(e.target.value))} /></div>
       <p className="muted small">Labels are passed as config.label_records (or a label_records parameter). Code decides how to match them.</p>
       <div className="field"><label htmlFor="evaluate-labels">Label resource (optional)</label>
-        <select id="evaluate-labels" value={labels} onChange={(e) => setLabels(e.target.value)}>
+        <select id="evaluate-labels" value={labels} onChange={(e) => touch(setLabels)(e.target.value)}>
           <option value="">None</option>{resources.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
         </select></div>
     </details>

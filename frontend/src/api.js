@@ -48,7 +48,8 @@ export const api = {
   inspectDataLoaderCode: code => req('/api/dataloaders/interface', {method:'POST',body:{code}}),
   previewDataLoader: config => req('/api/dataloaders/preview', {method:'POST',body:config}),
   stopDataLoaderPreview: id => req(`/api/dataloaders/preview/${encodeURIComponent(id)}/stop`, {method:'POST'}),
-  listResultRuns: g => req(`/api/graphs/${encodeURIComponent(g)}/results`),
+  // The list only: ids, status, times and label fields. Opening a run loads it.
+  listResultRuns: g => req(`/api/graphs/${encodeURIComponent(g)}/results?summary=1`),
   chatResults: (g, body, options) => assistantRequest(g, 'results', body, options),
   stopAssistant: (g, id) => req(`/api/graphs/${encodeURIComponent(g)}/assistant/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
   // Turns sent with `background: true` keep running when the chat is closed; poll them by id.

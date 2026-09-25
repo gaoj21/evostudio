@@ -84,7 +84,7 @@ export default function EvolvePanel({ open, graphId, onClose, onApplied }) {
         )}
         <div className="evolve-body">
           <div className="evolve-sidebar">
-            <button className="primary" onClick={() => { setView('evolve'); setShowForm(true); setSelectedId(null); }} disabled={!graphId}>
+            <button className={view === 'evolve' && showForm ? 'primary' : ''} onClick={() => { setView('evolve'); setShowForm(true); setSelectedId(null); }} disabled={!graphId}>
               + New run
             </button>
             <button type="button" className={view === 'evaluate' ? 'primary' : ''} onClick={() => { setView('evaluate'); setShowForm(false); setSelectedId(null); }} disabled={!graphId}>

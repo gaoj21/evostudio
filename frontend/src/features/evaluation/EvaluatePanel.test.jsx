@@ -176,7 +176,9 @@ describe('the workflow has one evaluation: this code', () => {
     await user.click(view.getByRole('button', { name: 'Preview' }));
     await waitFor(() => expect(view.getByLabelText('Metric')).toHaveValue('score'));
     await waitFor(() => expect(api.saveGraphEvaluators).toHaveBeenCalledWith('g1', [expect.objectContaining({
-      name: 'evaluation', metric: 'score', config: { field: 'answer' } })]));
+      name: 'evaluation', metric: 'score', config: expect.objectContaining({ field: 'answer', threshold: 0.5 }) })]));
+    // Its parameters were read on opening: no Check code needed.
+    expect(api.inspectEvaluatorCode).toHaveBeenCalledWith(CODE);
   });
 
   it('leaves anything else saved on the workflow alone', async () => {
@@ -189,4 +191,16 @@ describe('the workflow has one evaluation: this code', () => {
     await waitFor(() => expect(api.saveGraphEvaluators).toHaveBeenCalledWith('g1',
       [other, expect.objectContaining({ name: 'evaluation', code: CODE + '# changed\n' })]));
   });
+});
+
+it('opening the page never writes the evaluation back', async () => {
+  api.graphEvaluators.mockResolvedValue({ evaluators: [
+    { name: 'evaluation', code: CODE, config: {}, metric: 'score', direction: 'maximize', timing: 'batch', timeout: 120, enabled: true }] });
+  api.saveGraphEvaluators.mockImplementation(async (id, list) => ({ evaluators: list }));
+  const { view } = open();
+  await waitFor(() => expect(view.getByLabelText('Python Evaluator code')).toHaveValue(CODE));
+  await waitFor(() => expect(api.inspectEvaluatorCode).toHaveBeenCalled());   // defaults read and filled in
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  expect(api.saveGraphEvaluators).not.toHaveBeenCalled();
+  expect(view.queryByRole('button', { name: 'Discard draft' })).toBeNull();
 });
