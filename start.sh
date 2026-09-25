@@ -134,14 +134,20 @@ if (( BUILD )); then
     npm --prefix frontend run build
 fi
 
-# Never overwrite existing credentials and never execute .env as shell code.
-if [[ ! -e backend/llm/providers.json ]]; then
-    (umask 077; cp backend/llm/providers.example.json backend/llm/providers.json)
-    echo "Created local backend/llm/providers.json. Set your API host and model there."
+# The LLM transport package is supplied per machine and is not shipped with
+# this repository (docs/llm-contract.md), so there is nothing to copy into
+# place -- but starting without one fails later, inside the first model call.
+if [[ ! -f llm/__init__.py ]] && ! "$PY" -c 'import llm' >/dev/null 2>&1; then
+    fail "No LLM transport package found. Put your \`llm/\` package at the repository root (interface: docs/llm-contract.md), then retry."
 fi
+if [[ -f llm/__init__.py && ! -e llm/providers.json ]]; then
+    echo "Note: llm/providers.json is absent; your package may configure providers another way (docs/llm-contract.md)."
+fi
+
+# Never overwrite existing credentials and never execute .env as shell code.
 if [[ ! -e .env ]]; then
-    (umask 077; printf '# Set your model API key here. This file is not committed.\nLLM_API_KEY=\n' > .env)
-    echo "Created local .env. Add LLM_API_KEY before using model features."
+    (umask 077; printf '# Model credentials. Not committed.\n# Each provider names the variables it needs; see llm/providers.json\n# and docs/llm-contract.md.\n' > .env)
+    echo "Created local .env. Add the variables your provider needs before using model features."
 fi
 
 echo "Starting EvoStudio at http://$HOST:$PORT — press Ctrl+C to stop."
