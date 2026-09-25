@@ -140,6 +140,8 @@ export const api = {
   listBatches: (graphId) =>
     req(`/api/batches${graphId ? `?graph_id=${encodeURIComponent(graphId)}` : ''}`),
   getBatch: (batchId) => req(`/api/batches/${encodeURIComponent(batchId)}`),
+  getUsage: ({ runId, batchId }) =>
+    req(`/api/usage?${batchId ? `batch_id=${encodeURIComponent(batchId)}` : `run_id=${encodeURIComponent(runId)}`}`),
   // A URL rather than a fetch: the browser saves the file itself, so results
   // of any size never pass through JS.
   batchExportUrl: (batchId, format = 'csv') =>

@@ -10,6 +10,24 @@ import threading
 _lock = threading.Lock()
 
 
+# Counted when the provider reports them; absent otherwise, never zero-filled.
+DETAIL_KEYS = ('cache_read_tokens', 'reasoning_tokens')
+
+
+def _detail(value: dict, flat: str, *nested: tuple[str, str]):
+    """A detail count, flat (LLMUsage) or nested (provider payload shapes)."""
+    found = value.get(flat)
+    if isinstance(found, int) and not isinstance(found, bool) and found >= 0:
+        return found
+    for section, name in nested:
+        block = value.get(section)
+        if isinstance(block, dict):
+            found = block.get(name)
+            if isinstance(found, int) and not isinstance(found, bool) and found >= 0:
+                return found
+    return None
+
+
 def reported_usage(value):
     if not isinstance(value, dict):
         value = value.model_dump() if hasattr(value, 'model_dump') else vars(value) if hasattr(value, '__dict__') else {}
@@ -17,14 +35,54 @@ def reported_usage(value):
     if any(isinstance(n, bool) or not isinstance(n, int) or n < 0 for n in (inp, out)):
         return None
     total = value.get('total_tokens')
-    return {'input_tokens':inp, 'output_tokens':out, 'total_tokens':total if isinstance(total,int) and total >= inp + out else inp + out}
+    usage = {'input_tokens':inp, 'output_tokens':out, 'total_tokens':total if isinstance(total,int) and total >= inp + out else inp + out}
+    cache = _detail(value, 'cache_read_tokens', ('input_token_details', 'cache_read'),
+                    ('prompt_tokens_details', 'cached_tokens'))
+    reasoning = _detail(value, 'reasoning_tokens', ('output_token_details', 'reasoning'),
+                        ('completion_tokens_details', 'reasoning_tokens'))
+    if cache is not None:
+        usage['cache_read_tokens'] = min(cache, inp)
+    if reasoning is not None:
+        usage['reasoning_tokens'] = reasoning
+    return usage
 
 
 def add_usage(target, usage):
     for key in ('input_tokens','output_tokens','total_tokens'):
         target[key] = target.get(key, 0) + usage[key]
+    for key in DETAIL_KEYS:
+        if key in usage:
+            target[key] = target.get(key, 0) + usage[key]
     target['reported_calls'] = target.get('reported_calls', 0) + usage.get('reported_calls', 1)
     target['source'] = 'provider'
+
+
+def priced(usage):
+    """What `usage` cost, by the machine's own `llm` package pricing.
+
+    The contract's UsageTracker owns prices (environment-configured), so
+    Studio never hard-codes one. None when nothing was reported or the
+    package cannot price it.
+    """
+    if not usage or not usage.get('reported_calls'):
+        return None
+    try:
+        from llm import LLMUsage, UsageTracker
+        tracker = UsageTracker()
+        tracker.add(LLMUsage(input_tokens=usage.get('input_tokens', 0),
+                             output_tokens=usage.get('output_tokens', 0),
+                             total_tokens=usage.get('total_tokens', 0),
+                             cache_read_tokens=usage.get('cache_read_tokens', 0),
+                             reasoning_tokens=usage.get('reasoning_tokens', 0)))
+        snapshot = tracker.snapshot() or {}
+    except Exception:
+        return None
+    cost = snapshot.get('total_token_cost', snapshot.get('total_cost'))
+    if not isinstance(cost, (int, float)):
+        return None
+    return {'total_cost': cost,
+            **{key: snapshot[key] for key in ('input_price_per_1m', 'output_price_per_1m',
+                                              'cached_input_ratio') if key in snapshot}}
 
 
 def combined(*usages):

@@ -95,7 +95,10 @@ def test_a_running_run_reports_usage_per_call_and_per_node(engine):
     live = _wait(lambda: (runner.get_run(run_id) or {}).get("token_usage"))
     run = runner.get_run(run_id)
     assert run["status"] == "running"
+    # Cache and reasoning counts ride along with what the package reports
+    # (zero here: the stub's LLMUsage leaves them at their defaults).
     assert live == {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15,
+                    "cache_read_tokens": 0, "reasoning_tokens": 0,
                     "reported_calls": 1, "source": "provider"}
     nodes = {n["name"]: n for n in run["nodes"]}
     assert nodes["a"]["token_usage"]["total_tokens"] == 15

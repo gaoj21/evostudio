@@ -69,9 +69,11 @@ def test_a_run_s_calls_go_through_the_package_and_are_counted(studio_data, packa
     assert run["status"] == "success", run.get("error")
     assert package, "the node made no call through the package"
     assert all(provider == model_bridge.provider_name() for provider, _ in package)
+    # Cache and reasoning counts ride along from LLMUsage (zero here).
     assert run["token_usage"] == {"input_tokens": 6 * len(package), "output_tokens": 4 * len(package),
-                                  "total_tokens": 10 * len(package), "reported_calls": len(package),
-                                  "source": "provider"}
+                                  "total_tokens": 10 * len(package),
+                                  "cache_read_tokens": 0, "reasoning_tokens": 0,
+                                  "reported_calls": len(package), "source": "provider"}
     assert run["nodes"][0]["token_usage"]["total_tokens"] == 10 * len(package)
     # The hook is not left registered behind a settled run.
     assert set(model_bridge._hooks) <= hooks

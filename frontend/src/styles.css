@@ -3458,3 +3458,19 @@ button.run-badge:hover:not(:disabled) {
   color: var(--text-2);
   border-color: var(--border);
 }
+
+/* ---- Usage tab: where a run's or a batch's tokens went ---- */
+.usage-tab { display: grid; gap: 14px; }
+.usage-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+.usage-cell { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); display: grid; gap: 2px; }
+.usage-cell small { color: var(--text-2); font-size: 11px; }
+.usage-cell strong { font-size: 14px; font-variant-numeric: tabular-nums; }
+.usage-section h4 { margin: 0 0 6px; font-size: 12px; }
+.usage-records-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.usage-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.usage-table th, .usage-table td { padding: 4px 6px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.usage-table th:first-child, .usage-table td:first-child { text-align: left; white-space: normal; }
+.usage-table th { color: var(--text-2); font-weight: 500; }
+.usage-share { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.usage-bar { width: 60px; height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; display: inline-block; }
+.usage-bar > span { display: block; height: 100%; background: var(--accent); }

@@ -13,6 +13,8 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+
+from backend.features.execution.node_gate import NodeGate
 from datetime import datetime, timezone
 
 from backend.api import runner
@@ -51,7 +53,7 @@ def _summarize(text, limit: int = _SUMMARY_CHARS) -> str:
 def start_batch(graph: dict, records: list[dict], source: dict, gray_zone=None,
                 workers: int = 2, metric: str | None = None,
                 labels: list | None = None, record_chunks=None, *, batch_id=None,
-                session=None, session_started_at=None) -> str:
+                session=None, session_started_at=None, mode: str = "record") -> str:
     """Start a batch over pre-mapped input records; returns the batch_id.
 
     With `metric` and `labels`, the batch is an evaluation: each item is scored
@@ -82,6 +84,11 @@ def start_batch(graph: dict, records: list[dict], source: dict, gray_zone=None,
         "metric": metric,
         "summary": None,
         "gray_zone": list(gray_zone) if gray_zone else None,
+        # "node": each chunk moves through the workflow one node at a time
+        # (node_gate.py). "record": each record walks the whole workflow on
+        # its own, as batches did before.
+        "mode": mode if mode in EXECUTION_MODES else "record",
+        "stage": None,
         "workers": workers,
         "llm_batch_size": size,
         "batch_size": record_batch_size,
@@ -141,6 +148,7 @@ def wait_for(batch_id: str, timeout: float | None = None) -> bool:
 # run's waiting window rarely outlasts the batch. Two more passes, then it
 # stays failed and the item says the model was unreachable.
 RETRY_PASSES = 2
+EXECUTION_MODES = ("node", "record")
 RETRY_PAUSE_SECONDS = 60.0
 
 
@@ -159,6 +167,26 @@ def _pause(seconds: float, batch_id: str | None = None) -> None:
         stop.wait(seconds)
 
 
+def _plan_node_names(graph: dict) -> list[str]:
+    """The nodes a run of this graph executes, in the order it executes them."""
+    from backend.api import run_plan
+    try:
+        return [n["name"] for n in run_plan.compile_plan(graph)["nodes"]]
+    except Exception:
+        return []
+
+
+def _new_run_id(state: dict, batch_id: str, item: dict) -> str:
+    """A new run id for an item's attempt. A session reuses one id per item."""
+    return (uuid.uuid5(uuid.NAMESPACE_URL, f"{batch_id}:{item['index']}").hex[:20]
+            if state.get("session") else uuid.uuid4().hex[:12])
+
+
+def _set_stage(state: dict, stage: dict | None) -> None:
+    with _lock:
+        state["stage"] = stage
+
+
 def _retryable(item: dict, run: dict | None) -> bool:
     node_error = (run or {}).get("node_error") or {}
     return item.get("status") == "failed" and bool(node_error.get("retryable"))
@@ -172,7 +200,7 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
     with _lock:
         state["sequencing"] = assign_sequences(graph, pairs)
 
-    def work(item: dict, record: dict) -> None:
+    def work(item: dict, record: dict, gate=None, run_id: str | None = None) -> None:
         with _lock:
             # The pool hands out work one item at a time, so a cancelled batch
             # stops at the next item rather than at the next record read: at
@@ -180,6 +208,8 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
             if state.get("cancel_requested"):
                 item["status"] = "cancelled"
                 state["cancelled_items"] += 1
+                if gate is not None and run_id:
+                    gate.leave(run_id)       # never holds the chunk it was registered in
                 return
             item["status"] = "running"
             # Which Run is this attempt's: a session reuses its item's run id,
@@ -187,8 +217,7 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
             item["attempt_started_at"] = _utcnow()
             # pre-assign the run id so live node progress is visible while
             # this item executes (start_run runs synchronously here)
-            item["run_id"] = (uuid.uuid5(uuid.NAMESPACE_URL, f"{batch_id}:{item['index']}").hex[:20]
-                              if state.get("session") else uuid.uuid4().hex[:12])
+            item["run_id"] = run_id or _new_run_id(state, batch_id, item)
         def settle_usage(usage) -> None:
             # Called under the lock, in the same step that settles the item,
             # so the live view moves this Run from in-flight to settled at once.
@@ -206,7 +235,8 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
                              run_id=item["run_id"], batch_id=batch_id,
                              session_started_at=state.get("session_started_at") or state.get("created_at"),
                              **({"session": state["session"]} if state.get("session") else {}),
-                             **({"llm_batch_size": state["llm_batch_size"]} if state.get("llm_batch_size") else {}))
+                             **({"llm_batch_size": state["llm_batch_size"]} if state.get("llm_batch_size") else {}),
+                             **({"gate": gate} if gate is not None else {}))
             run = runner.get_run(item["run_id"]) or {}
             if run.get("persistence_error"):
                 raise OSError(run["persistence_error"])
@@ -236,21 +266,25 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
     carried = dict(state.get("blocked_groups") or {}) if state.get("streaming") else {}
     blocked_groups = dict(carried)
 
-    def run_group(group):
+    def run_group(group, gate=None, first_id: str | None = None, key_of=None):
         """The steps of one sample, in order. A step that does not succeed
         stops the rest: the next step would read this one's memory, and
         a judgement made without it is not the judgement the week asks for."""
-        group_key = _group_key(group[0][1], group[0][0]) if group else None
+        key_of = key_of or _group_key
+        group_key = key_of(group[0][1], group[0][0]) if group else None
         blocked_by = blocked_groups.get(group_key)
-        for item, record in group:
-            if blocked_by is not None and _group_key(record, item):
+        for position, (item, record) in enumerate(group):
+            run_id = first_id if position == 0 else None
+            if blocked_by is not None and key_of(record, item):
                 with _lock:
                     item["status"] = "blocked"
                     item["error"] = (f"Not run: the step before it ({blocked_by}) did not finish. "
                                      f"Resume runs them in order.")
+                if gate is not None and run_id:
+                    gate.leave(run_id)
                 continue
-            work(item, record)
-            if _group_key(record, item) and item.get("status") != "success":
+            work(item, record, gate, run_id)
+            if key_of(record, item) and item.get("status") != "success":
                 blocked_by = f"record #{int(item.get('index', 0)) + 1}"
                 blocked_groups[group_key] = blocked_by
 
@@ -258,6 +292,38 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
         blocked_groups.clear()
         blocked_groups.update(carried)
         size = state.get('batch_size') or len(selected) or 1
+        if state.get("mode", "record") == "node":
+            nodes = _plan_node_names(graph)
+            with _lock:
+                # The chunk is the unit of order: chunks run one after another,
+                # so what one writes to memory is there for the next. Memory
+                # does not also serialise the records inside a chunk — that
+                # turned every DataLoader batch into one record at a time.
+                state["sequencing"] = {
+                    "mode": "chunk", "field": None,
+                    "reason": "Node by node: each input batch runs together and batches run "
+                              "in order, so memory written by one batch is there for the next."}
+            for offset in range(0, len(selected), size):
+                groups = _lanes(selected[offset:offset + size])
+                if not groups:
+                    continue
+                gate = NodeGate(nodes, workers, on_stage=lambda stage: _set_stage(state, stage),
+                                limit_model_calls=not state.get("llm_batch_size"))
+                # Every group's first record is registered before any starts,
+                # so the first to arrive cannot run ahead of the rest.
+                first_ids = []
+                for group in groups:
+                    run_id = _new_run_id(state, batch_id, group[0][0])
+                    gate.expect(run_id)
+                    first_ids.append(run_id)
+                # Every group of the chunk runs at once — the gate holds them
+                # in step. Model calls in flight are bounded by `workers`
+                # inside the gate instead of by the pool.
+                with ThreadPoolExecutor(max_workers=len(groups)) as pool:
+                    list(pool.map(lambda pair: run_group(pair[0], gate, pair[1], _lane_key),
+                                  zip(groups, first_ids)))
+                _set_stage(state, None)
+            return
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for offset in range(0, len(selected), size):
                 # A cancelled batch still walks its chunks: `work` settles each
@@ -271,7 +337,8 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
     for _ in range(RETRY_PASSES):
         if state.get("cancel_requested"):
             break
-        again = _with_blocked_after(pairs, [(item, record) for item, record in pairs
+        again = _with_blocked_after(pairs, key_of=_lane_key if state.get("mode") == "node" else None,
+                                    chosen=[(item, record) for item, record in pairs
                                             if item.get("retryable")])
         if not again:
             break
@@ -292,8 +359,9 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
         if state.get("streaming"):
             # Taken from the outcome, not the retry bookkeeping: a group is
             # blocked for later chunks if any of its records here did not succeed.
+            key_of = _lane_key if state.get("mode") == "node" else _group_key
             for item, record in pairs:
-                key = _group_key(record, item)
+                key = key_of(record, item)
                 if key and key not in carried and item.get("status") != "success":
                     carried[key] = f"record #{int(item.get('index', 0)) + 1}"
             state["blocked_groups"] = carried
@@ -447,6 +515,10 @@ def assign_sequences(graph: dict, pairs: list) -> dict:
     from backend.features.memory import sequencing
     from backend.features.data.sources import input_sequence
     memory = sequencing.plan(graph)
+    # The subject memory is partitioned by, kept even when the rule below
+    # widens the order to the whole batch: node by node, it is what a
+    # failure blocks (_lane_key), and it never serialises a chunk.
+    entity = memory if memory.get("mode") == "entity" else None
     declared = input_sequence(graph)
     # Grouping and memory are both ordering constraints. A group may span
     # several entities, or the same entity may span groups. Conservatively
@@ -457,6 +529,8 @@ def assign_sequences(graph: dict, pairs: list) -> dict:
         record = record or {}
         if "trajectory" not in item and declared and record.get(declared["group"]) not in (None, ""):
             item["trajectory"] = str(record[declared["group"]])
+        if entity is not None and "memory_key" not in item:
+            item["memory_key"] = sequencing.key(entity, record)
         if memory["mode"] == "all" or "sequence" not in item:
             item["sequence"] = sequencing.key(memory, record)
     return memory
@@ -479,18 +553,49 @@ def _group_key(record: dict, item: dict | None = None) -> str | None:
     return item.get("sequence")
 
 
-def _with_blocked_after(pairs: list, chosen: list) -> list:
+def _lane_key(record: dict, item: dict | None = None) -> str | None:
+    """Node by node, what ties records together: the same subject — a
+    DataLoader group, the trajectory the Input declares, or the entity
+    memory is partitioned by. Chunks already keep memory's order; this only
+    says whose later records a failure blocks, and which records of one
+    chunk (the same subject twice) must not run side by side."""
+    record = record or {}
+    item = item or {}
+    if (record.get('_dataloader') or {}).get('group') is not None:
+        return 'loader:' + str(record['_dataloader']['group'])
+    if item.get("trajectory") is not None:
+        return "input:" + str(item["trajectory"])
+    # The subject memory is split by. Never "memory:all": that is the rule
+    # that made every record one lane and every failure block the batch.
+    return item.get("memory_key") or None
+
+
+def _lanes(pairs) -> list[list]:
+    """A chunk's records, one lane each; a subject's records share one."""
+    lanes: dict[str, list] = {}
+    loose: list[list] = []
+    for item, record in pairs:
+        key = _lane_key(record, item)
+        if key:
+            lanes.setdefault(key, []).append((item, record))
+        else:
+            loose.append([(item, record)])
+    return list(lanes.values()) + loose
+
+
+def _with_blocked_after(pairs: list, chosen: list, key_of=None) -> list:
     """`chosen` plus, for each stepped sample, every later step of that
     sample — blocked ones and finished ones alike — in the batch's order.
 
     A step that runs again writes new memory; the steps after it read that
     memory, so their earlier results no longer describe this run. Standalone
     records bring nothing along."""
+    key_of = key_of or _group_key
     picked = {id(item) for item, _ in chosen}
     open_groups: dict[str, bool] = {}
     out = []
     for item, record in pairs:
-        key = _group_key(record, item)
+        key = key_of(record, item)
         if id(item) in picked:
             out.append((item, record))
             if key:
@@ -505,7 +610,8 @@ def unfinished(state: dict) -> list[dict]:
     for a stepped sample — everything after its first such step."""
     pairs = [(i, i.get("inputs") or {}) for i in (state.get("items") or [])]
     first = [(i, r) for i, r in pairs if i.get("status") != "success"]
-    return [i for i, _ in _with_blocked_after(pairs, first)]
+    key_of = _lane_key if state.get("mode") == "node" else None
+    return [i for i, _ in _with_blocked_after(pairs, first, key_of)]
 
 
 def resume_batch(batch_id: str, graph: dict) -> dict:
@@ -837,6 +943,9 @@ def _digest(state: dict) -> dict:
         "error": state.get("error"),
         "streaming": bool(state.get("streaming")),
         "unread": bool(state.get("streaming")) and not state.get("collection_complete"),
+        # Batches saved before node-by-node execution have no mode: record.
+        "mode": state.get("mode") or "record",
+        "stage": state.get("stage"),
     }
 
 

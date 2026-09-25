@@ -72,7 +72,8 @@ def start(graph, node, body, *, batch_id=None, session=None, session_started_at=
     chunks = chunk_source(graph, node, config, size, period, date_field, metric, label_key, runtime_inputs=runtime_inputs)
     bid = batch.start_batch(graph, [], source, gray_zone=zone, workers=workers,
                             metric=metric, record_chunks=chunks, batch_id=batch_id,
-                            session=session, session_started_at=session_started_at)
+                            session=session, session_started_at=session_started_at,
+                            mode=body.get('mode') or 'node')
     return {'batch_id': bid, 'total': None, 'streaming': True}
 
 

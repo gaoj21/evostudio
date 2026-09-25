@@ -143,7 +143,7 @@ def execute_collection(job, graph, node, control, workers, metric, label_key):
                   'mode': job['mode'], 'chunk': len(job['batches']) + 1, 'config': job['config']}
         with _lock:
             control.check()
-            id = batch.start_batch({**run_graph, '_defer_evaluators': True}, mapped, source, workers=workers, metric=metric, labels=labels)
+            id = batch.start_batch({**run_graph, '_defer_evaluators': True}, mapped, source, workers=workers, metric=metric, labels=labels, mode='node')
             job['batches'].append({'id': id, 'total': len(mapped)})
             job['submitted_records'] += len(records)
             save(job)

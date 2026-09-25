@@ -128,6 +128,8 @@ async def _lifespan(_app: FastAPI):
 
 app = FastAPI(title="EvoAgentX Studio", lifespan=_lifespan)
 app.include_router(memory_api.router)
+from backend.features.execution import usage_api  # noqa: E402
+app.include_router(usage_api.router)
 from . import mem0_api
 app.include_router(mem0_api.router)
 if evolve_api is not None:
@@ -797,9 +799,17 @@ async def run_batch(graph_id: str, request: Request):
                 raise HTTPException(422, str(exc)) from exc
     graph, _records, mapped, source, review_zone, workers, metric, labels = (
         await _batch_payload(graph_id, request))
+    # Node by node unless asked otherwise; see backend/features/execution/node_gate.py.
+    mode = "node"
+    if request.headers.get("content-type", "").startswith("application/json"):
+        mode = (await request.json() or {}).get("mode") or "node"
+    else:
+        mode = (await request.form()).get("mode") or "node"
+    if mode not in batch_store.EXECUTION_MODES:
+        raise HTTPException(422, f"mode must be one of {list(batch_store.EXECUTION_MODES)}")
     batch_id = batch_store.start_batch(graph, mapped, source,
                                        gray_zone=_gray_zone(review_zone),
-                                       workers=workers, metric=metric, labels=labels)
+                                       workers=workers, metric=metric, labels=labels, mode=mode)
     return {"batch_id": batch_id, "total": len(mapped)}
 
 

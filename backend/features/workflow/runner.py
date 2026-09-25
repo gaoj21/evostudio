@@ -96,7 +96,7 @@ def start_run(graph: dict, inputs: dict, background: bool = True, gray_zone=None
               session: str | None = None, record_index: int | None = None,
               plan_id: str | None = None, graph_revision: str | None = None,
               batch_id: str | None = None, session_started_at: str | None = None,
-              llm_batch_size: int | None = None) -> str:
+              llm_batch_size: int | None = None, gate=None) -> str:
     """Start a run for a canvas graph; returns the run_id.
 
     With background=True (default) the run executes in a daemon thread;
@@ -151,6 +151,8 @@ def start_run(graph: dict, inputs: dict, background: bool = True, gray_zone=None
         "_workspace_id": graph.get("_workspace_id") or graph.get("id"),
         "_graph": None,  # live WorkFlowGraph, set once execution starts
         "_gray_zone": gray_zone,
+        # The chunk this run keeps step with, when its batch runs node by node.
+        "_gate": gate,
     }
     with _lock:
         # A stop that arrived for this id before the run existed applies to
@@ -563,12 +565,35 @@ async def _walk(plan: dict, graph_doc: dict, inputs: dict, state: dict,
     status = {n["name"]: n for n in state["nodes"]}
     env.data.update(external)
     state["_source_records"] = {}
+    # A batch run node by node: the records of one chunk keep step, so none
+    # starts a node before the others have finished the one before it.
+    gate = state.get("_gate")
+    if gate is not None:
+        gate.join(state["run_id"])
+    try:
+        return await _walk_nodes(plan, by_name, values, external, consumed, status,
+                                 graph_doc, state, agents, env, gate)
+    finally:
+        if gate is not None:
+            gate.leave(state["run_id"])
 
-    for node in plan["nodes"]:
+
+async def _walk_nodes(plan, by_name, values, external, consumed, status,
+                      graph_doc, state, agents, env, gate) -> dict:
+    for position, node in enumerate(plan["nodes"]):
         name = node["name"]
         task = by_name[name]
         if state.get("_cancel_requested"):
             raise asyncio.CancelledError()
+        took_slot = False
+        if gate is not None:
+            took_slot = await asyncio.to_thread(
+                gate.wait_turn, state["run_id"], position,
+                lambda: bool(state.get("_cancel_requested")), node["kind"] == "llm")
+            if state.get("_cancel_requested"):
+                if took_slot:
+                    gate.release_slot()
+                raise asyncio.CancelledError()
         status[name]["status"] = "running"
         # Model calls report their usage to the node running now (the walk
         # is serial), as well as to the run, the moment each one returns.
@@ -623,8 +648,8 @@ async def _walk(plan: dict, graph_doc: dict, inputs: dict, state: dict,
                 if agent is None:
                     raise NodeError("plan_invalid", name, f"No agent was built for node '{name}'.")
                 try:
-                    out = await execute_llm_node(
-                        agent, task, {k: _as_prompt_value(v) for k, v in args.items()}, state)
+                    prompt_inputs = {k: _as_prompt_value(v) for k, v in args.items()}
+                    out = await execute_llm_node(agent, task, prompt_inputs, state)
                 except NodeError:
                     raise
                 except Exception as e:
@@ -649,6 +674,8 @@ async def _walk(plan: dict, graph_doc: dict, inputs: dict, state: dict,
             state["_effective_inputs"] = dict(env.data)
             status[name]["status"] = "completed"
             status[name]["output"] = {k: _clip(v) for k, v in out.items()} or None
+            if gate is not None:
+                gate.done(state["run_id"], position)
             if (status[name].get("token_usage") or {}).get("reported_calls"):
                 # A checkpoint of what has been spent, should the process die
                 # before the run settles; the live endpoints read memory.
@@ -659,6 +686,8 @@ async def _walk(plan: dict, graph_doc: dict, inputs: dict, state: dict,
             raise
         finally:
             state.pop("_usage_node", None)
+            if took_slot:
+                gate.release_slot()
 
     result = {}
     for node in plan["nodes"]:

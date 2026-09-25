@@ -28,8 +28,10 @@ import { useLayoutMode } from './useLayoutMode.js';
 import { BATCH_SETTLED, useExecutionSession } from './features/execution/useExecutionSession.js';
 import { RUN_SETTLED, describeBatch, describeRun, isSettled, toneClass } from './features/execution/runStates.js';
 import RunOutcome from './features/execution/RunOutcome.jsx';
+import UsageTab from './features/execution/UsageTab.jsx';
 import EvaluationTab from './features/evaluation/EvaluationTab.jsx';
 import { resumeLabel } from './features/execution/batchControl.js';
+import { batchNodeStates, stageText } from './features/execution/batchStage.js';
 import JsonView from './components/JsonView.jsx';
 import { useStudioNavigation } from './useStudioNavigation.js';
 import TaskNode from './features/canvas/TaskNode.jsx';
@@ -1120,24 +1122,17 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
     () => {
       // Whether a node takes part is its own flag now, not inferred from
       // whether it happens to have an edge.
-      const progress = batch?.node_progress || null;
+      // Node by node the stage names the running node; record by record the
+      // per-node aggregate still does. Both live in batchStage.js.
+      const batchStates = batchNodeStates(batch, nodes, edges);
       const watchingNodes = new Set((watchInfo?.watchers || []).map((w) => w.node));
       return nodes.map((n) => {
         let runStatus = null;
         let batchBadge = null;
         if (runMode) {
-          if (progress) {
-            const p = progress[n.id];
-            if (p) {
-              const total = p.completed + p.running + p.failed + p.pending;
-              runStatus = p.running > 0 ? 'running'
-                : p.failed > 0 ? 'failed'
-                : total > 0 && p.completed === total ? 'completed'
-                : 'pending';
-              batchBadge = `${p.completed}/${total}${p.failed ? ` ·${p.failed}✗` : ''}${p.token_usage?.reported_calls ? ` · ${compactTokens(p.token_usage)}` : ''}`;
-            } else {
-              runStatus = 'pending';
-            }
+          if (batchStates) {
+            runStatus = batchStates[n.id]?.runStatus || 'pending';
+            batchBadge = batchStates[n.id]?.batchBadge || null;
           } else {
             runStatus = runByName[n.id]?.status || 'pending';
             if (runByName[n.id]?.token_usage?.reported_calls) batchBadge = compactTokens(runByName[n.id].token_usage);
@@ -1157,8 +1152,11 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
         };
       });
     },
-    [nodes, deleteNode, runMode, runByName, batch, watchInfo]
+    [nodes, edges, deleteNode, runMode, runByName, batch, watchInfo]
   );
+  // Where a node-major batch is, said in node terms, for the badge and the
+  // drawer: "node 3/8 · detect · 120/275". Null for a record-major batch.
+  const batchStageText = stageText(batch);
   const removeCanvasResource = useCallback(async id => {
     const origin = graph?.id;
     try {
@@ -1458,6 +1456,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
                 ? `batch ${batchProgress.done}/${batchProgress.total}`
                 : `batch ${batch.status}`}
               {` · ${describeBatch(batch.status, batch.counts || batchProgress).label}`}
+              {batchStageText && ` · ${batchStageText}`}
               {batchProgress.failed > 0 && ` · ${batchProgress.failed}✗`}
               {batch.summary?.mean != null && ` · score ${batch.summary.mean}`}
               {tokenSuffix(batch.token_usage, !isSettled(BATCH_SETTLED, batch.status))}
@@ -1823,6 +1822,9 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
               <button type="button" className={drawerTab === 'memory' ? 'primary' : ''} onClick={() => setDrawerTab('memory')}>
                 Memory
               </button>
+              <button type="button" className={drawerTab === 'usage' ? 'primary' : ''} onClick={() => setDrawerTab('usage')}>
+                Usage
+              </button>
             </div>
             <span className="muted small run-artifacts">
               {batch ? (
@@ -1831,6 +1833,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
                     {describeBatch(batch.status, batch.counts || batchProgress).label}
                   </span>
                   {` · ${batchProgress.done}/${batchProgress.total ?? '?'} done`}
+                  {batchStageText && ` · ${batchStageText}`}
                   {batchProgress.failed > 0 && ` · ${batchProgress.failed} failed`}
                   {batch.metric && ` · metric ${batch.metric}`}
                   {` · logs → ${graph?.output_dir || 'runs'}/nodes/<node>.jsonl`}
@@ -1977,6 +1980,9 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
                 </div>
               ))}
             </div>
+          ) : drawerTab === 'usage' ? (
+            <UsageTab runId={batch ? null : run?.run_id} batchId={batch?.batch_id}
+                      live={batch ? batch.status : run?.status} />
           ) : (
             <MemoryPanel graphId={graph?.id} />
           )}
