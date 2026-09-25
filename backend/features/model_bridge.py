@@ -127,7 +127,87 @@ def release_usage_hook(key: str | None) -> None:
         _hooks.pop(key, None)
 
 
+# ---------------------------------------------------------------------------
+# Transient failures
+# ---------------------------------------------------------------------------
+
+# What says "try again later" rather than "this request is wrong", whoever the
+# provider is: an HTTP status, or the wording timeouts and overloads come in.
+# A gateway may report its own timeout as a 400 ("context deadline exceeded"),
+# which the package, rightly, does not retry as a bad request.
+TRANSIENT_STATUS = {408, 425, 429, 500, 502, 503, 504, 529}
+TRANSIENT_WORDS = ("deadline exceeded", "timed out", "timeout", "time out",
+                   "temporarily unavailable", "service unavailable", "rate limit",
+                   "too many requests", "overloaded", "connection reset",
+                   "connection error", "connection aborted", "remote end closed",
+                   "try again later", "server disconnected")
+# The bridge's own tries before a call is given up: pauses between them.
+TRANSIENT_RETRY_DELAYS = (3.0, 10.0)
+
+
+def _status_of(error) -> int | None:
+    for name in ("status_code", "status", "http_status"):
+        value = getattr(error, name, None)
+        if isinstance(value, int):
+            return value
+    response = getattr(error, "response", None)
+    value = getattr(response, "status_code", None)
+    return value if isinstance(value, int) else None
+
+
+def is_transient(error: BaseException | None) -> bool:
+    """Whether running the same call again is the fix: anywhere in the chain,
+    a transient HTTP status or transient wording. Never true for a stop."""
+    seen = 0
+    while error is not None and seen < 10:
+        if isinstance(error, (KeyboardInterrupt, asyncio.CancelledError)):
+            return False
+        if type(error).__name__ == "TransientLLMError" or _status_of(error) in TRANSIENT_STATUS:
+            return True
+        text = str(error).lower()
+        if any(word in text for word in TRANSIENT_WORDS):
+            return True
+        error = error.__cause__ or error.__context__
+        seen += 1
+    return False
+
+
+def _retrying(call):
+    """`call()` again after each pause while it fails transiently."""
+    import time
+    for delay in (*TRANSIENT_RETRY_DELAYS, None):
+        try:
+            return call()
+        except Exception as error:
+            if delay is None or not is_transient(error):
+                raise
+            time.sleep(delay)
+
+
+async def _aretrying(call):
+    for delay in (*TRANSIENT_RETRY_DELAYS, None):
+        try:
+            return await call()
+        except Exception as error:
+            if delay is None or not is_transient(error):
+                raise
+            await asyncio.sleep(delay)
+
+
 def _call(provider: str | None, messages: list, options: dict) -> LLMResult:
+    """One completion, tried again when it fails transiently."""
+    return _retrying(lambda: _call_once(provider, messages, options))
+
+
+async def _acall(provider: str | None, messages: list, options: dict) -> LLMResult:
+    return await _aretrying(lambda: _acall_once(provider, messages, options))
+
+
+def _batch(provider: str | None, items: list, options: dict) -> list:
+    return _retrying(lambda: _batch_once(provider, items, options))
+
+
+def _call_once(provider: str | None, messages: list, options: dict) -> LLMResult:
     """One completion. Sampling options are passed when the package accepts
     them; a package whose signature is just (provider, messages) is equally
     valid under the contract."""
@@ -141,7 +221,7 @@ def _call(provider: str | None, messages: list, options: dict) -> LLMResult:
         return chat_result(provider, messages)
 
 
-async def _acall(provider: str | None, messages: list, options: dict) -> LLMResult:
+async def _acall_once(provider: str | None, messages: list, options: dict) -> LLMResult:
     """The same, awaited. The contract promises `abatch_result`, not an async
     single call, so a batch of one is the portable form."""
     if _achat_result is not None:
@@ -164,7 +244,7 @@ async def _acall(provider: str | None, messages: list, options: dict) -> LLMResu
     return results[0]
 
 
-def _batch(provider: str | None, items: list, options: dict) -> list:
+def _batch_once(provider: str | None, items: list, options: dict) -> list:
     if not options:
         return batch_result(provider, items)
     try:

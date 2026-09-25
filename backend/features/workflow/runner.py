@@ -402,20 +402,23 @@ class NodeError(Exception):
 
 
 def _unreachable(exc: BaseException) -> str | None:
-    """The message of a TransientLLMError anywhere in the chain, else None.
+    """The message of the transient failure in the chain, else None.
 
     The framework wraps model errors in RuntimeError as they pass through
-    agents and actions; the thing that matters — that the model was
-    unreachable for the whole waiting window — is found by walking the
-    chain, not by matching text.
+    agents and actions; whether the model was only unavailable — a timeout,
+    an overload, a rate limit — is decided on the whole chain by the bridge,
+    which already tried the call again before giving up.
     """
+    from backend.features.model_bridge import is_transient
+    if not is_transient(exc):
+        return None
     seen = 0
     while exc is not None and seen < 10:
-        if type(exc).__name__ == "TransientLLMError":
+        cause = exc.__cause__ or exc.__context__
+        if cause is None:
             return str(exc)
-        exc = exc.__cause__ or exc.__context__
-        seen += 1
-    return None
+        exc, seen = cause, seen + 1
+    return str(exc)
 
 
 def _summarise_inputs(inputs: dict, width: int = 80) -> dict:
