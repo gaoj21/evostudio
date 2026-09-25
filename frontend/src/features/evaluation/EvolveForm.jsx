@@ -10,6 +10,7 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
   const evaluator = evaluation?.name || '';
   const [rounds, setRounds] = useState(1);
   const [heldOut, setHeldOut] = useState(30);          // % of entities kept for validation
+  const [workers, setWorkers] = useState(4);           // records of a chunk replayed at once
   const [mode, setMode] = useState(initialMode);
   const evaluationOnly = mode === 'evaluate';
   const [source, setSource] = useState(initialSource);
@@ -71,7 +72,7 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
     setStarting(true);
     try {
       const res = source === 'canvas'
-        ? await api.startEvolveResults(graphId,{source:'canvas',mode,evaluator,nodes:evaluationOnly?[]:picked,rounds:Number(rounds),share_labels:shareLabels,...(evaluationOnly?{}:{val_fraction:Number(heldOut)/100})})
+        ? await api.startEvolveResults(graphId,{source:'canvas',mode,evaluator,nodes:evaluationOnly?[]:picked,rounds:Number(rounds),share_labels:shareLabels,workers:Number(workers),...(evaluationOnly?{}:{val_fraction:Number(heldOut)/100})})
         : await api.startEvolveResults(graphId, {source, mode, evaluator, nodes: evaluationOnly ? [] : picked, share_labels: shareLabels, [source === 'saved_batch' ? 'batch_id' : 'run_id']: savedId});
       onStarted(res.task_id);
     } catch (err) {
@@ -99,6 +100,8 @@ export function NewTaskForm({ graphId, onStarted, onError, initialSource = 'save
           : !evaluation.metric ? <p className="muted small" data-testid="no-objective">Choose the metric Evolve optimizes in Evaluation code (preview the code once, then pick it from the report).</p>
           : null}
         {source === 'canvas' && !evaluationOnly && <div className="field"><label htmlFor="canvas-rounds">Candidate rounds</label><input id="canvas-rounds" type="number" min="1" max="10" value={rounds} onChange={e=>setRounds(e.target.value)} /></div>}
+        {source === 'canvas' && <div className="field"><label htmlFor="canvas-workers">Records at once</label><input id="canvas-workers" type="number" min="1" max="64" value={workers} onChange={e=>setWorkers(e.target.value)} />
+          <small className="muted">Each replay runs like a batch: node by node, in the Input&apos;s own batches, this many records of a batch at a time.</small></div>}
         {source === 'canvas' && !evaluationOnly && <div className="field"><label htmlFor="canvas-held-out">Held out for validation (%)</label><input id="canvas-held-out" type="number" min="10" max="50" value={heldOut} onChange={e=>setHeldOut(e.target.value)} />
           <small className="muted">Whole entities (each Input trajectory with all its records), fixed split. Prompts are proposed and chosen on the rest; the held-out part is scored once at the end and decides nothing.</small></div>}
         <h4>1 · {evaluationOnly ? 'Data to evaluate' : 'Data to learn from'}</h4>

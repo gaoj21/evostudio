@@ -208,12 +208,13 @@ def test_canvas_evolution_validates_candidates_and_keeps_best(monkeypatch):
     from backend.features.evaluation import saved_result_evolution as saved
     graph = graph_with_evaluator()
     graph['tasks'][0].update(kind='task',prompt='old')
-    observed = []
+    observed, answered = [], {}
     def start(candidate,row,**kwargs):
         observed.append(copy.deepcopy(candidate))
-        return 'good' if candidate['tasks'][0]['prompt']=='new' else 'bad'
+        answered[kwargs['run_id']] = 'yes' if candidate['tasks'][0]['prompt']=='new' else 'no'
+        return kwargs['run_id']
     monkeypatch.setattr(runner,'start_run',start)
-    monkeypatch.setattr(runner,'get_run',lambda id: {'status':'success','node_outputs':{'work':{'answer': 'yes' if id=='good' else 'no'}},'nodes':[]})
+    monkeypatch.setattr(runner,'get_run',lambda id: {'status':'success','node_outputs':{'work':{'answer': answered.get(id)}},'nodes':[]} if id in answered else None)
     monkeypatch.setattr(runner,'_make_llm',lambda **kw: object())
     def propose(candidate,records,chosen,llm,feedback=None,**kwargs):
         assert feedback['metrics']['score']==0

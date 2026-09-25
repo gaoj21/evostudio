@@ -46,15 +46,19 @@ class TestStoppingACanvasEvaluation:
 
         def start_run(graph, record, background, run_id, **kw):
             calls.append(record["q"])
-            # The user presses Stop while the first record is running.
-            [task_id] = evolve_api._tasks
-            res = client.post(f"/api/evolve/{task_id}/stop")
-            holder["stop"] = (res.status_code, res.json())
+            # The user presses Stop while the replay is running.
+            if "stop" not in holder:
+                [task_id] = evolve_api._tasks
+                res = client.post(f"/api/evolve/{task_id}/stop")
+                holder["stop"] = (res.status_code, res.json())
             return run_id
 
         monkeypatch.setattr(runner, "start_run", start_run)
         monkeypatch.setattr(runner, "get_run", lambda run_id: {"status": "cancelled"})
-        monkeypatch.setattr(runner, "cancel_run", lambda run_id, **kw: cancelled.append(run_id))
+        monkeypatch.setattr(runner, "cancel_run", lambda run_id, **kw: None)
+        from backend.api import batch
+        real_cancel = batch.cancel_batch
+        monkeypatch.setattr(batch, "cancel_batch", lambda bid: cancelled.append(bid) or real_cancel(bid))
         from backend.features.evaluation import canvas_evolution
         scored = []                     # a stopped task is never scored
         monkeypatch.setattr(canvas_evolution, "score_saved", lambda *a: scored.append(a))
@@ -64,8 +68,9 @@ class TestStoppingACanvasEvaluation:
         task = settle(holder["id"])
         assert holder["stop"] == (200, {"stopping": True})
         assert task["status"] == "stopped" and task["error"] is None
-        assert calls == ["question 0"]              # nothing after the stop
-        assert len(cancelled) == 1                  # the in-flight run was cancelled
+        # The replay is a batch: Stop cancels it, and no later candidate starts.
+        assert cancelled and len(set(cancelled)) == 1
+        assert len(calls) <= len(ROWS)
         assert scored == []
         assert task["baseline"] is None and not task.get("optimized_graph")
         persisted = json.loads((evolve_api._task_dir(holder["id"]) / "result.json").read_text())

@@ -125,7 +125,7 @@ export function TaskDetail({ task, onApplied, onStopped }) {
   return (
     <div className="evolve-detail">
       <div className="muted small">
-        {evaluationOnly || ['saved_batch', 'saved_run', 'canvas'].includes((task.source || p.source)?.type) ? `${task.task_id} · ${evaluationOnly ? 'Evaluation only' : (task.source || p.source)?.type === 'canvas' ? 'Canvas candidate replay' : 'Prompt proposals'} · ${p.n_dev} records · metric ${task.metric}` : <>{task.task_id} · {p.preset || 'custom'} · {p.num_candidates} candidates × {p.max_steps} rounds ·
+        {evaluationOnly || ['saved_batch', 'saved_run', 'canvas'].includes((task.source || p.source)?.type) ? `${task.task_id} · ${evaluationOnly ? 'Evaluation only' : (task.source || p.source)?.type === 'canvas' ? 'Canvas candidate replay' : 'Prompt proposals'} · ${p.n_dev ?? '…'} records · metric ${task.metric}` : <>{task.task_id} · {p.preset || 'custom'} · {p.num_candidates} candidates × {p.max_steps} rounds ·
         {' '}{p.n_train} teach / {p.n_dev} judge · metric {task.metric}</>}
         {task.elapsed_seconds != null && ` · ${elapsed(task)}`}
       </div>

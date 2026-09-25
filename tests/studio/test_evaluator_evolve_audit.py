@@ -218,9 +218,8 @@ def test_a_real_candidate_replay_runs_the_workflow_and_scores_it_once(monkeypatc
     assert calls == ['echo', 'echo']
     assert state['baseline']['metrics']['score'] == 0.5
     assert state['baseline']['metrics']['scored'] == 2
-    # The evaluator did not also run inside each of the two runs.
-    replayed = [runner.get_run(i) for i in started]
-    assert len(replayed) == 2 and all(r['status'] == 'success' and not r.get('evaluations') for r in replayed)
+    # The replay's runs and batch belong to no workflow: gone once scored.
+    assert len(started) == 2 and all(runner.get_run(i) is None for i in started)
 
 
 class TestCandidateIsolation:
@@ -278,7 +277,9 @@ class TestCandidateIsolation:
         memory_store, table_store, stm_store, workspace = self.stores(tmp_path, monkeypatch)
         monkeypatch.setattr(evolve_api, 'EVOLVE_DIR', tmp_path / 'evolve')
         monkeypatch.setattr(evolve_api, '_tasks', {})
-        monkeypatch.setattr(runner, 'start_run', lambda *a, **kw: (_ for _ in ()).throw(RuntimeError('boom')))
+        from backend.api import batch
+        # The replay itself fails (a failing record is only a failed record).
+        monkeypatch.setattr(batch, 'start_batch', lambda *a, **kw: (_ for _ in ()).throw(RuntimeError('boom')))
         g = graph(evaluator())
         state = {'task_id': 'failing', 'execution_graph': copy.deepcopy(g)}
         (memory_store.MEMORY_DIR / '_evolve-failing-baseline').mkdir(parents=True)

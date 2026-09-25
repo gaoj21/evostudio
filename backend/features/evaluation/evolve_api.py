@@ -422,7 +422,19 @@ def _run_task(task_id: str, graph_doc: dict, metric: str, params: dict, task_dir
     try:
         if (params.get('source') or {}).get('type') == 'canvas':
             from backend.features.evaluation import canvas_evolution
-            records = [json.loads(line) for line in (task_dir / 'dataset.jsonl').read_text().splitlines() if line.strip()]
+            if params.get('load_input'):
+                _stage(state, 'reading the Input')
+                records = canvas_evolution.load_rows(graph_doc)
+                check_stop(state)
+                with open(task_dir / 'dataset.jsonl', 'w', encoding='utf-8') as f:
+                    for record in records:
+                        f.write(json.dumps(record, ensure_ascii=False) + '\n')
+                params['n_dev'] = len(records)
+                state['params'] = {**state['params'], 'n_dev': len(records)}
+                state['dataset'] = {**(state.get('dataset') or {}), 'n_records': len(records)}
+                _persist(state)
+            else:
+                records = [json.loads(line) for line in (task_dir / 'dataset.jsonl').read_text().splitlines() if line.strip()]
             state['execution_graph'] = graph_doc
             canvas_evolution.execute(state, graph_doc, records, params, lambda text: _stage(state, text))
             _finish(state)
@@ -575,6 +587,7 @@ def _run_task(task_id: str, graph_doc: dict, metric: str, params: dict, task_dir
         state["error"] = traceback.format_exc()
     finally:
         state.pop("current_run", None)
+        state.pop("current_batch", None)
         state["stage"] = None
         state["finished_at"] = _utcnow()
         try:
@@ -632,12 +645,17 @@ def _live(state: dict) -> dict:
     clears `current_run`, so a snapshot holds one or the other.
     """
     snapshot = {k: v for k, v in state.items() if not k.startswith("_")}
-    if not snapshot.get("current_run"):
+    if not snapshot.get("current_run") and not snapshot.get("current_batch"):
         return snapshot
-    from backend.api import runner
     from backend.features.execution.token_usage import combined
-    run = runner.get_run(snapshot["current_run"]) or {}
-    usage = combined(snapshot.get("token_usage"), run.get("token_usage"))
+    if snapshot.get("current_batch"):
+        # A candidate replay: the batch it runs as, usage settled so far.
+        from backend.api import batch
+        running = batch.get_batch(snapshot["current_batch"]) or {}
+    else:
+        from backend.api import runner
+        running = runner.get_run(snapshot["current_run"]) or {}
+    usage = combined(snapshot.get("token_usage"), running.get("token_usage"))
     return {**snapshot, "token_usage": usage} if usage != snapshot.get("token_usage") else snapshot
 
 
@@ -799,9 +817,10 @@ async def start_evolve_task(graph_id: str, request: Request):
             body = await request.json() or {}
             if body.get('source') == 'canvas':
                 from backend.features.evaluation import canvas_evolution
-                from starlette.concurrency import run_in_threadpool
-                records, params = await run_in_threadpool(canvas_evolution.prepare, graph, body)
-                return {'task_id': start_evolve(graph, records, 'canvas:' + params['evaluator'], params)}
+                # Checked here; the Input is read by the task, where it shows
+                # as a stage and Stop reaches it, not while the request waits.
+                params = canvas_evolution.settings(graph, body)
+                return {'task_id': start_evolve(graph, [], 'canvas:' + params['evaluator'], {**params, 'load_input': True})}
             if body.get("source") in ("saved_batch", "saved_run"):
                 from backend.api import saved_result_evolution as saved
                 records, source = saved.resolve(graph_id, body)
@@ -865,6 +884,13 @@ def stop_evolve_task(task_id: str):
     if state.get("status") != "running":
         raise HTTPException(status_code=409, detail="This task is not running.")
     state["stop_requested"] = True
+    batch_id = state.get("current_batch")
+    if batch_id:
+        from backend.api import batch
+        try:
+            batch.cancel_batch(batch_id)   # its records stop now, not at the next poll
+        except Exception:
+            pass
     run_id = state.get("current_run")
     if run_id:
         from backend.api import runner

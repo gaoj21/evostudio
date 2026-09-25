@@ -7,7 +7,6 @@ separate no-replay operation.
 import copy
 import hashlib
 import shutil
-import uuid
 from backend.api.sources import SourceError
 from . import evaluator_tools
 
@@ -15,6 +14,8 @@ from . import evaluator_tools
 # dev, and val is scored once, at the end, for the baseline and the chosen
 # candidate. It never decides anything, so its score is an honest estimate.
 VAL_FRACTION = 0.3
+# Records of one chunk a candidate replay runs at once.
+REPLAY_WORKERS = 4
 
 # A candidate replay runs under its own workflow id so that memory, tables,
 # the session log and the run artifacts it writes are its own and empty. No
@@ -26,6 +27,24 @@ CANDIDATE_PREFIX = '_evolve-'
 
 def candidate_id(task_id, generation):
     return f'{CANDIDATE_PREFIX}{task_id}-{generation}'
+
+
+def discard_candidate_batches(batch_ids):
+    """Remove the batches candidate replays ran, and their runs: their
+    records are already in the task, and they belong to no real workflow."""
+    from backend.api import batch, runner
+    for batch_id in batch_ids or []:
+        saved = batch.get_batch(batch_id) or {}
+        for item in saved.get('items') or []:
+            run_id = item.get('run_id')
+            if run_id:
+                with runner._lock:
+                    runner._runs.pop(run_id, None)
+                (runner.RUNS_DIR / f'{run_id}.json').unlink(missing_ok=True)
+        with batch._lock:
+            batch._batches.pop(batch_id, None)
+            batch._threads.pop(batch_id, None)
+        (batch.BATCHES_DIR / f'{batch_id}.json').unlink(missing_ok=True)
 
 
 def split_units(graph, rows):
@@ -145,8 +164,27 @@ def _shared_memory(graph):
 
 
 def prepare(graph, body):
+    """The settings, checked, and the Input's records. Reading the Input can
+    take long: the route uses `settings` and the task reads it (`load_rows`)."""
+    params = settings(graph, body)
+    rows = load_rows(graph)
+    return rows, {**params, 'n_dev': len(rows)}
+
+
+def load_rows(graph):
+    """Every record the canvas Input produces, preprocessed once for the
+    whole experiment."""
     from backend.features.data import input_composition as composition
-    from backend.api import sources
+    from backend.api import preprocess
+    rows = composition.load_primary(graph, composition.primary(graph))
+    if not rows:
+        raise SourceError('DataLoader produced no records.')
+    return preprocess.apply(graph, rows)
+
+
+def settings(graph, body):
+    """What the experiment is, checked — without reading any data."""
+    from backend.features.data import input_composition as composition
     select(graph, body.get('evaluator'))
     mode = body.get('mode', 'evaluate')
     if mode not in ('evaluate', 'evolve_evaluate'):
@@ -165,11 +203,6 @@ def prepare(graph, body):
     if not isinstance(rounds, int) or isinstance(rounds, bool) or not 1 <= rounds <= 10:
         raise SourceError('Choose 1–10 candidate rounds.')
     main = composition.primary(graph)
-    rows = composition.load_primary(graph, main)
-    if not rows:
-        raise SourceError('DataLoader produced no records.')
-    from backend.api import preprocess
-    rows = preprocess.apply(graph, rows)
     share_labels = body.get('share_labels', False)
     if not isinstance(share_labels, bool):
         raise SourceError('share_labels must be true or false.')
@@ -179,10 +212,14 @@ def prepare(graph, body):
     seed = body.get('split_seed', 0)
     if isinstance(seed, bool) or not isinstance(seed, int):
         raise SourceError('The split seed must be a whole number.')
-    return rows, {'mode': mode, 'nodes': chosen, 'evaluator': evaluator_tools.evaluator_name(body['evaluator']), 'rounds': rounds, 'share_labels': share_labels,
-                  'val_fraction': float(fraction), 'split_seed': seed,
+    from backend.api import batch
+    workers = body.get('workers', REPLAY_WORKERS)
+    if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= batch.MAX_WORKERS:
+        raise SourceError(f'Run 1–{batch.MAX_WORKERS} records at once.')
+    return {'mode': mode, 'nodes': chosen, 'evaluator': evaluator_tools.evaluator_name(body['evaluator']), 'rounds': rounds, 'share_labels': share_labels,
+                  'val_fraction': float(fraction), 'split_seed': seed, 'workers': workers,
                   'source': {'type': 'canvas', 'node': main['name'], 'config': copy.deepcopy(main['source'])},
-                  'n_dev': len(rows), 'n_train': 0, 'memory_start': 'empty isolated stores'}
+                  'n_dev': None, 'n_train': 0, 'memory_start': 'empty isolated stores'}
 
 
 def execute(state, graph, rows, params, stage):
@@ -193,6 +230,7 @@ def execute(state, graph, rows, params, stage):
         _execute(state, graph, rows, params, stage)
     finally:
         discard_candidate_stores(state['task_id'])
+        discard_candidate_batches(state.pop('_candidate_batches', []))
 
 
 def _workspace_for(state, graph):
@@ -224,45 +262,56 @@ def _execute(state, graph, rows, params, stage):
     name = evaluator_tools.evaluator_name(params['evaluator'])
     workspace_id = _workspace_for(state, graph)
     def run(candidate, generation):
+        """Replay every record with `candidate`, the way a batch runs: node
+        by node, in the Input's own chunks, so what one chunk writes to
+        memory is there for the next, and the records of a chunk in parallel.
+        Returns one record per row, in row order."""
+        from backend.api import batch
         candidate = copy.deepcopy(candidate)
         # Its own id: empty memory, tables and session log per candidate. The
         # files it works on are the workflow's, copied once for this task.
         candidate['id'] = candidate_id(state['task_id'], generation)
         candidate['_workspace_id'] = workspace_id
         candidate['preprocess'] = None  # already prepared, once for the experiment
-        # Scored once, below, over every record; evaluators inside each run
-        # would only repeat that work (and their time limits) per record.
+        # Scored once, below, over every record.
         candidate['evaluators'] = []
+        stage(f'{generation}: starting')
+        batch_id = batch.start_batch(candidate, copy.deepcopy(rows), copy.deepcopy(params.get('source') or {}),
+                                     workers=params.get('workers', REPLAY_WORKERS), mode='node')
+        # Known to Stop, the live usage and the cleanup from here on.
+        state['current_batch'] = batch_id
+        state.setdefault('_candidate_batches', []).append(batch_id)
+        shown = None
+        try:
+            while not batch.wait_for(batch_id, timeout=1):
+                if state.get('stop_requested'):
+                    batch.cancel_batch(batch_id)
+                    stage('stopping')          # raises: a stopped replay is not a result
+                at = (batch.get_batch(batch_id) or {}).get('stage') or {}
+                text = (f"{generation}: node {at.get('index')}/{at.get('of')} · {at.get('node')} · "
+                        f"{at.get('done', 0)}/{at.get('total', '?')}") if at.get('node') else f'{generation}: running'
+                if text != shown:
+                    stage(text); shown = text
+        except BaseException:
+            batch.cancel_batch(batch_id)
+            raise
+        done = batch.get_batch(batch_id) or {}
+        # One step: the live view reads either the running batch or its
+        # settled usage, never both.
+        state.update(current_batch=None, token_usage=combined(state.get('token_usage'), done.get('token_usage')))
+        if state.get('stop_requested'):
+            stage('stopping')
+        by_index = {item.get('index'): item for item in done.get('items') or []}
         records = []
-        blocked = set()
-        # The same ordering a batch uses: an Input's trajectories and the
-        # records memory ties together run in order, and a failure blocks
-        # the rest of its sequence.
-        from backend.features.execution.batch import _group_key, assign_sequences
-        items = [{} for _ in rows]
-        assign_sequences(candidate, list(zip(items, rows)))
         for i, row in enumerate(rows):
-            stage(f'{generation}: record {i+1}/{len(rows)}')
-            group = _group_key(row, items[i])
-            if group is not None and group in blocked:
-                id, output = None, {'status':'blocked', 'error':'An earlier record in this sequence failed.'}
-            else:
-                # Known before it starts, so Stop can cancel it mid-run.
-                state['current_run'] = uuid.uuid4().hex[:12]
-                if state.get('stop_requested'):
-                    stage('stopping')      # pressed before the run existed to cancel
-                id = runner.start_run(candidate, copy.deepcopy(row), background=False, run_id=state['current_run'])
-                output = runner.get_run(id) or {}
-                # One step: the live view reads either the in-flight Run or
-                # its settled usage, never both.
-                state.update(current_run=None, token_usage=combined(state.get('token_usage'), output.get('token_usage')))
-                if state.get('stop_requested'):
-                    stage('stopping')      # raises: the cancelled run is not a result
-            if group is not None and output.get('status') != 'success':
-                blocked.add(group)
-            records.append({**copy.deepcopy(output), 'id': str(i), 'run_id': id, 'inputs': row, 'status': output.get('status', 'failed'),
-                            'error': output.get('error'), 'prediction': output.get('result'),
-                            'nodes': output.get('nodes', []), 'node_outputs': output.get('node_outputs', {})})
+            item = by_index.get(i) or {}
+            id = item.get('run_id')
+            output = (runner.get_run(id) if id else None) or {'status': item.get('status', 'failed'),
+                                                              'error': item.get('error')}
+            records.append({**copy.deepcopy(output), 'id': str(i), 'run_id': id, 'inputs': row,
+                            'status': output.get('status', 'failed'), 'error': output.get('error'),
+                            'prediction': output.get('result'), 'nodes': output.get('nodes', []),
+                            'node_outputs': output.get('node_outputs', {})})
         return records
     best_graph = copy.deepcopy(graph)
     everything = run(best_graph, 'baseline')

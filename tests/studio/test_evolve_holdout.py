@@ -101,3 +101,62 @@ def test_evaluation_only_scores_everything(entities, monkeypatch):
     assert state['baseline']['metrics']['score'] == 1
     assert len(state['baseline']['records']) == len(ROWS)
     assert 'split' not in state and 'validation' not in state
+
+
+def test_a_candidate_replays_as_a_node_by_node_batch_and_leaves_nothing_behind(entities, monkeypatch):
+    """Not one record after another: a batch, node by node in the Input's
+    own chunks, the records of a chunk at once — then removed."""
+    from backend.api import batch
+    replays(monkeypatch, lambda prompt, entity: 'yes')
+    real_start, started = batch.start_batch, []
+
+    def spy(graph, records, source, **kw):
+        batch_id = real_start(graph, records, source, **kw)
+        started.append((batch_id, len(records), source, kw))
+        return batch_id
+    monkeypatch.setattr(batch, 'start_batch', spy)
+    state, _ = evolve(monkeypatch, source={'type': 'canvas', 'config': {'type': 'dataloader', 'read_batch_size': 5}},
+                      workers=3)
+
+    assert len(started) == 2                                    # baseline + one candidate
+    for batch_id, count, source, kw in started:
+        assert count == len(ROWS) and kw['mode'] == 'node' and kw['workers'] == 3
+        assert source['config']['read_batch_size'] == 5          # chunks are the Input's batches
+        assert batch.get_batch(batch_id) is None                 # removed with its runs
+    assert 'current_batch' not in state or state['current_batch'] is None
+
+
+def test_starting_an_evolve_does_not_wait_for_the_input(monkeypatch, tmp_path):
+    """The request answers at once; the task reads the Input as its first stage."""
+    import threading
+    from fastapi.testclient import TestClient
+    from backend.api import app, graphs
+    from backend.features.evaluation import evolve_api
+    g = graph(evaluator())
+    monkeypatch.setattr(graphs, 'load_graph', lambda _: copy.deepcopy(g))
+    monkeypatch.setattr(graphs, 'validate_graph', lambda _: (g['tasks'], []))
+    monkeypatch.setattr(evolve_api, 'EVOLVE_DIR', tmp_path / 'evolve')
+    monkeypatch.setattr(evolve_api, '_tasks', {})
+    reading, release = threading.Event(), threading.Event()
+
+    def load_rows(graph):
+        reading.set()
+        assert release.wait(10)
+        return [{'text': 'q', 'expected': 'yes'}]
+    monkeypatch.setattr(canvas_evolution, 'load_rows', load_rows)
+    from backend.features.data import input_composition
+    monkeypatch.setattr(input_composition, 'primary', lambda graph: {'name': 'input', 'source': {'type': 'dataloader'}})
+    monkeypatch.setattr(canvas_evolution, 'execute', lambda state, graph, rows, params, stage: state.update(seen=len(rows)))
+
+    response = TestClient(app.app).post('/api/graphs/audit/evolve', json={'source': 'canvas', 'evaluator': 'quality', 'mode': 'evaluate'})
+    assert response.status_code == 200, response.text
+    task_id = response.json()['task_id']
+    assert reading.wait(5)
+    assert evolve_api.get_task(task_id)['stage'] == 'reading the Input'
+    release.set()
+    for _ in range(200):
+        task = evolve_api.get_task(task_id)
+        if task['status'] != 'running':
+            break
+        import time; time.sleep(0.02)
+    assert task['status'] == 'done' and task['params']['n_dev'] == 1
