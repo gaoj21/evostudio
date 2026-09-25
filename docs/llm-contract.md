@@ -171,7 +171,12 @@ and a framework, and it is a Studio file, not part of this package:
   an agent rebuilt from its config alone, in another process, still calls this
   package.
 - `agent_model()` — a LangChain `BaseChatModel` with `usage_metadata` filled
-  from `LLMResult.usage`, for the Deep Agents harness.
+  from `LLMResult.usage`, for the Deep Agents harness. It supports
+  `bind_tools` without needing anything from the package: the contract has no
+  tool channel, so tool schemas go into a system instruction and the model's
+  `{"tool_calls": [...]}` reply is read back as LangChain tool calls
+  (`backend/features/text_tool_calls.py`). Tools are never passed to
+  `chat_result` as options.
 - `usage_hook(callback) -> key` / `release_usage_hook(key)` — where a run's
   token accounting comes from. A config carries the key, not the callable, so
   it survives a trip through a subprocess.

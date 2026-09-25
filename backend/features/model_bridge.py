@@ -20,6 +20,7 @@ every call reports its `LLMResult.usage` to the hook registered for it
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import threading
 import uuid
@@ -294,10 +295,24 @@ def _chat_model_class():
         def _llm_type(self) -> str:
             return "studio-llm"
 
-        def _payload(self, messages) -> list[dict]:
+        def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+            """Tools for an agent. The contract has no tool channel, so they
+            travel as text (text_tool_calls) — never as provider options."""
+            from langchain_core.utils.function_calling import convert_to_openai_tool
+            kwargs["tools"] = [convert_to_openai_tool(tool) for tool in tools]
+            if tool_choice is not None:
+                kwargs["tool_choice"] = tool_choice
+            return self.bind(**kwargs)
+
+        def _payload(self, messages, tools=None, tool_choice=None) -> list[dict]:
+            from backend.features import text_tool_calls
             roles = {"human": "user", "ai": "assistant", "system": "system", "tool": "tool"}
             out = []
             for message in messages:
+                spoken = text_tool_calls.as_text(message)
+                if spoken is not None:
+                    out.append({"role": spoken[0], "content": spoken[1]})
+                    continue
                 role = roles.get(getattr(message, "type", "human"), "user")
                 content = message.content
                 if not isinstance(content, str):
@@ -305,32 +320,47 @@ def _chat_model_class():
                         part.get("text", "") if isinstance(part, dict) else str(part)
                         for part in (content or []))
                 out.append({"role": role, "content": content})
+            if tools:
+                guide = text_tool_calls.instruction(tools, tool_choice)
+                if out and out[0]["role"] == "system":
+                    out[0] = {"role": "system", "content": f"{out[0]['content']}\n\n{guide}"}
+                else:
+                    out.insert(0, {"role": "system", "content": guide})
             return out
 
-        def _as_result(self, result: LLMResult) -> ChatResult:
-            usage = result.usage
+        def _as_result(self, result: LLMResult, tools=None) -> ChatResult:
+            from backend.features import text_tool_calls
+            from backend.features.execution.token_usage import reported_usage
+            # Read through the tolerant parser: a provider that reports no
+            # cache or reasoning count must not fail LangChain's validation.
+            usage = reported_usage(getattr(result, "usage", None))
+            metadata = None
+            if usage:
+                metadata = {key: usage[key] for key in ("input_tokens", "output_tokens", "total_tokens")}
+                if "cache_read_tokens" in usage:
+                    metadata["input_token_details"] = {"cache_read": usage["cache_read_tokens"]}
+                if "reasoning_tokens" in usage:
+                    metadata["output_token_details"] = {"reasoning": usage["reasoning_tokens"]}
+            content, calls = (text_tool_calls.parse(result.content, tools) if tools
+                              else (result.content, []))
             message = AIMessage(
-                content=result.content,
-                usage_metadata={
-                    "input_tokens": usage.input_tokens,
-                    "output_tokens": usage.output_tokens,
-                    "total_tokens": usage.total_tokens,
-                    "input_token_details": {"cache_read": usage.cache_read_tokens},
-                    "output_token_details": {"reasoning": usage.reasoning_tokens},
-                } if usage else None,
-                response_metadata={"model_name": result.model, "provider": result.provider},
+                content=content, tool_calls=calls, usage_metadata=metadata,
+                response_metadata={"model_name": getattr(result, "model", None),
+                                   "provider": getattr(result, "provider", None)},
             )
             return ChatResult(generations=[ChatGeneration(message=message)])
 
-        def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
-            result = _call(provider_name(self.provider), self._payload(messages),
+        def _generate(self, messages, stop=None, run_manager=None, tools=None,
+                      tool_choice=None, **kwargs) -> ChatResult:
+            result = _call(provider_name(self.provider), self._payload(messages, tools, tool_choice),
                            {"stop": stop} if stop else {})
-            return self._as_result(_report(self.usage_key, result))
+            return self._as_result(_report(self.usage_key, result), tools)
 
-        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
-            result = await _acall(provider_name(self.provider), self._payload(messages),
+        async def _agenerate(self, messages, stop=None, run_manager=None, tools=None,
+                             tool_choice=None, **kwargs) -> ChatResult:
+            result = await _acall(provider_name(self.provider), self._payload(messages, tools, tool_choice),
                                   {"stop": stop} if stop else {})
-            return self._as_result(_report(self.usage_key, result))
+            return self._as_result(_report(self.usage_key, result), tools)
 
         def _stream(self, messages, stop=None, run_manager=None, **kwargs) -> Iterator:
             # The package has no streaming contract; one chunk keeps callers
@@ -341,7 +371,10 @@ def _chat_model_class():
             result = self._generate(messages, stop=stop, **kwargs)
             message = result.generations[0].message
             yield ChatGenerationChunk(message=AIMessageChunk(
-                content=message.content, usage_metadata=message.usage_metadata))
+                content=message.content, usage_metadata=message.usage_metadata,
+                tool_call_chunks=[{"name": c["name"], "args": json.dumps(c["args"]), "id": c["id"],
+                                   "index": i, "type": "tool_call_chunk"}
+                                  for i, c in enumerate(message.tool_calls)]))
 
     return StudioChatModel
 
