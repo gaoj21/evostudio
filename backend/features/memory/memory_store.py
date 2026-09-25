@@ -47,6 +47,32 @@ def open_memory(graph_id: str, agent: str, create: bool = False):
     )
 
 
+def close_memory(memory) -> None:
+    """Close what an opened store holds: its SQLite connection, at least.
+
+    Nothing else does: the framework store has no close, and its objects sit
+    in reference cycles, so their files stayed open until a garbage
+    collection — a long batch ran out of file handles ("Too many open
+    files"). Safe on None, on a store already closed and on other backends.
+    """
+    if memory is None:
+        return
+    close = getattr(memory, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            pass
+        return
+    handler = getattr(memory, "storage_handler", None)
+    connection = getattr(getattr(handler, "storageDB", None), "connection", None)
+    if connection is not None:
+        try:
+            connection.close()
+        except Exception:
+            pass
+
+
 def list_entries(graph_id: str, agent: str) -> list[dict]:
     """All stored memory entries for a graph/agent store."""
     return _backend().list_entries(store_dir(graph_id, agent))

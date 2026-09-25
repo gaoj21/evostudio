@@ -168,7 +168,12 @@ def list_entries(store_dir) -> list[dict]:
     if not (path / "memory.db").is_file():
         return []
     handler = _make_storage_handler(path)
-    records = handler.load(tables=["memory"]).get("memory", [])
+    try:
+        records = handler.load(tables=["memory"]).get("memory", [])
+    finally:
+        connection = getattr(getattr(handler, "storageDB", None), "connection", None)
+        if connection is not None:
+            connection.close()
     entries = []
     for record in records:
         entries.extend(_record_to_entries(record))

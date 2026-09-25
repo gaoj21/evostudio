@@ -812,6 +812,10 @@ def _execute_run(run_id: str, graph_doc: dict, inputs: dict) -> None:
                 _save_ltm(graph_doc, memories, graph, env, state, succeeded=False)
     finally:
         token_usage.release_usage(state)
+        # Every store this run opened, closed now rather than whenever the
+        # garbage collector gets to them: a batch opens them per record.
+        for opened in (state.get("_harness_memories") or {}).values():
+            memory_store.close_memory(opened)
         persisted = _persist_run(state)
         if not persisted:
             state["persistence_error"] = "Run completed in memory but could not be saved. Restore disk access before recovery."
@@ -1216,8 +1220,12 @@ def _save_ltm(graph_doc: dict, memories: dict, graph, wf, state: dict,
                     fresh = memory
                 else:
                     fresh = memory_store.open_memory(graph_id, node.name, create=True)
-                _write_entry(fresh, graph_id, node.name, task, payload, as_message)
-                fresh.save()
+                try:
+                    _write_entry(fresh, graph_id, node.name, task, payload, as_message)
+                    fresh.save()
+                finally:
+                    if fresh is not memory:
+                        memory_store.close_memory(fresh)
         except Exception:
             state["memory_error"] = traceback.format_exc()
 

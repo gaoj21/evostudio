@@ -45,6 +45,32 @@ for _key, _value in (("OMP_NUM_THREADS", "1"), ("MKL_NUM_THREADS", "1"),
     os.environ.setdefault(_key, _value)
 
 
+# Open files: macOS starts a process at 256, and a batch run node by node
+# keeps a whole DataLoader batch of runs open at once — each with its event
+# loop and its memory stores. Raise the soft limit to what the system allows
+# (capped: macOS refuses "unlimited"); worker processes inherit it.
+OPEN_FILES_WANTED = 10240
+
+
+def raise_open_file_limit(wanted: int = OPEN_FILES_WANTED) -> int | None:
+    try:
+        import resource
+    except ImportError:            # not on this platform
+        return None
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    target = wanted if hard == resource.RLIM_INFINITY else min(wanted, hard)
+    if soft != resource.RLIM_INFINITY and soft < target:
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+        except (ValueError, OSError):
+            return soft
+        return target
+    return soft
+
+
+raise_open_file_limit()
+
+
 # What a user built and what their runs produced: workflows, runs, batches,
 # memory, datasets, workspaces. It is their data, not part of the backend, so
 # it sits beside the code rather than inside it. Deployments should point
