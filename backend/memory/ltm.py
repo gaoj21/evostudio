@@ -29,8 +29,28 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
+EMBEDDING_MODEL_ID = "BAAI/bge-small-en-v1.5"
 EMBEDDING_DIM = 384
+# Where a copy of the model is looked for, in order: EAX_EMBEDDING_MODEL (a
+# folder), then models/bge-small-en-v1.5 in the project. Machines without
+# Hugging Face access unzip the model there; nothing is fetched at run time.
+LOCAL_MODEL_DIRS = (_REPO_ROOT / "models" / "bge-small-en-v1.5",)
+
+
+def embedding_model() -> str:
+    """The embedding model to load: a local folder when one is present,
+    else the Hugging Face id (resolved from its cache or downloaded)."""
+    import os
+    configured = os.environ.get("EAX_EMBEDDING_MODEL")
+    candidates = ([Path(configured).expanduser()] if configured else []) + list(LOCAL_MODEL_DIRS)
+    for folder in candidates:
+        if (folder / "config.json").is_file() and any(
+                (folder / name).is_file() for name in ("model.safetensors", "pytorch_model.bin")):
+            return str(folder)
+    return EMBEDDING_MODEL_ID
+
+
+EMBEDDING_MODEL = embedding_model()
 DEFAULT_TOP_K = 5
 
 

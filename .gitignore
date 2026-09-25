@@ -154,6 +154,10 @@ projects/credit_risk/output/
 # (docs/llm-contract.md); the implementation is not.
 /llm/
 
+# Local model weights (e.g. models/bge-small-en-v1.5, 128 MB) are copied in
+# per machine, not committed; see backend/memory/ltm.py embedding_model().
+/models/
+
 # Anchored: an unanchored `data/` would also swallow studio-data/graphs.
 /data/
 

@@ -32,6 +32,7 @@ import UsageTab from './features/execution/UsageTab.jsx';
 import EvaluationTab from './features/evaluation/EvaluationTab.jsx';
 import { resumeLabel } from './features/execution/batchControl.js';
 import { batchNodeStates, stageText } from './features/execution/batchStage.js';
+import { flowEdges, ioSummary, nodeFocus } from './features/canvas/runFlow.js';
 import JsonView from './components/JsonView.jsx';
 import { useStudioNavigation } from './useStudioNavigation.js';
 import TaskNode from './features/canvas/TaskNode.jsx';
@@ -1126,18 +1127,20 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
       // per-node aggregate still does. Both live in batchStage.js.
       const batchStates = batchNodeStates(batch, nodes, edges);
       const watchingNodes = new Set((watchInfo?.watchers || []).map((w) => w.node));
-      return nodes.map((n) => {
-        let runStatus = null;
-        let batchBadge = null;
-        if (runMode) {
-          if (batchStates) {
-            runStatus = batchStates[n.id]?.runStatus || 'pending';
-            batchBadge = batchStates[n.id]?.batchBadge || null;
-          } else {
-            runStatus = runByName[n.id]?.status || 'pending';
-            if (runByName[n.id]?.token_usage?.reported_calls) batchBadge = compactTokens(runByName[n.id].token_usage);
-          }
+      const statuses = nodes.map((n) => {
+        if (!runMode) return { runStatus: null, batchBadge: null };
+        if (batchStates) {
+          return { runStatus: batchStates[n.id]?.runStatus || 'pending',
+                   batchBadge: batchStates[n.id]?.batchBadge || null };
         }
+        return { runStatus: runByName[n.id]?.status || 'pending',
+                 batchBadge: runByName[n.id]?.token_usage?.reported_calls
+                   ? compactTokens(runByName[n.id].token_usage) : null };
+      });
+      // While something runs, it is the focus and the rest steps back.
+      const anyRunning = statuses.some((s) => s.runStatus === 'running');
+      return nodes.map((n, i) => {
+        const { runStatus, batchBadge } = statuses[i];
         return {
           ...n,
           className: n.data.enabled === false ? 'parked' : '',
@@ -1147,6 +1150,8 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
             runMode,
             runStatus,
             batchBadge,
+            focus: nodeFocus(runStatus, anyRunning),
+            io: runStatus === 'running' ? ioSummary(n.data) : null,
             watching: watchingNodes.has(n.id),
           },
         };
@@ -1210,33 +1215,49 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
   }, [locatingMemories, memoryNodes, fitView]);
   const canvasNodes = useMemo(() => [...displayNodes, ...memoryNodes, ...canvasAgents.nodes.map(n => ({ ...resourceGeometry(n, resourceMeasurements[n.id]), data: { ...n.data, onDelete: removeCanvasResource, runMode }, measured: resourceMeasurements[n.id], selected: n.id === selectedId }))], [displayNodes, memoryNodes, canvasAgents.nodes, selectedId, resourceMeasurements, removeCanvasResource, runMode]);
   const fittedResourceGraph = useRef(null);
+  // The opening fit-to-graph has happened: following the running node before
+  // it would be undone by it.
+  const [fittedGraph, setFittedGraph] = useState(null);
   useEffect(() => {
     if (!graph?.id || !canvasAgents.loaded || fittedResourceGraph.current === graph.id) return undefined;
     const frame = requestAnimationFrame(() => {
       fitView({padding:0.2, maxZoom:1});
       fittedResourceGraph.current = graph.id;
+      setFittedGraph(graph.id);
     });
     return () => cancelAnimationFrame(frame);
   }, [graph?.id, canvasAgents.loaded, canvasNodes, fitView]);
 
+  // The camera follows the node that is working now, so it is always in
+  // view. Moving the canvas by hand stops the following until the next run —
+  // a camera that fights the person looking around is worse than none.
+  const followRun = useRef(true);
+  const runKey = (batch || run)?.batch_id || (batch || run)?.run_id || null;
+  useEffect(() => { followRun.current = true; }, [runKey]);
+  const runningNode = runMode ? displayNodes.find((n) => n.data.runStatus === 'running') : null;
+  const runningId = runningNode?.id || null;
+  useEffect(() => {
+    if (!runningNode || !followRun.current || fittedGraph !== graph?.id) return;
+    const width = runningNode.measured?.width || runningNode.width || 220;
+    const height = runningNode.measured?.height || runningNode.height || 120;
+    setCenter(runningNode.position.x + width / 2, runningNode.position.y + height / 2,
+      { zoom: 1.05, duration: 500 });
+    // Only when the running node changes (or the opening fit has settled);
+    // its badge ticking is not a move.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runningId, setCenter, fittedGraph]);
+
   // Runtime decoration only: never persist animation into workflow edges.
+  // Input flowing into the running node, its output waiting to leave, what
+  // has already been delivered — see features/canvas/runFlow.js.
   const executionEdges = useMemo(() => {
     const active = runMode && ['running', 'cancelling'].includes((batch || run)?.status);
     const byId = new Map(displayNodes.map(node => [node.id, node]));
-    return displayEdges.map(edge => {
-      const source = byId.get(edge.source);
-      const target = byId.get(edge.target);
-      const from = source?.data.runStatus;
-      const to = target?.data.runStatus;
-      // Memory bindings describe permissions, not live read/write events.
-      const flowing = active && source && target
-        && source.data.enabled !== false && target.data.enabled !== false
-        && ((to === 'running' && ['completed', 'success', 'running'].includes(from))
-          || (from === 'running' && to === 'pending'));
-      const control = edge.data?.control_only;
-      return { ...edge, animated: !!flowing && !control,
-        className: [edge.className, flowing ? (control ? 'edge-order-active' : 'edge-flow-active') : ''].filter(Boolean).join(' ') };
-    });
+    const statusOf = (id) => {
+      const node = byId.get(id);
+      return node && node.data.enabled !== false ? node.data.runStatus : null;
+    };
+    return flowEdges(displayEdges, statusOf, active);
   }, [displayEdges, displayNodes, runMode, batch, run]);
   const chatAgent = canvasAgents.agents.find(a => chatNodeId(a.id) === selectedId);
   const chatEdges = showMemory ? canvasAgents.edges.filter(e => memoryNodes.some(n => n.id === e.source || n.id === e.target)).map(e => ({ ...e, selected: selectedMemoryEdges.has(e.id), deletable: true })) : [];
@@ -1397,6 +1418,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
       <ReactFlow
         nodes={canvasNodes}
         edges={[...executionEdges, ...chatEdges]}
+        onMoveStart={(event) => { if (event) followRun.current = false; }}
         nodeTypes={nodeTypes}
         onNodesChange={changes => onNodesChange(runMode ? changes.filter(change => change.type === 'dimensions') : changes)}
         onEdgesChange={runMode ? undefined : changeCanvasEdges}

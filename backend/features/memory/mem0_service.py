@@ -33,10 +33,11 @@ def client():
             os.environ['MEM0_TELEMETRY'] = 'false'
             os.environ.setdefault('MEM0_DIR', str(ROOT))
             from mem0 import Memory
+            from backend.memory.ltm import embedding_model
             ROOT.mkdir(parents=True, exist_ok=True)
             _client = Memory.from_config({
                 'embedder': {'provider': 'huggingface', 'config': {
-                    'model': 'BAAI/bge-small-en-v1.5', 'embedding_dims': 384,
+                    'model': embedding_model(), 'embedding_dims': 384,
                     'model_kwargs': {'device': 'cpu', 'local_files_only': True}}},
                 'llm': {'provider': 'ollama', 'config': {'model': 'llama3.2'}},
                 'vector_store': {'provider': 'qdrant', 'config': {

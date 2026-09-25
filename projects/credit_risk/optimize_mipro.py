@@ -77,6 +77,7 @@ from evoagentx.memory.long_term_memory import LongTermMemory  # noqa: E402
 from evoagentx.models import LiteLLM, LiteLLMConfig  # noqa: E402
 from evoagentx.optimizers import MiproOptimizer  # noqa: E402
 from evoagentx.rag.rag_config import (  # noqa: E402
+
     ChunkerConfig,
     EmbeddingConfig,
     IndexConfig,
@@ -98,6 +99,16 @@ from evoagentx.utils.mipro_utils.register_utils import MiproRegistry  # noqa: E4
 # fewer arguments. Bridge the two call sites without forking the optimizer.
 import dspy.teleprompt.mipro_optimizer_v2 as _dspy_mipro  # noqa: E402
 from evoagentx.optimizers.mipro_optimizer import MiproOptimizer as _MiproOptimizer  # noqa: E402
+
+
+def _embedding_model():
+    """The project's local copy of bge-small when present (models/), else
+    the Hugging Face id — the same rule Studio's memory uses."""
+    try:
+        from backend.memory.ltm import embedding_model
+        return embedding_model()
+    except Exception:
+        return "BAAI/bge-small-en-v1.5"
 
 
 def _compat_set_hyperparams(self, program, num_trials, minibatch, zeroshot_opt, valset):
@@ -258,7 +269,7 @@ def prewarm_embedder():
     """Call from the main thread BEFORE optimization starts."""
     import credit_risk_demo
     credit_risk_demo._get_embedder()  # dedup embedder (via package-level patch)
-    _st_singleton("BAAI/bge-small-en-v1.5", device="cpu")
+    _st_singleton(_embedding_model(), device="cpu")
 
 
 _st_pkg.SentenceTransformer = _st_singleton       # late binders (dedup embedder)
@@ -355,7 +366,7 @@ def build_memory_at(store_dir: str) -> LongTermMemory:
     rag_config = RAGConfig(
         reader=ReaderConfig(recursive=False, exclude_hidden=True, errors="ignore", encoding="utf-8"),
         chunker=ChunkerConfig(strategy="simple", chunk_size=512, chunk_overlap=0, max_chunks=None),
-        embedding=EmbeddingConfig(provider="huggingface", model_name="BAAI/bge-small-en-v1.5", device="cpu"),
+        embedding=EmbeddingConfig(provider="huggingface", model_name=_embedding_model(), device="cpu"),
         index=IndexConfig(index_type="vector"),
         retrieval=RetrievalConfig(retrivel_type="vector", postprocessor_type="simple",
                                   top_k=10, similarity_cutoff=0.0),

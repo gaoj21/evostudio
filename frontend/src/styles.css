@@ -3420,6 +3420,78 @@ button.run-badge:hover:not(:disabled) {
   }
 }
 
+/* ---- A live run: the working node is the focus, data visibly moves ----
+   Input flows into the running node along its incoming edges, labelled with
+   the fields it carries; its output waits on the outgoing ones; finished
+   edges have delivered; everything else steps back. See canvas/runFlow.js. */
+.task-node.focus-dim {
+  opacity: 0.42;
+  filter: saturate(0.6);
+  transition: opacity 240ms var(--ease), filter 240ms var(--ease);
+}
+.task-node.focus-dim.run-completed { opacity: 0.62; }
+.task-node.focus-active {
+  z-index: 10;
+  transform: scale(1.06);
+  border-width: 2px;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft), 0 0 22px 2px var(--accent-soft), var(--shadow-md);
+  animation: node-focus-breathe 1.6s ease-in-out infinite;
+  transition: transform 240ms var(--ease), box-shadow 240ms var(--ease);
+}
+.task-node.focus-active::before { background: var(--accent); }
+.task-node.focus-active .status-running { color: var(--accent-text); font-weight: 600; }
+@keyframes node-focus-breathe {
+  0%, 100% { box-shadow: 0 0 0 4px var(--accent-soft), 0 0 14px 0 var(--accent-soft), var(--shadow-md); }
+  50% { box-shadow: 0 0 0 6px var(--accent-soft), 0 0 28px 4px var(--accent-soft), var(--shadow-md); }
+}
+.node-io {
+  display: grid;
+  gap: 2px;
+  margin-top: 6px;
+  padding: 5px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px dashed var(--accent-border);
+  font-size: 10.5px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.node-io-in { color: var(--text-2); }
+.node-io-in::before { content: '▸ '; color: var(--accent); }
+.node-io-out { color: var(--accent-text); }
+.node-io-out::before { content: '◂ '; color: var(--accent); }
+
+.react-flow__edge.edge-run-in .react-flow__edge-path {
+  stroke: var(--accent);
+  stroke-width: 3;
+  stroke-dasharray: 8 6;
+  opacity: 1;
+  animation: workflow-edge-flow 0.6s linear infinite;
+}
+.react-flow__edge.edge-run-out .react-flow__edge-path {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-dasharray: 2 6;
+  opacity: 0.75;
+  animation: workflow-edge-pulse 1.4s ease-in-out infinite;
+}
+.react-flow__edge.edge-run-done .react-flow__edge-path {
+  stroke: var(--success);
+  stroke-width: 2;
+  opacity: 0.55;
+}
+.react-flow__edge.edge-run-idle .react-flow__edge-path { opacity: 0.25; }
+.react-flow__edge.edge-run-control.edge-run-in .react-flow__edge-path {
+  stroke-dasharray: none;
+  animation: workflow-edge-pulse 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .task-node.focus-active { animation: none; transform: none; }
+  .react-flow__edge.edge-run-in .react-flow__edge-path,
+  .react-flow__edge.edge-run-out .react-flow__edge-path { animation: none; }
+}
+
 .drawer-resizer { height: 9px; flex-shrink: 0; cursor: ns-resize; touch-action: none; background: var(--border); }
 .drawer-resizer:hover, .drawer-resizer:focus-visible { background: var(--accent, #6877ef); }
 .drawer > .drawer-head { flex-shrink: 0; }

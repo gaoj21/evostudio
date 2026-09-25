@@ -6,6 +6,7 @@ export default function TaskNode({ id, data, selected }) {
   const cls = ['task-node'];
   if (selected) cls.push('selected');
   if (status) cls.push(`run-${status}`);
+  if (data.focus) cls.push(`focus-${data.focus}`);
   return (
     <div className={cls.join(' ')}>
       <Handle type="target" position={Position.Left} />
@@ -29,6 +30,13 @@ export default function TaskNode({ id, data, selected }) {
         </div>
       )}
       {data.batchBadge && <div className="node-tools batch-badge">{data.batchBadge}</div>}
+      {data.io && (
+        // What the node is working on now: fields in, fields out.
+        <div className="node-io" data-testid="node-io">
+          {data.io.inputs && <span className="node-io-in">in: {data.io.inputs}</span>}
+          {data.io.outputs && <span className="node-io-out">out: {data.io.outputs}</span>}
+        </div>
+      )}
       {status && <div className={`node-status status-${status}`}>{status}</div>}
       <Handle type="source" position={Position.Right} />
       <Handle type="target" id="t-in" position={Position.Top} className="handle-memory" />

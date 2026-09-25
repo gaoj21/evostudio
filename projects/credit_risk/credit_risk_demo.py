@@ -78,6 +78,17 @@ from evoagentx.skills import SkillManager
 from evoagentx.storages.base import StorageHandler
 from evoagentx.storages.storages_config import DBConfig, StoreConfig, VectorStoreConfig
 from evoagentx.workflow import WorkFlow
+
+
+def _embedding_model():
+    """The project's local copy of bge-small when present (models/), else
+    the Hugging Face id — the same rule Studio's memory uses."""
+    try:
+        from backend.memory.ltm import embedding_model
+        return embedding_model()
+    except Exception:
+        return "BAAI/bge-small-en-v1.5"
+
 from evoagentx.workflow.workflow_graph import SequentialWorkFlowGraph
 
 load_dotenv()
@@ -326,7 +337,7 @@ def _get_embedder():
     global _embedder
     if _embedder is None:
         from sentence_transformers import SentenceTransformer
-        _embedder = SentenceTransformer("BAAI/bge-small-en-v1.5", device="cpu")
+        _embedder = SentenceTransformer(_embedding_model(), device="cpu")
     return _embedder
 
 
@@ -430,7 +441,7 @@ def build_memory(fresh: bool = True) -> LongTermMemory:
     rag_config = RAGConfig(
         reader=ReaderConfig(recursive=False, exclude_hidden=True, errors="ignore", encoding="utf-8"),
         chunker=ChunkerConfig(strategy="simple", chunk_size=512, chunk_overlap=0, max_chunks=None),
-        embedding=EmbeddingConfig(provider="huggingface", model_name="BAAI/bge-small-en-v1.5", device="cpu"),
+        embedding=EmbeddingConfig(provider="huggingface", model_name=_embedding_model(), device="cpu"),
         index=IndexConfig(index_type="vector"),
         retrieval=RetrievalConfig(
             retrivel_type="vector", postprocessor_type="simple",
