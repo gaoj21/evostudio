@@ -209,3 +209,40 @@ def test_the_split_settings_are_checked(monkeypatch):
         canvas_evolution.settings(g, {**body, 'split_order': 'latest'})
     with pytest.raises(canvas_evolution.SourceError, match='at random or the latest'):
         canvas_evolution.settings(g, {**body, 'split_field': 'as_of', 'split_order': 'sideways'})
+
+
+def test_an_evolve_reuses_the_replay_of_the_evaluation_it_continues(entities, monkeypatch, tmp_path):
+    """An evaluation of the canvas Input is the baseline its Evolve would run:
+    reused while the records and the workflow are the same, replayed when
+    either changed — and the result says which."""
+    from backend.api import batch
+    replays(monkeypatch, lambda prompt, entity: 'yes' if prompt == 'new' else 'no')
+    started = []
+    real_start = batch.start_batch
+    monkeypatch.setattr(batch, 'start_batch', lambda *a, **kw: started.append(1) or real_start(*a, **kw))
+    llm = FakeLLM()
+    monkeypatch.setattr(runner, '_make_llm', lambda **kw: llm)
+    g = graph(evaluator())
+    path = tmp_path / 'replay.jsonl'
+
+    evaluation = {'task_id': 'ev', 'execution_graph': copy.deepcopy(g)}
+    canvas_evolution.execute(evaluation, g, copy.deepcopy(ROWS),
+                             {'evaluator': 'quality', 'mode': 'evaluate', 'nodes': [], 'rounds': 1,
+                              'replay_path': str(path)}, lambda s: None)
+    assert path.is_file() and evaluation['replay']['records'] == len(ROWS) and len(started) == 1
+    reuse = {**evaluation['replay'], 'task_id': 'ev', 'path': str(path)}
+
+    started.clear()
+    state, _ = evolve(monkeypatch, reuse_baseline=reuse)
+    assert state['baseline_source'] == {'reused': True, 'evaluation': 'ev'}
+    assert len(started) == 1                                   # the candidate only
+    assert state['validation']['baseline']['score'] == 0 and state['candidates'][0]['accepted']
+
+    started.clear()
+    changed = graph(evaluator(), prompt='edited since')
+    other = {'task_id': 'evo2', 'execution_graph': copy.deepcopy(changed)}
+    canvas_evolution.execute(other, changed, copy.deepcopy(ROWS),
+                             {'evaluator': 'quality', 'mode': 'evolve_evaluate', 'nodes': ['work'], 'rounds': 1,
+                              'reuse_baseline': reuse}, lambda s: None)
+    assert other['baseline_source'] == {'reused': False, 'why': 'the workflow changed since that evaluation'}
+    assert len(started) == 2                                   # baseline replayed, then the candidate

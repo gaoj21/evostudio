@@ -6,6 +6,7 @@ separate no-replay operation.
 """
 import copy
 import hashlib
+import json
 import shutil
 from backend.api.sources import SourceError
 from . import evaluator_tools
@@ -48,6 +49,54 @@ def discard_candidate_batches(batch_ids):
             batch._batches.pop(batch_id, None)
             batch._threads.pop(batch_id, None)
         (batch.BATCHES_DIR / f'{batch_id}.json').unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# A replay kept for reuse: an evaluation of the canvas Input is exactly the
+# baseline an Evolve continuing it would run — same records, same workflow,
+# empty isolated memory — so it is saved, and reused while nothing changed.
+# ---------------------------------------------------------------------------
+
+REPLAY_FILE = 'replay.jsonl'
+# What makes two replays the same: the workflow as it runs, not its
+# evaluators (the code scoring it) or where its nodes sit on the canvas.
+_RUN_KEYS = ('tasks', 'edges', 'preprocess', 'goal', 'memory_resources')
+
+
+def _digest(value) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
+
+
+def workflow_fingerprint(graph) -> str:
+    return _digest({key: graph.get(key) for key in _RUN_KEYS})
+
+
+def rows_fingerprint(rows) -> str:
+    return _digest(rows)
+
+
+def _save_replay(path, records):
+    with open(path, 'w', encoding='utf-8') as stream:
+        for record in records:
+            stream.write(json.dumps(record, ensure_ascii=False, default=str) + '\n')
+
+
+def _reusable_replay(reuse, graph, rows):
+    """The saved replay to use as the baseline, or (None, why not)."""
+    if not reuse:
+        return None, None
+    from pathlib import Path
+    if reuse.get('rows') != rows_fingerprint(rows):
+        return None, 'the Input produces different records now'
+    if reuse.get('graph') != workflow_fingerprint(graph):
+        return None, 'the workflow changed since that evaluation'
+    path = Path(reuse.get('path') or '')
+    if not path.is_file():
+        return None, "that evaluation's replay is no longer on disk"
+    records = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
+    if len(records) != len(rows):
+        return None, "that evaluation's replay is incomplete"
+    return records, None
 
 
 def split_units(graph, rows, field=None):
@@ -354,9 +403,20 @@ def _execute(state, graph, rows, params, stage):
                             'node_outputs': output.get('node_outputs', {})})
         return records
     best_graph = copy.deepcopy(graph)
-    everything = run(best_graph, 'baseline')
+    everything, why_not = _reusable_replay(params.get('reuse_baseline'), graph, rows)
+    if everything is not None:
+        stage('baseline: reusing the evaluation replay')
+        state['baseline_source'] = {'reused': True, 'evaluation': params['reuse_baseline'].get('task_id')}
+    else:
+        everything = run(best_graph, 'baseline')
+        state['baseline_source'] = {'reused': False, **({'why': why_not} if why_not else {})}
     if params['mode'] == 'evaluate':
         state['baseline'] = score_saved(graph, everything, name)
+        # Kept for an Evolve that continues this evaluation.
+        if params.get('replay_path'):
+            _save_replay(params['replay_path'], everything)
+            state['replay'] = {'graph': workflow_fingerprint(graph), 'rows': rows_fingerprint(rows),
+                               'records': len(everything)}
         return
     # Dev and val, by entity. Every candidate replays every record — memory
     # may be read across entities — but only dev is seen, scored and chosen

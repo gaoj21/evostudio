@@ -446,6 +446,8 @@ def _run_task(task_id: str, graph_doc: dict, metric: str, params: dict, task_dir
             else:
                 records = [json.loads(line) for line in (task_dir / 'dataset.jsonl').read_text().splitlines() if line.strip()]
             state['execution_graph'] = graph_doc
+            if params.get('mode') == 'evaluate':
+                params = {**params, 'replay_path': str(task_dir / canvas_evolution.REPLAY_FILE)}
             canvas_evolution.execute(state, graph_doc, records, params, lambda text: _stage(state, text))
             _finish(state)
             return
@@ -941,6 +943,13 @@ def _with_evaluation_code(graph_id: str, graph: dict, body: dict) -> tuple[dict,
             kept = evaluator_tools.find(graph, (prior.get("params") or {}).get("evaluator") or "")
         if not kept:
             raise sources.SourceError("That evaluation kept no code to evolve with. Run the evaluation again.")
+        # A replay of the canvas Input it saved is this Evolve's baseline, as
+        # long as the records and the workflow are still the same.
+        replay = prior.get("replay")
+        if replay and ((prior.get("params") or {}).get("source") or {}).get("type") == "canvas":
+            from backend.features.evaluation.canvas_evolution import REPLAY_FILE
+            body["_reuse_baseline"] = {**replay, "task_id": prior["task_id"],
+                                       "path": str(_task_dir(prior["task_id"]) / REPLAY_FILE)}
         entry = {**copy.deepcopy(kept), "name": EVALUATION_NAME, "enabled": True, "timing": "manual",
                  "metric": body.get("metric") or kept.get("metric") or "",
                  "direction": body.get("direction") or kept.get("direction") or "maximize"}
@@ -957,7 +966,8 @@ def _code_params(graph: dict, body: dict) -> dict:
     if "_workflow_evaluators" not in graph:
         return {}
     return {"evaluator_entry": copy.deepcopy(graph["evaluators"][0]),
-            **({"from_evaluation": body["from_evaluation"]} if body.get("from_evaluation") else {})}
+            **({"from_evaluation": body["from_evaluation"]} if body.get("from_evaluation") else {}),
+            **({"reuse_baseline": body["_reuse_baseline"]} if body.get("_reuse_baseline") else {})}
 
 
 @router.post("/evolve/{task_id}/stop")

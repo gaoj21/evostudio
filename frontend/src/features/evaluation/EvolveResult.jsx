@@ -135,6 +135,11 @@ export function TaskDetail({ task, onApplied, onStopped, onEvolve }) {
       </div>
       {['saved_batch', 'saved_run'].includes((task.source || p.source)?.type) && <p className="muted small">Saved results · {(task.source || p.source)?.batch_id || (task.source || p.source)?.run_id} · no workflow replay</p>}
       {source?.matched_records != null && <p className="muted small">{source.matched_records} matched records</p>}
+      {!evaluationOnly && task.baseline_source && <p className="muted small" data-testid="baseline-source">
+        {task.baseline_source.reused
+          ? 'Baseline: the replay of the evaluation this continues — same records, same workflow — so it was not run again.'
+          : `Baseline: replayed${task.baseline_source.why ? ` (the evaluation's replay could not be reused: ${task.baseline_source.why})` : ''}.`}
+      </p>}
       {task.validation_status === 'not_run' && <p role="status">Prompt suggestions are not validated. No workflow was rerun; there is no after score. {task.evidence_records} saved traces were used.</p>}
       {task.baseline?.metrics?.unscored > 0 && <p className="muted small">{task.baseline.metrics.unscored} records have no usable score. Missing labels are not treated as negative outcomes.</p>}
       {task.baseline?.report && <details><summary>Evaluation report</summary><JsonView value={task.baseline.report} startOpen={false} /></details>}
