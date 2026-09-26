@@ -80,3 +80,45 @@ def test_the_server_raises_its_open_file_limit():
         assert resource.getrlimit(resource.RLIMIT_NOFILE)[0] > 256
     finally:
         resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+
+
+def test_a_stop_during_the_memory_writes_writes_nothing_more(studio_data, monkeypatch):
+    """Every record of a chunk writes its memory after the last node, one
+    after another under the store's lock — embedding, indexing, saving. A
+    Stop then must end the batch now, not after the whole queue has written."""
+    import threading
+    import time
+    from evoagentx.models import LiteLLMConfig
+    from backend.api import batch, runner, tools_registry
+
+    async def answer(agent, task, inputs, state):
+        return {o['name']: f"{task['name']} noted" for o in task.get('outputs') or []}
+
+    class Stub:
+        config = LiteLLMConfig(model='deepseek/deepseek-chat', deepseek_key='test-only')
+    monkeypatch.setattr(runner, 'execute_llm_node', answer)
+    monkeypatch.setattr(runner, '_make_llm', lambda **kw: Stub())
+    monkeypatch.setattr(tools_registry, 'validate_tool_names', lambda names: None)
+    monkeypatch.setattr(tools_registry, 'resolve_tools', lambda names, **kw: None)
+    writes, first = [], threading.Event()
+    real_write = runner._write_entry
+
+    def slow_write(*a, **kw):
+        writes.append(time.monotonic())
+        first.set()
+        time.sleep(0.3)
+        return real_write(*a, **kw)
+    monkeypatch.setattr(runner, '_write_entry', slow_write)
+    graph = make_graph([make_task('a', inputs=['id'], outputs=['x'], use_long_term_memory=True)])
+    graph['id'] = 'stop-writes'
+    batch_id = batch.start_batch(graph, [{'id': f'r{i}'} for i in range(8)],
+                                 {'type': 'canvas', 'config': {'type': 'dataloader', 'read_batch_size': 8}},
+                                 workers=4, mode='node')
+    assert first.wait(60)
+    stopped_at = time.monotonic()
+    batch.cancel_batch(batch_id)
+    assert batch.wait_for(batch_id, timeout=10)
+    assert time.monotonic() - stopped_at < 3
+    assert sum(1 for at in writes if at > stopped_at) == 0
+    items = batch.get_batch(batch_id)['items']
+    assert sum(i['status'] == 'cancelled' for i in items) >= 6       # all but the one mid-write

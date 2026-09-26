@@ -10,6 +10,7 @@ import asyncio
 import copy
 import json
 import threading
+from contextlib import contextmanager
 import time
 import traceback
 import uuid
@@ -80,6 +81,30 @@ def _model_for_run(state):
 # serialized to avoid corruption.
 _ltm_locks: dict[str, threading.Lock] = {}
 _ltm_locks_guard = threading.Lock()
+
+
+def _stop_requested(state: dict) -> bool:
+    """Stopped, or walked away from: either way it writes nothing more."""
+    return bool(state.get("_cancel_requested") or state.get("_abandoned"))
+
+
+@contextmanager
+def _ltm_turn(key: str, state: dict):
+    """The store's write lock — waited for only while the run is not stopped.
+
+    Every record of a batch chunk writes its memory at the same moment, one
+    after another under this lock; a Stop must not wait out the queue.
+    """
+    lock = _ltm_lock(key)
+    while not lock.acquire(timeout=0.2):
+        if _stop_requested(state):
+            raise asyncio.CancelledError()
+    try:
+        if _stop_requested(state):
+            raise asyncio.CancelledError()
+        yield
+    finally:
+        lock.release()
 
 
 def _ltm_lock(key: str) -> threading.Lock:
@@ -262,7 +287,9 @@ def cancel_run(run_id: str, *, expected: bool = False) -> dict:
             return {"cancelled": True, "before_start": True}
         return {"cancelled": False,
                 "reason": f"run already {persisted['status']}" if persisted else "no such run"}
-    if state.get("status") != "running":
+    # A run still executing — writing its memory after its last node, with
+    # its status already set — is still stoppable: it writes nothing more.
+    if state.get("status") != "running" and not state.get("_executing"):
         return {"cancelled": False, "reason": f"run already {state.get('status')}"}
     state["_cancel_requested"] = True
     cancel = state.get("_cancel")
@@ -1132,6 +1159,10 @@ def _save_ltm(graph_doc: dict, memories: dict, graph, wf, state: dict,
         exec_data = {}
     task_by_name = {t.get("name"): t for t in tasks}
     for node in graph.nodes:
+        # A run stopped — or abandoned, its thread still going — writes
+        # nothing more: no embedding, no index, no save after Stop.
+        if _stop_requested(state):
+            raise asyncio.CancelledError()
         memory = memories.get(node.name)
         task = task_by_name.get(node.name, {"name": node.name})
         if not task.get("use_long_term_memory") or not memory_policy.policy(task)["write_enabled"]:
@@ -1212,7 +1243,7 @@ def _save_ltm(graph_doc: dict, memories: dict, graph, wf, state: dict,
                     f"Switch Write mode to Append to keep records without an entity."
                 )
                 continue
-            with _ltm_lock(f"{graph_id}/{node.name}"):
+            with _ltm_turn(f"{graph_id}/{node.name}", state):
                 # Re-opened inside the lock rather than written through the
                 # copy this run has been holding since it started. `save()`
                 # writes the whole corpus, and that copy was loaded minutes
