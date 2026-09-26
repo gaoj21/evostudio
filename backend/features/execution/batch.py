@@ -95,6 +95,8 @@ def start_batch(graph: dict, records: list[dict], source: dict, gray_zone=None,
         "total": len(records),
         "items": [
             {"index": i, "status": "pending", "run_id": None,
+             # Which DataLoader batch it came in: its folder under the run's.
+             "part": i // (record_batch_size or len(records) or 1) + 1,
              "inputs": record, "output_summary": None, "error": None,
              "review_status": None,
              "label": (labels[i] if labels and i < len(labels) else None),
@@ -251,6 +253,7 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
                              gray_zone=state.get("gray_zone"),
                              run_id=item["run_id"], batch_id=batch_id,
                              session_started_at=state.get("session_started_at") or state.get("created_at"),
+                             batch_part=item.get("part"),
                              **({"session": state["session"]} if state.get("session") else {}),
                              **({"llm_batch_size": state["llm_batch_size"]} if state.get("llm_batch_size") else {}),
                              **({"gate": gate} if gate is not None else {}))

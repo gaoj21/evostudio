@@ -262,7 +262,8 @@ def start_run(graph: dict, inputs: dict, background: bool = True, gray_zone=None
               session: str | None = None, record_index: int | None = None,
               plan_id: str | None = None, graph_revision: str | None = None,
               batch_id: str | None = None, session_started_at: str | None = None,
-              llm_batch_size: int | None = None, gate=None) -> str:
+              llm_batch_size: int | None = None, gate=None,
+              batch_part: int | None = None) -> str:
     """Start a run for a canvas graph; returns the run_id.
 
     With background=True (default) the run executes in a daemon thread;
@@ -310,6 +311,8 @@ def start_run(graph: dict, inputs: dict, background: bool = True, gray_zone=None
         # When the thing the user started began: a batch's records all share
         # their batch's start, a single run its own. Names the run's folder.
         "session_started_at": session_started_at,
+        # The DataLoader batch it came in (1, 2, …), for its folder.
+        "batch_part": batch_part,
         "input_summary": _summarise_inputs(inputs),
         "_executing": True,
         # Whose files the tools work on. A candidate replay during Evolve runs

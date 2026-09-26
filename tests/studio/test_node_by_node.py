@@ -306,3 +306,23 @@ def test_a_stream_that_breaks_says_why(batches, calls):
     assert batches.wait_for(batch_id, timeout=20)
     batch = batches.get_batch(batch_id)
     assert batch['status'] == 'failed' and batch['error'].startswith('RuntimeError')
+
+
+def test_each_record_knows_which_dataloader_batch_it_came_in(batches, calls):
+    """Streamed or not, a record's `part` is its DataLoader batch (1, 2, …):
+    the folder its node files go to under the run's start time."""
+    def chunks(cancelled, on_info=None):
+        for start in (0, 3, 6):
+            rows = [{'id': f'r{i}'} for i in range(start, start + 3)]
+            yield rows, None, len(rows)
+    streamed = batches.start_batch(three_nodes(), [], {'type': 'canvas'}, record_chunks=chunks, mode='node')
+    assert batches.wait_for(streamed, timeout=20)
+    assert [i['part'] for i in batches.get_batch(streamed)['items']] == [1, 1, 1, 2, 2, 2, 3, 3, 3]
+    from backend.api import runner
+    run = runner.get_run(batches.get_batch(streamed)['items'][4]['run_id'])
+    assert run['batch_part'] == 2
+
+    listed = batches.start_batch(three_nodes(), [{'id': f'r{i}'} for i in range(5)],
+                                 {'type': 'canvas', 'config': {'type': 'dataloader', 'read_batch_size': 2}}, mode='node')
+    assert batches.wait_for(listed, timeout=20)
+    assert [i['part'] for i in batches.get_batch(listed)['items']] == [1, 1, 2, 2, 3]

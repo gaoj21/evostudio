@@ -14,13 +14,18 @@ from backend.api import runner
 
 def _archive(state, batch_id, records, labels):
     pairs = []
+    # The DataLoader batch these records came in, counted from 1: the folder
+    # their node files go to under the run's start time.
+    with batch._lock:
+        state['parts'] = state.get('parts', 0) + 1
+        part = state['parts']
     for i, record in enumerate(records):
         index = len(state['items'])
         relative = f'{batch_id}-inputs/{index}.json'
         path = batch.BATCHES_DIR / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         write_json(path, record)
-        item = {'index': index, 'status': 'pending', 'run_id': None, 'inputs': record, 'input_file': relative,
+        item = {'index': index, 'part': part, 'status': 'pending', 'run_id': None, 'inputs': record, 'input_file': relative,
                 'output_summary': None, 'error': None, 'review_status': None,
                 'label': labels[i] if labels else None, 'score': None, 'score_detail': None}
         with batch._lock:

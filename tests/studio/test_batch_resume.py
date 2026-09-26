@@ -28,7 +28,7 @@ class Recorder:
         self.calls, self.runs = [], {}
         self.outcome = outcome or (lambda record: {"status": "success", "result": {"d": record["account"]}})
 
-    def start_run(self, graph, record, background, gray_zone, run_id, batch_id, session_started_at):
+    def start_run(self, graph, record, background, gray_zone, run_id, batch_id, session_started_at, **_):
         self.calls.append((record["account"], record.get("day")))
         self.runs[run_id] = dict(self.outcome(record))
 

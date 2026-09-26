@@ -174,9 +174,10 @@ class TestEveryNodeHasItsOwnLog:
     """A folder per run or batch, named by when it started, and inside it one
     file per node that every record of that session appends to.
 
-    Open `<started>/nodes/decide.jsonl` and read every decision of that batch,
-    in order, each with the inputs it was handed and the run it belonged to.
-    The run-level summary is appended to `runs.jsonl` beside `nodes/`.
+    Open `<started>/batch_<n>/nodes/decide.jsonl` and read every decision of
+    that DataLoader batch, in order, each with the inputs it was handed and the
+    run it belonged to. The run-level summary is appended to `runs.jsonl`
+    beside `nodes/`. A single run has its `nodes/` in its time folder.
     """
 
     STARTED = "2026-09-01T10:20:30"          # local, naive: folder 20260901-102030
@@ -210,20 +211,24 @@ class TestEveryNodeHasItsOwnLog:
         assert self.lines(workspace, "runs.jsonl")[0]["status"] == "failed"
         assert not (workspace.workspace_root("probe") / "runs" / "r1").exists()
 
-    def test_the_records_of_one_batch_share_a_folder_and_append(self, store):
-        # Two records of the same batch: same session start, same folder,
-        # each appending its line to the node's file.
+    def test_a_batch_has_one_start_time_folder_and_a_folder_per_dataloader_batch(self, store):
+        # One folder named by when the batch started; inside it batch_1,
+        # batch_2, … — one per DataLoader batch — and in each, one file per
+        # node that the records of that DataLoader batch append to.
         graphs, workspace = store
-        for run_id, d in (("r1", 1), ("r2", 2)):
+        for run_id, d, part in (("r1", 1, 1), ("r2", 2, 1), ("r3", 3, 2)):
             workspace.write_run_artifacts("probe", {
                 **self.state([{"name": "decide", "status": "completed", "output": {"d": d}}]),
-                "run_id": run_id, "batch_id": "batch-9", "created_at": "2026-09-01T10:20:3" + str(d),
-                "session_started_at": "2026-09-01T10:19:00"})
+                "run_id": run_id, "batch_id": "batch-9", "batch_part": part,
+                "created_at": "2026-09-01T10:20:3" + str(d), "session_started_at": "2026-09-01T10:19:00"})
 
-        decide = self.lines(workspace, "nodes/decide.jsonl", folder="20260901-101900")
-        assert [(l["run_id"], l["output"]["d"]) for l in decide] == [("r1", 1), ("r2", 2)]
-        assert decide[1]["batch_id"] == "batch-9"
-        assert [l["run_id"] for l in self.lines(workspace, "runs.jsonl", folder="20260901-101900")] == ["r1", "r2"]
+        started = workspace.workspace_root("probe") / "runs"
+        assert [p.name for p in started.iterdir()] == ["20260901-101900"]          # one start time
+        assert sorted(p.name for p in (started / "20260901-101900").iterdir()) == ["batch_1", "batch_2"]
+        first = self.lines(workspace, "batch_1/nodes/decide.jsonl", folder="20260901-101900")
+        assert [(l["run_id"], l["output"]["d"], l["batch_part"]) for l in first] == [("r1", 1, 1), ("r2", 2, 1)]
+        assert first[1]["batch_id"] == "batch-9"
+        assert [l["run_id"] for l in self.lines(workspace, "batch_2/runs.jsonl", folder="20260901-101900")] == ["r3"]
 
     def test_a_separate_press_of_run_gets_its_own_folder(self, store):
         graphs, workspace = store

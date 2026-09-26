@@ -28,7 +28,7 @@ class FakeRunner:
         self.calls = []
 
     def start_run(self, graph, record, background, gray_zone, run_id, batch_id,
-                  session_started_at):
+                  session_started_at, **_):
         sid = record["sample_id"]
         self.calls.append(sid)
         outcomes = self.script[sid]

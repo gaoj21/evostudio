@@ -1863,7 +1863,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
                   {` · ${batchProgress.done}/${batchProgress.total ?? '?'} records done`}
                   {batchProgress.failed > 0 && ` · ${batchProgress.failed} failed`}
                   {batch.metric && ` · metric ${batch.metric}`}
-                  {` · logs → ${graph?.output_dir || 'runs'}/<started-at>/nodes/<node>.jsonl`}
+                  {` · logs → ${graph?.output_dir || 'runs'}/<started-at>/batch_<n>/nodes/<node>.jsonl`}
                 </>
               ) : (
                 <>

@@ -203,13 +203,14 @@ def _session_stamp(state: dict) -> str:
 def write_run_artifacts(graph_id: str, state: dict, output_dir: str = "runs") -> None:
     """Append this run to its session's per-node files, then to its run log.
 
-    Each run, and each batch as a whole, gets a folder named by when it
-    started — `<output_dir>/<YYYYmmdd-HHMMSS>/` — and inside it every node has
-    one file, `nodes/<node>.jsonl`, that each record of that session appends a
-    line to: what the node was handed, what it produced, which run and batch
-    it was. A batch of a hundred records is one folder, and its `decide.jsonl`
-    reads as every decision of that batch in order. The run-level summary goes
-    to `runs.jsonl` beside `nodes/`.
+    Each run, and each batch as a whole, gets one folder named by when it
+    started — `<output_dir>/<YYYYmmdd-HHMMSS>/`. A batch has a folder per
+    DataLoader batch inside it — `batch_1/`, `batch_2/`, … — and in each,
+    every node has one file, `nodes/<node>.jsonl`, that each record of that
+    DataLoader batch appends a line to: what the node was handed, what it
+    produced, which run and batch it was. The run-level summary goes to
+    `runs.jsonl` beside `nodes/`. A single run has no DataLoader batches: its
+    `nodes/` and `runs.jsonl` sit in its time folder directly.
 
     JSON lines rather than one JSON array: appending to an array means
     rewriting the whole file every run. Nodes whose task sets
@@ -218,7 +219,11 @@ def write_run_artifacts(graph_id: str, state: dict, output_dir: str = "runs") ->
     """
     try:
         save_flags = state.get("_save_output_flags") or {}
-        base = _resolve_in_workspace(graph_id, f"{output_dir}/{_session_stamp(state)}")
+        folder = f"{output_dir}/{_session_stamp(state)}"
+        part = state.get("batch_part")
+        if state.get("batch_id") and part:
+            folder += f"/batch_{int(part)}"
+        base = _resolve_in_workspace(graph_id, folder)
         (base / "nodes").mkdir(parents=True, exist_ok=True)
         node_io = state.get("_node_io") or {}
         source_records = state.get("_source_records") or {}
@@ -227,6 +232,7 @@ def write_run_artifacts(graph_id: str, state: dict, output_dir: str = "runs") ->
         # repeated on every line so a line still says where it came from.
         common = {"run_id": state["run_id"], "graph_id": graph_id,
                   "batch_id": state.get("batch_id"), "session": _session_stamp(state),
+                  **({"batch_part": state["batch_part"]} if state.get("batch_part") else {}),
                   "at": now}
         for position, node in enumerate(state.get("nodes", []) or [], start=1):
             name = node.get("name")
