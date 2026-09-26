@@ -233,6 +233,12 @@ def _execute(graph, agent, session, event):
                 session['usage_unavailable'] = True
         session['events'] = (session['events'] + [item])[-200:]
         persist()
+    # The session's Stop is what every model call of this turn watches: a
+    # call blocked in the provider is given up at once, not when it answers.
+    from backend.features.chat import chat_control
+    control = chat_control.Control()
+    control.event = event
+    token = chat_control.current.set(control)
     try:
         thread_id = hashlib.sha256((f"{session.get('checkpoint_scope', scope)}:{aid}:{sid}" + (f":recovery:{session['generation']}" if session.get('generation') else '')).encode()).hexdigest()
         answer = harness.run_turn(graph, agent, thread_id, session['messages'][-1]['content'], emit, event)
@@ -241,6 +247,9 @@ def _execute(graph, agent, session, event):
         else:
             session['messages'].append({'role': 'assistant', 'content': answer or '(No answer returned)'})
             session['status'] = 'idle'
+    except chat_control.Cancelled:
+        session['status'] = 'stopped'
+        session['error'] = None
     except Exception as exc:
         import logging
         logging.getLogger(__name__).exception('Deep Agent execution failed')
@@ -248,6 +257,7 @@ def _execute(graph, agent, session, event):
         # Provider errors may contain request headers. Do not expose raw exceptions.
         session['error'] = GONE_ERROR if event.is_set() else execution_error(exc)
     finally:
+        chat_control.current.reset(token)
         session.pop('stop_note', None)     # it has settled; nothing is pending
         persist()
         with _lock: _running.pop(sid, None)

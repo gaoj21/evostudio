@@ -184,6 +184,42 @@ def _stopped_while_waiting(delay: float) -> bool:
     return control.event.wait(delay)
 
 
+def _abandonable(call):
+    """`call()`, given up the moment the work doing it is stopped.
+
+    A provider SDK may block for minutes — a slow model, a gateway timeout —
+    and a blocked call cannot be interrupted. When the caller has a stop
+    signal (a run, a chat, an Evolve), the call runs on a helper thread and
+    the caller waits on the stop as well: a Stop returns at once, and what
+    the call answers later is dropped. Without a stop signal it just runs.
+    """
+    import contextvars
+    import threading
+    from backend.features.chat import chat_control
+    control = chat_control.current.get()
+    if control is None:
+        return call()
+    control.check()
+    outcome: dict = {}
+    done = threading.Event()
+    context = contextvars.copy_context()
+
+    def work():
+        try:
+            outcome["value"] = context.run(call)
+        except BaseException as error:        # re-raised on the caller's side
+            outcome["error"] = error
+        finally:
+            done.set()
+    threading.Thread(target=work, daemon=True, name="model-call").start()
+    while not done.wait(0.2):
+        if control.event.is_set():
+            raise chat_control.Cancelled()
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["value"]
+
+
 def _retrying(call):
     """`call()` again after each pause while it fails transiently — never
     after a stop: a stopped record makes no further model call."""
@@ -218,16 +254,21 @@ async def _aretrying(call):
 
 
 def _call(provider: str | None, messages: list, options: dict) -> LLMResult:
-    """One completion, tried again when it fails transiently."""
-    return _retrying(lambda: _call_once(provider, messages, options))
+    """One completion, tried again when it fails transiently, given up on Stop."""
+    return _retrying(lambda: _abandonable(lambda: _call_once(provider, messages, options)))
 
 
 async def _acall(provider: str | None, messages: list, options: dict) -> LLMResult:
-    return await _aretrying(lambda: _acall_once(provider, messages, options))
+    """The same, awaited — off this event loop: an SDK whose async API blocks
+    would otherwise hold the loop, and with it every Stop, until it returns."""
+    # The contract's synchronous call, on a helper thread: an async client
+    # tied to another event loop is never touched from this one.
+    return await _aretrying(lambda: asyncio.to_thread(
+        lambda: _abandonable(lambda: _call_once(provider, messages, options))))
 
 
 def _batch(provider: str | None, items: list, options: dict) -> list:
-    return _retrying(lambda: _batch_once(provider, items, options))
+    return _retrying(lambda: _abandonable(lambda: _batch_once(provider, items, options)))
 
 
 def _call_once(provider: str | None, messages: list, options: dict) -> LLMResult:

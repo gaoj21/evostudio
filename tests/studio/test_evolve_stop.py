@@ -118,3 +118,32 @@ def test_metrics_are_the_platform_s_own(client):
     names = {m["name"] for m in client.get("/api/evolve/metrics").json()["metrics"]}
     assert {"exact_match", "contains", "numeric"} <= names
     assert "credit_risk" not in names
+
+
+def test_a_model_call_blocked_in_the_provider_does_not_hold_the_stop(client, monkeypatch):
+    """Proposing prompts is one long model call. A provider SDK that blocks
+    for minutes used to keep the task running until it answered; Stop now
+    gives the call up and the task ends stopped, at once."""
+    import threading
+    from types import SimpleNamespace
+    from backend.features import model_bridge
+    from backend.features.evaluation import canvas_evolution
+    entered, release = threading.Event(), threading.Event()
+
+    def chat_result(provider, messages, **options):
+        entered.set()
+        release.wait(30)                     # the provider takes its time
+        return SimpleNamespace(content='late', usage=None, provider=provider, model='m')
+    monkeypatch.setattr(model_bridge, 'chat_result', chat_result)
+    monkeypatch.setattr(canvas_evolution, 'execute',
+                        lambda state, graph, rows, params, stage: model_bridge._call('p', [], {}))
+    task_id = evolve_api.start_evolve(GRAPH, ROWS, "canvas:ev", PARAMS)
+    try:
+        assert entered.wait(5)
+        started = time.time()
+        assert client.post(f"/api/evolve/{task_id}/stop").status_code == 200
+        task = settle(task_id, timeout=5)
+        assert task["status"] == "stopped" and task["error"] is None
+        assert time.time() - started < 3
+    finally:
+        release.set()

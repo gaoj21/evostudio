@@ -409,12 +409,22 @@ def _finish(state: dict) -> None:
 
 
 def _execute_evolve(task_id: str, graph_doc: dict, metric: str, params: dict, task_dir: Path) -> None:
-    """Run one task on this thread, with its Stop visible to the optimizer."""
-    with stoppable(_tasks[task_id]):
+    """Run one task on this thread, with its Stop visible to the optimizer —
+    and to every model call it makes: a call blocked in a provider SDK is
+    given up the moment Stop is pressed, not when it answers."""
+    from backend.features.chat import chat_control
+    state = _tasks[task_id]
+    control = chat_control.Control()
+    state["_control"] = control
+    if state.get("stop_requested"):
+        control.event.set()
+    token = chat_control.current.set(control)
+    with stoppable(state):
         try:
             _run_task(task_id, graph_doc, metric, params, task_dir)
         finally:
-            token_usage.release_usage(_tasks[task_id])
+            chat_control.current.reset(token)
+            token_usage.release_usage(state)
 
 
 def _run_task(task_id: str, graph_doc: dict, metric: str, params: dict, task_dir: Path) -> None:
@@ -584,9 +594,17 @@ def _run_task(task_id: str, graph_doc: dict, metric: str, params: dict, task_dir
     except EvolveStopped:
         state["status"] = "stopped"
         state["error"] = None
-    except Exception:
-        state["status"] = "failed"
-        state["error"] = traceback.format_exc()
+    except BaseException as error:
+        from backend.features.chat import chat_control
+        if not isinstance(error, (Exception, chat_control.Cancelled)):
+            raise                          # an interpreter exit is not a task outcome
+        # A model call given up on Stop ends the task stopped, not failed.
+        if state.get("stop_requested"):
+            state["status"] = "stopped"
+            state["error"] = None
+        else:
+            state["status"] = "failed"
+            state["error"] = traceback.format_exc()
     finally:
         state.pop("current_run", None)
         state.pop("current_batch", None)
@@ -955,6 +973,9 @@ def stop_evolve_task(task_id: str):
     if state.get("status") != "running":
         raise HTTPException(status_code=409, detail="This task is not running.")
     state["stop_requested"] = True
+    control = state.get("_control")
+    if control is not None:
+        control.event.set()                # a model call in flight is given up now
     batch_id = state.get("current_batch")
     if batch_id:
         from backend.api import batch

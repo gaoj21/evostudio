@@ -67,18 +67,20 @@ def test_it_gives_up_after_its_tries_and_never_retries_a_bad_request(no_pause, m
 
 
 @pytest.mark.asyncio
-async def test_the_async_path_retries_too(no_pause, monkeypatch):
-    attempts = []
+async def test_the_async_path_retries_too_and_runs_off_the_event_loop(no_pause, monkeypatch):
+    import threading
+    attempts, threads = [], []
 
-    async def abatch_result(provider, items, **options):
+    def chat_result(provider, messages, **options):
         attempts.append(1)
+        threads.append(threading.current_thread())
         if len(attempts) < 2:
             raise ProviderError(DEADLINE)
-        return [SimpleNamespace(content='ok', usage=None, provider=provider, model='m')]
-    monkeypatch.setattr(model_bridge, '_achat_result', None)
-    monkeypatch.setattr(model_bridge, 'abatch_result', abatch_result)
+        return SimpleNamespace(content='ok', usage=None, provider=provider, model='m')
+    monkeypatch.setattr(model_bridge, 'chat_result', chat_result)
     assert (await model_bridge._acall('p', [], {})).content == 'ok'
     assert len(attempts) == 2
+    assert threading.main_thread() not in threads          # a blocking SDK never holds the loop
 
 
 def test_a_node_that_timed_out_is_marked_for_the_batch_to_run_again():
@@ -113,3 +115,27 @@ def test_a_stop_ends_the_retries_at_once(monkeypatch):
     finally:
         chat_control.current.reset(token)
     assert len(attempts) == 1
+
+
+def test_a_blocked_model_call_is_given_up_the_moment_it_is_stopped(monkeypatch):
+    """An SDK that blocks for minutes: a Stop returns now, not when it answers."""
+    import threading
+    import time
+    from backend.features.chat import chat_control
+    release = threading.Event()
+
+    def chat_result(provider, messages, **options):
+        release.wait(30)
+        return SimpleNamespace(content='late', usage=None, provider=provider, model='m')
+    monkeypatch.setattr(model_bridge, 'chat_result', chat_result)
+    control = chat_control.Control()
+    token = chat_control.current.set(control)
+    try:
+        threading.Timer(0.3, control.event.set).start()
+        started = time.monotonic()
+        with pytest.raises(chat_control.Cancelled):
+            model_bridge._call('p', [], {})
+        assert time.monotonic() - started < 3
+    finally:
+        chat_control.current.reset(token)
+        release.set()
