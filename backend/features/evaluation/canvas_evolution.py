@@ -144,8 +144,9 @@ def discard_candidate_stores(task_id=None, keep=()):
     return removed
 
 
-def select(graph, name):
-    """The workflow evaluator Evolve optimizes, by name."""
+def select(graph, name, objective=True):
+    """The workflow evaluator a task scores with, by name. `objective`: it
+    has to name the metric to optimize (Evolve), not merely score (Evaluate)."""
     name = evaluator_tools.evaluator_name(name)
     evaluator_tools.validate_graph(graph)
     entry = next((e for e in evaluator_tools.entries(graph)
@@ -156,14 +157,14 @@ def select(graph, name):
     evaluator_tools.validate_entry(entry)
     # A run may fall back to the first metric the code returns; an
     # optimization objective must be the one the user chose.
-    if not entry.get('metric'):
+    if objective and not entry.get('metric'):
         raise SourceError(f"Choose the objective metric of evaluator '{name}' first: preview it on saved results and pick the metric Evolve should optimize.")
     return entry
 
 
 def score_saved(graph, records, name):
     name = evaluator_tools.evaluator_name(name)
-    select(graph, name)
+    select(graph, name, objective=False)
     runs = copy.deepcopy(records)
     result = evaluator_tools.evaluate_runs(graph, runs, [name])[name]
     if result['status'] != 'success':
@@ -215,8 +216,8 @@ def load_rows(graph):
 def settings(graph, body):
     """What the experiment is, checked — without reading any data."""
     from backend.features.data import input_composition as composition
-    select(graph, body.get('evaluator'))
     mode = body.get('mode', 'evaluate')
+    select(graph, body.get('evaluator'), objective=mode != 'evaluate')
     if mode not in ('evaluate', 'evolve_evaluate'):
         raise SourceError('Choose evaluation or evolution with evaluation.')
     shared = _shared_memory(graph)
@@ -412,7 +413,11 @@ def _execute(state, graph, rows, params, stage):
     best_graph['id'] = graph['id']
     best_graph.pop('_workspace_id', None)
     original_tasks = {t['name']: t for t in state['execution_graph']['tasks']}
-    best_graph['evaluators'] = copy.deepcopy(state['execution_graph'].get('evaluators') or [])
+    # The workflow keeps its own evaluators: the code this task scored with
+    # belongs to the task.
+    best_graph['evaluators'] = copy.deepcopy(graph['_workflow_evaluators'] if '_workflow_evaluators' in graph
+                                             else state['execution_graph'].get('evaluators') or [])
+    best_graph.pop('_workflow_evaluators', None)
     state['optimized'] = best
     state['optimized_graph'] = best_graph
     # The held-out answer: decided nothing, so it is the estimate to trust.

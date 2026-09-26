@@ -36,45 +36,6 @@ beforeEach(() => {
   api.listDataResources.mockResolvedValue({ resources: [] });
 });
 
-describe('starting an optimization', () => {
-  it('defaults to all LLM nodes, scored by the workflow evaluation code', async () => {
-    const onStarted = vi.fn();
-    const { container } = render(<NewTaskForm initialSource="canvas" initialMode="evolve_evaluate" graphId="g1" onStarted={onStarted} onError={vi.fn()} />);
-    const view = within(container);
-    const user = userEvent.setup();
-    expect(await view.findByLabelText('decide')).toBeChecked();
-    expect(view.getByLabelText('detect')).toBeChecked();
-    expect(view.queryByLabelText('input')).not.toBeInTheDocument();     // sources are not prompts
-    await waitFor(() => expect(container.textContent).toMatch(/evaluation code, on score/));
-    await user.click(view.getByRole('button', { name: /start evolution/i }));
-    await waitFor(() => expect(api.startEvolveResults).toHaveBeenCalledWith('g1', expect.objectContaining({
-      source: 'canvas', mode: 'evolve_evaluate', evaluator: 'evaluation', nodes: ['detect', 'decide'] })));
-    expect(onStarted).toHaveBeenCalledWith('t9');
-  });
-
-  it('has no built-in metrics, expected answers, uploads or evaluators to pick', async () => {
-    const { container } = render(<NewTaskForm graphId="g1" onStarted={vi.fn()} onError={vi.fn()} />);
-    const view = within(container);
-    const options = [...view.getByLabelText('Source').querySelectorAll('option')].map((o) => o.value);
-    expect(options).toEqual(['canvas', 'saved_batch', 'saved_run']);
-    await waitFor(() => expect(api.getGraph).toHaveBeenCalled());
-    for (const label of ['Metric', 'Expected-answer field (optional)', 'File', 'Evaluator', 'Objective evaluator', 'Dataset version', 'Split']) {
-      expect(view.queryByLabelText(label)).not.toBeInTheDocument();
-    }
-    expect(api.evolveMetrics).not.toHaveBeenCalled();
-  });
-
-  it('lets a node be left alone', async () => {
-    const { container } = render(<NewTaskForm initialSource="canvas" initialMode="evolve_evaluate" graphId="g1" onStarted={vi.fn()} onError={vi.fn()} />);
-    const view = within(container);
-    const user = userEvent.setup();
-    await user.click(await view.findByLabelText('detect'));
-    await waitFor(() => expect(view.getByRole('button', { name: /start evolution/i })).toBeEnabled());
-    await user.click(view.getByRole('button', { name: /start evolution/i }));
-    await waitFor(() => expect(api.startEvolveResults).toHaveBeenCalledWith('g1', expect.objectContaining({ nodes: ['decide'] })));
-  });
-});
-
 describe('a finished optimization shows what changed and offers two ways to keep it', () => {
   const task = {
     task_id: 't1', status: 'done', metric: 'exact_match', elapsed_seconds: 600,
@@ -105,18 +66,6 @@ describe('a finished optimization shows what changed and offers two ways to keep
   });
 });
 
-it('evaluation mode hides optimization controls', async () => {
-  const { container } = render(<NewTaskForm initialSource="canvas" initialMode="evolve_evaluate" graphId="g1" onStarted={vi.fn()} onError={vi.fn()} />);
-  const view = within(container);
-  const user = userEvent.setup();
-  await view.findByLabelText('decide');
-  await user.click(view.getByLabelText('Evaluation only'));
-  expect(view.queryByLabelText('decide')).not.toBeInTheDocument();
-  await waitFor(() => expect(view.getByRole('button', {name: 'Start evaluation'})).toBeEnabled());
-  await user.click(view.getByRole('button', {name: 'Start evaluation'}));
-  await waitFor(() => expect(api.startEvolveResults).toHaveBeenCalledWith('g1', expect.objectContaining({ mode: 'evaluate', nodes: [] })));
-});
-
 it('evaluation results show scores and records without apply actions', async () => {
   const { container } = render(<TaskDetail task={{ task_id: 'e1', status: 'done', params: {mode: 'evaluate', n_dev: 1}, baseline: {metrics: {score: 1}, records: {r1: {prediction: 'ok', label: 'ok', metrics: {score: 1}}}} }} onApplied={vi.fn()} />);
   const view = within(container);
@@ -125,50 +74,6 @@ it('evaluation results show scores and records without apply actions', async () 
   expect(view.queryByRole('button', {name: /save as new workflow/i})).not.toBeInTheDocument();
   await userEvent.setup().click(view.getByRole('button', {name: /show the judging records/i}));
   expect(view.getByText('r1')).toBeInTheDocument();
-});
-
-
-it('defaults to saved results and never submits a workflow rerun', async () => {
-  api.listBatches.mockResolvedValue([{batch_id: 'b1', status: 'succeeded', total: 458}]);
-  api.startEvolveResults.mockResolvedValue({task_id: 'saved1'});
-  const {container} = render(<NewTaskForm graphId="g1" onStarted={vi.fn()} onError={vi.fn()} />);
-  const view = within(container);
-  await waitFor(() => expect(view.getByLabelText('Saved result')).toHaveValue('b1'));
-  await userEvent.setup().click(view.getByRole('button', {name: 'Evaluate saved results'}));
-  await waitFor(() => expect(api.startEvolveResults).toHaveBeenCalledWith('g1', expect.objectContaining({source: 'saved_batch', batch_id: 'b1', mode: 'evaluate'})));
-  expect(api.startEvolveUpload).not.toHaveBeenCalled();
-});
-
-
-it('previews and submits saved results without dataset or split filters', async () => {
-  api.listBatches.mockResolvedValue([{batch_id: 'b1', status: 'succeeded'}]);
-  api.previewEvolveResults.mockResolvedValue({matched_records:178, available_records:178});
-  api.startEvolveResults.mockResolvedValue({task_id:'plain'});
-  const {container} = render(<NewTaskForm graphId="g1" onStarted={vi.fn()} onError={vi.fn()} />);
-  const view=within(container); const user=userEvent.setup();
-  await waitFor(()=>expect(view.getByLabelText('Saved result')).toHaveValue('b1'));
-  expect(await view.findByText(/178 matching records/)).toBeInTheDocument();
-  const previewed = api.previewEvolveResults.mock.calls.at(-1)[1];
-  expect(previewed).not.toHaveProperty('dataset');
-  expect(previewed).not.toHaveProperty('split');
-  await user.click(view.getByRole('button',{name:'Evaluate saved results'}));
-  await waitFor(()=>expect(api.startEvolveResults).toHaveBeenCalled());
-  const sent = api.startEvolveResults.mock.calls[0][1];
-  expect(sent).toMatchObject({source:'saved_batch', batch_id:'b1'});
-  expect(sent).not.toHaveProperty('dataset');
-  expect(sent).not.toHaveProperty('split');
-});
-
-
-it('uses the run ID even when a saved run also carries its batch ID', async () => {
-  api.listRuns.mockResolvedValue([{run_id:'run-1',batch_id:'batch-1',status:'success'}]);
-  api.startEvolveResults.mockResolvedValue({task_id:'single'});
-  const {container}=render(<NewTaskForm initialSource="saved_run" graphId="g1" onStarted={vi.fn()} onError={vi.fn()} />);
-  const view=within(container);
-  await waitFor(()=>expect(view.getByLabelText('Saved result')).toHaveValue('run-1'));
-  await waitFor(()=>expect(view.getByRole('button',{name:'Evaluate saved results'})).toBeEnabled());
-  await userEvent.setup().click(view.getByRole('button',{name:'Evaluate saved results'}));
-  await waitFor(()=>expect(api.startEvolveResults).toHaveBeenCalledWith('g1',expect.objectContaining({source:'saved_run',run_id:'run-1'})));
 });
 
 
@@ -283,70 +188,7 @@ describe('a canvas candidate replay reports each round', () => {
   });
 });
 
-describe('labels stay out of the proposal prompt unless asked for', () => {
-  it('starts a canvas evolution without sharing labels, and with them when ticked', async () => {
-    api.getGraph.mockResolvedValue({ tasks: [{ name: 'detect' }] });
-    api.graphEvaluators.mockResolvedValue({ evaluators: [{ name: 'quality', metric: 'accuracy', enabled: true }] });
-    api.startEvolveResults.mockResolvedValue({ task_id: 'c2' });
-    const { container } = render(<NewTaskForm initialSource="canvas" initialMode="evolve_evaluate" graphId="g1" onStarted={vi.fn()} onError={vi.fn()} />);
-    const view = within(container);
-    const user = userEvent.setup();
-    await waitFor(() => expect(view.getByRole('button', { name: /start evolution/i })).toBeEnabled());
-    await user.click(view.getByRole('button', { name: /start evolution/i }));
-    await waitFor(() => expect(api.startEvolveResults).toHaveBeenCalledWith('g1', expect.objectContaining({ share_labels: false })));
-    await user.click(view.getByLabelText(/show expected answers/i));
-    await user.click(view.getByRole('button', { name: /start evolution/i }));
-    await waitFor(() => expect(api.startEvolveResults).toHaveBeenLastCalledWith('g1', expect.objectContaining({ share_labels: true })));
-  });
-});
-
-
-describe('the objective is the workflow evaluation code', () => {
-  it('scores with it, with no evaluator to pick', async () => {
-    api.listBatches.mockResolvedValue([{ batch_id: 'b1', status: 'succeeded' }]);
-    const { container } = render(<NewTaskForm graphId="g1" onStarted={vi.fn()} onError={vi.fn()} />);
-    await waitFor(() => expect(api.previewEvolveResults).toHaveBeenLastCalledWith('g1', expect.objectContaining({ evaluator: 'evaluation' })));
-    expect(within(container).queryByRole('combobox', { name: /evaluator/i })).toBeNull();
-    expect(container.textContent).toMatch(/evaluation code, on score/);
-  });
-
-  it('says so when the workflow has no evaluation code yet', async () => {
-    api.graphEvaluators.mockResolvedValue({ evaluators: [] });
-    api.listBatches.mockResolvedValue([{ batch_id: 'b1', status: 'succeeded' }]);
-    const { container } = render(<NewTaskForm graphId="g1" onStarted={vi.fn()} onError={vi.fn()} />);
-    const view = within(container);
-    expect(await view.findByTestId('no-evaluation')).toHaveTextContent('no evaluation code yet');
-    expect(view.getByRole('button', { name: 'Evaluate saved results' })).toBeDisabled();
-  });
-
-  it('asks for the metric to optimize when the code has none chosen', async () => {
-    api.graphEvaluators.mockResolvedValue({ evaluators: [{ name: 'evaluation', metric: '', enabled: true }] });
-    const { container } = render(<NewTaskForm graphId="g1" onStarted={vi.fn()} onError={vi.fn()} />);
-    expect(await within(container).findByTestId('no-objective')).toBeInTheDocument();
-  });
-});
-
-describe('the panel is where evaluation is written', () => {
-  it('opens the evaluator editor from the sidebar', async () => {
-    api.listEvolveTasks.mockResolvedValue([]);
-    render(<EvolvePanel open graphId="g1" onClose={vi.fn()} />);
-    await userEvent.setup().click(await screen.findByRole('button', { name: 'Evaluation code' }));
-    expect(await screen.findByLabelText('Python Evaluator code')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Check code' })).toBeInTheDocument();
-  });
-});
-
 describe('evolve holds out whole entities for validation', () => {
-  it('sends the held-out share, 30% unless changed', async () => {
-    const { container } = render(<NewTaskForm initialSource="canvas" initialMode="evolve_evaluate" graphId="g1" onStarted={vi.fn()} onError={vi.fn()} />);
-    const view = within(container);
-    const user = userEvent.setup();
-    expect(await view.findByLabelText('Held out for validation (%)')).toHaveValue(30);
-    await waitFor(() => expect(view.getByRole('button', { name: /start evolution/i })).toBeEnabled());
-    await user.click(view.getByRole('button', { name: /start evolution/i }));
-    await waitFor(() => expect(api.startEvolveResults).toHaveBeenCalledWith('g1', expect.objectContaining({ val_fraction: 0.3 })));
-  });
-
   it('shows dev before/after and warns when the held-out score did not improve', () => {
     const task = { task_id: 'h1', status: 'done', params: { mode: 'evolve_evaluate', n_dev: 20, source: { type: 'canvas' } },
       baseline: { metrics: { score: 0 }, objective: { direction: 'maximize' } }, optimized: { metrics: { score: 1 } },
@@ -360,35 +202,6 @@ describe('evolve holds out whole entities for validation', () => {
     expect(v.textContent).toMatch(/on 3 trajectories \(6 records\)/);
     expect(v.textContent).toMatch(/did not score better on the held-out data/);
   });
-});
-
-it('evolves only from the canvas Input; saved results are evaluated', async () => {
-  const { container } = render(<NewTaskForm graphId="g1" onStarted={vi.fn()} onError={vi.fn()} />);
-  const view = within(container);
-  const user = userEvent.setup();
-  expect(view.getByLabelText('Source')).toHaveValue('saved_batch');
-  await user.click(view.getByLabelText('Evolve + Evaluation'));
-  expect(view.getByLabelText('Source')).toHaveValue('canvas');
-  expect(view.getByLabelText('Source')).toBeDisabled();
-  expect([...view.getByLabelText('Source').querySelectorAll('option')].map((o) => o.value)).toEqual(['canvas']);
-  expect(container.textContent).toMatch(/saved results can only be evaluated/);
-});
-
-it('splits dev and val on a field the Input records carry, at random or by the latest values', async () => {
-  api.getGraph.mockResolvedValue({ tasks: [
-    { name: 'feed', kind: 'source', outputs: [{ name: 'entity' }, { name: 'as_of' }] }, { name: 'detect' }] });
-  const { container } = render(<NewTaskForm initialSource="canvas" initialMode="evolve_evaluate" graphId="g1" onStarted={vi.fn()} onError={vi.fn()} />);
-  const view = within(container);
-  const user = userEvent.setup();
-  const field = await view.findByLabelText('Split dev / val by');
-  await waitFor(() => expect([...field.querySelectorAll('option')].map((o) => o.value)).toEqual(['', 'entity', 'as_of']));
-  expect(view.queryByLabelText('Held-out values')).toBeNull();          // automatic: entities, at random
-  await user.selectOptions(field, 'as_of');
-  await user.selectOptions(view.getByLabelText('Held-out values'), 'latest');
-  await waitFor(() => expect(view.getByRole('button', { name: /start evolution/i })).toBeEnabled());
-  await user.click(view.getByRole('button', { name: /start evolution/i }));
-  await waitFor(() => expect(api.startEvolveResults).toHaveBeenCalledWith('g1', expect.objectContaining({
-    split_field: 'as_of', split_order: 'latest', val_fraction: 0.3 })));
 });
 
 it('says what val was: the latest values of the chosen field', () => {

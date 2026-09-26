@@ -446,6 +446,8 @@ def _run_task(task_id: str, graph_doc: dict, metric: str, params: dict, task_dir
             if params.get('evaluator'):
                 from backend.features.evaluation.canvas_evolution import score_saved
                 state['baseline'] = score_saved(graph_doc, records, params['evaluator'])
+                # Kept with the batch or run too: its Evaluation tab shows it.
+                _keep_report(params.get('source') or {}, state['baseline'].get('evaluations') or {})
             else:
                 state["baseline"] = saved.evaluate(records, metric, params["source"])
             check_stop(state)
@@ -766,10 +768,13 @@ async def preview_saved_evaluation(graph_id: str, request: Request):
         if body.get('evaluator'):
             from backend.features.evaluation.canvas_evolution import select
             from backend.features.evaluation.evaluator_tools import evaluator_name
-            select(graph_store.load_graph(graph_id) or {}, body['evaluator'])
+            select(graph_store.load_graph(graph_id) or {}, body['evaluator'], objective=False)
             return {**selection, 'suggested_metric': 'canvas:' + evaluator_name(body['evaluator']),
                     'scoring': {'scored': None, 'unscored': None, 'total': len(records)},
                     'note': 'The workflow\'s evaluation code will score saved outputs. Preview does not run it.'}
+        if not body.get('metric'):
+            # What is there to evaluate; the code that scores it is the task's.
+            return {**selection, 'scoring': {'scored': None, 'unscored': None, 'total': len(records)}}
         metric = body.get('metric') or saved.default_metric(selection)
         if not any(m['name'] == metric for m in available_metrics()):
             raise sources.SourceError('Choose an available metric.')
@@ -815,12 +820,14 @@ async def start_evolve_task(graph_id: str, request: Request):
             source = {"type": "upload", "filename": upload.filename}
         else:
             body = await request.json() or {}
+            graph, body = _with_evaluation_code(graph_id, graph, body)
             if body.get('source') == 'canvas':
                 from backend.features.evaluation import canvas_evolution
                 # Checked here; the Input is read by the task, where it shows
                 # as a stage and Stop reaches it, not while the request waits.
                 params = canvas_evolution.settings(graph, body)
-                return {'task_id': start_evolve(graph, [], 'canvas:' + params['evaluator'], {**params, 'load_input': True})}
+                return {'task_id': start_evolve(graph, [], 'canvas:' + params['evaluator'],
+                                                {**params, 'load_input': True, **_code_params(graph, body)})}
             if body.get("source") in ("saved_batch", "saved_run"):
                 from backend.api import saved_result_evolution as saved
                 records, source = saved.resolve(graph_id, body)
@@ -828,7 +835,7 @@ async def start_evolve_task(graph_id: str, request: Request):
                 if body.get('evaluator'):
                     from backend.features.evaluation.canvas_evolution import select
                     from backend.features.evaluation.evaluator_tools import evaluator_name
-                    select(graph, body['evaluator'])
+                    select(graph, body['evaluator'], objective=False)
                     metric = 'canvas:' + evaluator_name(body['evaluator'])
                 elif not any(m["name"] == metric for m in available_metrics()):
                     raise sources.SourceError("Choose an available metric.")
@@ -846,7 +853,8 @@ async def start_evolve_task(graph_id: str, request: Request):
                 if not isinstance(body.get("share_labels", False), bool):
                     raise sources.SourceError("share_labels must be true or false.")
                 params = {"mode": mode, "source": source, "nodes": chosen, "n_dev": len(records), "n_train": 0, "evaluator": body.get("evaluator"),
-                          "label_key": body.get("label_key") or None, "share_labels": body.get("share_labels", False)}
+                          "label_key": body.get("label_key") or None, "share_labels": body.get("share_labels", False),
+                          **_code_params(graph, body)}
                 from backend.features.evaluation.evaluator_tools import evaluator_name
                 params["evaluator"] = evaluator_name(params["evaluator"]) if params.get("evaluator") else None
                 return {"task_id": start_evolve(graph, records, metric, params)}
@@ -869,6 +877,69 @@ async def start_evolve_task(graph_id: str, request: Request):
 
     task_id = start_evolve(graph, records, metric, params)
     return {"task_id": task_id}
+
+
+EVALUATION_NAME = "evaluation"
+
+
+def _keep_report(source: dict, reports: dict) -> None:
+    if not reports:
+        return
+    try:
+        if source.get("batch_id"):
+            from backend.api import batch
+            batch.set_evaluations(source["batch_id"], reports)
+        elif source.get("run_id"):
+            from backend.api import runner
+            runner.set_evaluations(source["run_id"], reports)
+    except Exception:
+        pass                                  # the task keeps its report regardless
+
+
+def _with_evaluation_code(graph_id: str, graph: dict, body: dict) -> tuple[dict, dict]:
+    """The workflow as this task runs it: carrying the one evaluation it uses.
+
+    An evaluation brings its code (`code`, with its parameters); an Evolve
+    names the evaluation it continues (`from_evaluation`) and takes that code,
+    with the metric and direction to optimize. Either way the evaluation lives
+    with the task — the workflow itself is not changed.
+    """
+    from backend.features.evaluation import evaluator_tools
+    body = dict(body)
+    if body.get("mode") == "evolve":
+        body["mode"] = "evolve_evaluate"
+    entry = None
+    if (body.get("code") or "").strip():
+        entry = evaluator_tools._ad_hoc({**body, "name": EVALUATION_NAME})
+        body["mode"] = "evaluate"            # code is evaluated; Evolve continues an evaluation
+    elif body.get("from_evaluation"):
+        prior = get_task(str(body["from_evaluation"]))
+        if prior is None or prior.get("graph_id") != graph_id:
+            raise sources.SourceError("Choose an evaluation of this workflow to evolve from.")
+        if (prior.get("params") or {}).get("mode") != "evaluate" or prior.get("status") != "done":
+            raise sources.SourceError("Evolve from a finished evaluation.")
+        kept = (prior.get("params") or {}).get("evaluator_entry")
+        if kept is None:                     # an evaluation of a workflow evaluator, from before
+            kept = evaluator_tools.find(graph, (prior.get("params") or {}).get("evaluator") or "")
+        if not kept:
+            raise sources.SourceError("That evaluation kept no code to evolve with. Run the evaluation again.")
+        entry = {**copy.deepcopy(kept), "name": EVALUATION_NAME, "enabled": True, "timing": "manual",
+                 "metric": body.get("metric") or kept.get("metric") or "",
+                 "direction": body.get("direction") or kept.get("direction") or "maximize"}
+        if not entry["metric"]:
+            raise sources.SourceError("Choose the metric of that evaluation to optimize.")
+    if entry is None:
+        return graph, body
+    graph = {**graph, "evaluators": [entry], "_workflow_evaluators": copy.deepcopy(graph.get("evaluators") or [])}
+    return graph, {**body, "evaluator": EVALUATION_NAME}
+
+
+def _code_params(graph: dict, body: dict) -> dict:
+    """What a task keeps of the evaluation it ran with, to be evolved from."""
+    if "_workflow_evaluators" not in graph:
+        return {}
+    return {"evaluator_entry": copy.deepcopy(graph["evaluators"][0]),
+            **({"from_evaluation": body["from_evaluation"]} if body.get("from_evaluation") else {})}
 
 
 @router.post("/evolve/{task_id}/stop")

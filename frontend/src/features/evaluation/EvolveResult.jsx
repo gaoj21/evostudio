@@ -84,7 +84,7 @@ function Validation({ validation }) {
   </section>;
 }
 
-export function TaskDetail({ task, onApplied, onStopped }) {
+export function TaskDetail({ task, onApplied, onStopped, onEvolve }) {
   const [applying, setApplying] = useState(null);
   const [applyError, setApplyError] = useState(null);
   const [stopping, setStopping] = useState(false);
@@ -151,6 +151,10 @@ export function TaskDetail({ task, onApplied, onStopped }) {
           : 'Stops at the next record; nothing is applied.'}</span>
       </div>}
       {task.status === 'stopped' && <p className="muted small" role="status">Stopped before it finished; nothing was applied.</p>}
+      {evaluationOnly && task.status === 'done' && onEvolve && <div className="evolve-apply">
+        <button type="button" className="primary" onClick={() => onEvolve(task.task_id)}>Evolve from this evaluation</button>
+        <span className="muted small">Optimizes one of this report&apos;s metrics, scored by the same code.</span>
+      </div>}
       {task.status === 'interrupted' && <p className="muted small" role="status">Interrupted: the server restarted while this task was running. Start it again to get a result.</p>}
       {task.status !== 'done' && applyError && <div className="muted small batch-error">{String(applyError)}</div>}
       {task.error && <pre className="json-view batch-output batch-error">{task.error}</pre>}

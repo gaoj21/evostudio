@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../api.js';
-import EvaluatePanel from './EvaluatePanel.jsx';
 import { NewTaskForm } from './EvolveForm.jsx';
 import { TaskDetail } from './EvolveResult.jsx';
 import { elapsed, fmt } from './format.js';
@@ -15,9 +14,8 @@ export default function EvolvePanel({ open, graphId, onClose, onApplied }) {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState(null);
   const [showForm, setShowForm] = useState(false);
-  // 'evolve' is the run form and its history; 'evaluate' is where evaluation
-  // itself is written, now that no node carries it.
-  const [view, setView] = useState('evolve');
+  // What the form opens on: a fresh run, or Evolve continuing an evaluation.
+  const [formStart, setFormStart] = useState({ key: 0, mode: 'evaluate', evaluation: '' });
   const pollRef = useRef(null);
   const graphRef = useRef(graphId);
 
@@ -25,7 +23,7 @@ export default function EvolvePanel({ open, graphId, onClose, onApplied }) {
   // one would show (and apply) another workflow's result.
   useEffect(() => {
     graphRef.current = graphId;
-    setTasks([]); setSelectedId(null); setDetail(null); setError(null); setShowForm(false); setView('evolve');
+    setTasks([]); setSelectedId(null); setDetail(null); setError(null); setShowForm(false);
   }, [graphId]);
 
   const refresh = async () => {
@@ -84,11 +82,8 @@ export default function EvolvePanel({ open, graphId, onClose, onApplied }) {
         )}
         <div className="evolve-body">
           <div className="evolve-sidebar">
-            <button className={view === 'evolve' && showForm ? 'primary' : ''} onClick={() => { setView('evolve'); setShowForm(true); setSelectedId(null); }} disabled={!graphId}>
+            <button className={showForm ? 'primary' : ''} onClick={() => { setFormStart((f) => ({ key: f.key + 1, mode: 'evaluate', evaluation: '' })); setShowForm(true); setSelectedId(null); }} disabled={!graphId}>
               + New run
-            </button>
-            <button type="button" className={view === 'evaluate' ? 'primary' : ''} onClick={() => { setView('evaluate'); setShowForm(false); setSelectedId(null); }} disabled={!graphId}>
-              Evaluation code
             </button>
             {running > 0 && <div className="muted small">{running} running — you can close this window.</div>}
             <div className="evolve-task-list">
@@ -96,7 +91,7 @@ export default function EvolvePanel({ open, graphId, onClose, onApplied }) {
                 <div
                   key={t.task_id}
                   className={`evolve-task ${t.task_id === selectedId ? 'selected' : ''}`}
-                  onClick={() => { setView('evolve'); select(t.task_id); }}
+                  onClick={() => select(t.task_id)}
                 >
                   <div className="batch-item-head">
                     <span>{t.params?.mode === 'evaluate' ? 'Evaluation' : `Evolve · ${t.params?.preset || t.task_id}`}</span>
@@ -116,16 +111,18 @@ export default function EvolvePanel({ open, graphId, onClose, onApplied }) {
             </div>
           </div>
           <div className="evolve-main">
-            {view === 'evaluate' ? (
-              <EvaluatePanel graphId={graphId} />
-            ) : showForm ? (
+            {showForm ? (
               <NewTaskForm
+                key={formStart.key}
+                initialMode={formStart.mode}
+                initialEvaluation={formStart.evaluation}
                 graphId={graphId}
                 onStarted={(id) => { setShowForm(false); select(id); }}
                 onError={setError}
               />
             ) : detail ? (
-              <TaskDetail key={detail.task_id} task={detail} onStopped={() => { refresh(); select(detail.task_id); }} onApplied={(g, mode) => { onApplied?.(g, mode); onClose(); }} />
+              <TaskDetail key={detail.task_id} task={detail} onStopped={() => { refresh(); select(detail.task_id); }} onApplied={(g, mode) => { onApplied?.(g, mode); onClose(); }}
+                onEvolve={(evaluationId) => { setFormStart((f) => ({ key: f.key + 1, mode: 'evolve', evaluation: evaluationId })); setShowForm(true); setSelectedId(null); }} />
             ) : (
               <p className="muted">Select a run or start a new one.</p>
             )}

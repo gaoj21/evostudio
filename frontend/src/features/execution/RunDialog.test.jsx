@@ -470,7 +470,7 @@ describe('the batch preview is authoritative', () => {
   it('leaves scoring to the workflow evaluation code', async () => {
     const user = open();
     await batchTab(user);
-    expect(await screen.findByTestId('evaluation-note')).toHaveTextContent('workflow\'s evaluation code');
+    expect(await screen.findByTestId('evaluation-note')).toHaveTextContent('New run → Evaluation');
     expect(screen.queryByLabelText(/score the results/i)).not.toBeInTheDocument();
     await waitFor(() => expect(api.previewBatchCanvas).toHaveBeenCalled());
     expect(api.previewBatchCanvas.mock.calls.at(-1)[1]).not.toHaveProperty('metric');

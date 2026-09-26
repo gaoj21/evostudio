@@ -2,8 +2,8 @@
 
 评测不在画布上：画布没有 evaluator 节点，评测代码写在 Evaluation & Evolve 弹窗里。
 
-- `EvolvePanel.jsx`：弹窗外壳、历史列表、轮询、以及 Evolve / Evaluation code 两个视图的切换。每个 workflow 只有一份评估代码（在 Evaluation code 里粘贴或上传），Evaluate 和 Evolve 都用它打分；没有内置 metric，也没有“新建/选择 evaluator”。
-- `EvaluatePanel.jsx`：写评测代码 → Check code 读参数 → 选已保存的 batch/run → Preview（不保存）/ Run（保存报告）→ 选指标 → 存为 workflow 的 evaluator（名称、时机、超时、标签），并管理已保存列表（编辑/运行/启停/删除）。
+- `EvolvePanel.jsx`：弹窗外壳、历史列表、轮询、和 New run。New run 有两种：Evaluation（在表单里粘贴/上传评估代码，对已保存结果或画布 Input 评估，代码随这次评估保存）和 Evolve（接着一次已完成的评估，用它的代码，选它报告里的一个指标来优化）。
+- `EvaluationCode.jsx`：评估代码：粘贴/上传、从代码读参数、草稿保存、时间限制和标签。只在 New run → Evaluation 里用，不存到 workflow 上。
 - `EvaluatorParams.jsx`：把 `/api/evaluators/interface` 返回的 params 渲染成表单（按类型、默认值、必填、报错行）。
 - `draftStore.js`：粘贴的代码草稿在浏览器里的镜像；服务端 `evaluators/draft` 才是真值。
 - `EvolveForm.jsx`：来源、Run/Batch、数据集、dev/test、模式及参数选择；目标 evaluator 来自 `graph.evaluators`。
