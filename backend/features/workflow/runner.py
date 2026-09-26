@@ -107,6 +107,147 @@ def _ltm_turn(key: str, state: dict):
         lock.release()
 
 
+class _Reader:
+    def __init__(self, version, memory):
+        self.version, self.memory, self.users = version, memory, 0
+
+
+# The copy of each store runs read from, while the store on disk is unchanged.
+# Opening a store loads its whole corpus — seconds on a large one — and every
+# record of a batch chunk opened its own at the same moment to read the same
+# thing. Runs only read these (writes go through _write_shared), so the
+# records of a chunk share one; a store saved since is opened afresh.
+_readers: dict[str, _Reader] = {}
+_reader_of: dict[int, tuple[str, _Reader]] = {}
+
+
+def _store_version(graph_id: str, node_name: str):
+    try:
+        stat = (memory_store.store_dir(graph_id, node_name) / "memory.db").stat()
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+def _open_reader(graph_id: str, node_name: str, create: bool):
+    """This store to read from, shared while it is unchanged on disk.
+    Called with the node's memory lock held."""
+    key = f"{graph_id}/{node_name}"
+    version = _store_version(graph_id, node_name)
+    with _ltm_locks_guard:
+        reader = _readers.get(key)
+        if version is not None and reader is not None and reader.version == version:
+            reader.users += 1
+            return reader.memory
+    memory = memory_store.open_memory(graph_id, node_name, create=create)
+    if memory is None:
+        return None
+    version = _store_version(graph_id, node_name)
+    with _ltm_locks_guard:
+        reader = _Reader(version, memory)
+        reader.users = 1
+        if version is not None:
+            _readers[key] = reader               # an older copy stays until its users are done
+        _reader_of[id(memory)] = (key, reader)
+    return memory
+
+
+def _release_reader(memory) -> None:
+    """A run is done reading; the last one out closes the copy."""
+    if memory is None:
+        return
+    with _ltm_locks_guard:
+        found = _reader_of.get(id(memory))
+        if found is None:
+            closing = True                       # not a shared copy (Mem0, say): its own to close
+        else:
+            key, reader = found
+            reader.users -= 1
+            closing = reader.users <= 0
+            if closing:
+                _reader_of.pop(id(memory), None)
+                if _readers.get(key) is reader:
+                    _readers.pop(key, None)
+    if closing:
+        memory_store.close_memory(memory)
+
+
+class _SharedStore:
+    """One node's store while records are writing to it: opened once,
+    written by each, saved once by the last to leave."""
+
+    def __init__(self):
+        self.memory = None          # opened (under the node lock) by the first writer
+        self.dirty = False
+        self.pending = 0            # writers between joining and leaving
+        self.flushes = 0            # saves done so far
+        self.errors = {}            # flush number -> why that save failed
+        self.cond = threading.Condition()
+
+
+_shared_stores: dict[str, _SharedStore] = {}
+# How long the last writer waits for the next before saving: the records of a
+# chunk finish within moments of each other, and one save covers them all.
+SAVE_GRACE_SECONDS = 0.25
+
+
+def _write_shared(graph_id: str, node_name: str, state: dict, write) -> None:
+    """Add this run's entry to the node's shared store, and return once it is
+    saved to disk. All reads, writes and saves happen under the node's lock,
+    and the store is re-read from disk after every save, so no write is ever
+    made through a stale copy."""
+    key = f"{graph_id}/{node_name}"
+    with _ltm_locks_guard:
+        shared = _shared_stores.setdefault(key, _SharedStore())
+    with shared.cond:
+        shared.pending += 1
+        shared.cond.notify_all()             # a last writer in its grace wait: here is another
+    target = None
+    try:
+        with _ltm_turn(key, state):
+            if shared.memory is None:
+                shared.memory = memory_store.open_memory(graph_id, node_name, create=True)
+            write(shared.memory)
+            shared.dirty = True
+            target = shared.flushes + 1          # the save that will hold this entry
+    finally:
+        with shared.cond:
+            shared.pending -= 1
+            last = shared.pending == 0
+            if last and target is not None and not _stop_requested(state):
+                shared.cond.wait_for(lambda: shared.pending > 0, timeout=SAVE_GRACE_SECONDS)
+                last = shared.pending == 0
+        if last:
+            # Even a stopped run saves what the others wrote before it.
+            failure = None
+            with _ltm_lock(key):
+                try:
+                    if shared.dirty and shared.memory is not None:
+                        shared.memory.save()
+                except Exception as error:
+                    failure = error
+                finally:
+                    memory_store.close_memory(shared.memory)
+                    shared.memory, shared.dirty = None, False
+                    with shared.cond:
+                        shared.flushes += 1
+                        if failure is not None:
+                            shared.errors[shared.flushes] = failure
+                        shared.cond.notify_all()
+            if failure is not None and target is not None:
+                raise failure
+        if not last and target is not None:
+            # Returning means saved: a run that succeeded has its memory on disk.
+            # Its entry is in, so it is committed — a Stop now does not undo it
+            # (the others skip their writes, and the save comes at once).
+            with shared.cond:
+                while shared.flushes < target:
+                    shared.cond.wait(0.2)
+                failure = shared.errors.get(target)
+            if failure is not None:
+                raise RuntimeError(f"Saving memory '{node_name}' failed: {failure}") from failure
+
+
 def _ltm_lock(key: str) -> threading.Lock:
     with _ltm_locks_guard:
         return _ltm_locks.setdefault(key, threading.Lock())
@@ -845,7 +986,7 @@ def _execute_run(run_id: str, graph_doc: dict, inputs: dict) -> None:
         # Every store this run opened, closed now rather than whenever the
         # garbage collector gets to them: a batch opens them per record.
         for opened in (state.get("_harness_memories") or {}).values():
-            memory_store.close_memory(opened)
+            _release_reader(opened)
         persisted = _persist_run(state)
         if not persisted:
             state["persistence_error"] = "Run completed in memory but could not be saved. Restore disk access before recovery."
@@ -1005,7 +1146,7 @@ def _prepare_ltm(graph_doc: dict, ordered: list[dict], inputs: dict, state: dict
             continue
         try:
             with _ltm_lock(f"{graph_id}/{name}"):
-                memories[name] = memory_store.open_memory(graph_id, name, create=True)
+                memories[name] = _open_reader(graph_id, name, create=True)
         except Exception:
             state["memory_error"] = traceback.format_exc()
 
@@ -1029,7 +1170,7 @@ def _prepare_ltm(graph_doc: dict, ordered: list[dict], inputs: dict, state: dict
                 continue
             try:
                 with _ltm_lock(f"{graph_id}/{name}"):
-                    opened = memory_store.open_memory(graph_id, name, create=False)
+                    opened = _open_reader(graph_id, name, create=False)
                 if opened is not None:
                     memories[name] = opened
             except Exception:
@@ -1243,23 +1384,17 @@ def _save_ltm(graph_doc: dict, memories: dict, graph, wf, state: dict,
                     f"Switch Write mode to Append to keep records without an entity."
                 )
                 continue
-            with _ltm_turn(f"{graph_id}/{node.name}", state):
-                # Re-opened inside the lock rather than written through the
-                # copy this run has been holding since it started. `save()`
-                # writes the whole corpus, and that copy was loaded minutes
-                # ago — before the other items of a batch wrote theirs. Adding
-                # to it and saving would put the store back as it was and lose
-                # every entry written in between.
-                if (task.get("memory") or {}).get("provider") == "mem0":
-                    fresh = memory
-                else:
-                    fresh = memory_store.open_memory(graph_id, node.name, create=True)
-                try:
-                    _write_entry(fresh, graph_id, node.name, task, payload, as_message)
-                    fresh.save()
-                finally:
-                    if fresh is not memory:
-                        memory_store.close_memory(fresh)
+            if (task.get("memory") or {}).get("provider") == "mem0":
+                with _ltm_turn(f"{graph_id}/{node.name}", state):
+                    _write_entry(memory, graph_id, node.name, task, payload, as_message)
+                    memory.save()
+                continue
+            # Written into the store every record of the moment shares, and
+            # saved once — by the last of them — for all: saving rewrites the
+            # whole corpus, and one save per record made the end of every
+            # batch chunk a queue of full rewrites.
+            _write_shared(graph_id, node.name, state,
+                          lambda store: _write_entry(store, graph_id, node.name, task, payload, as_message))
         except Exception:
             state["memory_error"] = traceback.format_exc()
 
