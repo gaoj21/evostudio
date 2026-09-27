@@ -49,6 +49,7 @@ def discard_candidate_batches(batch_ids):
             batch._batches.pop(batch_id, None)
             batch._threads.pop(batch_id, None)
         (batch.BATCHES_DIR / f'{batch_id}.json').unlink(missing_ok=True)
+        batch._journal_path(batch_id).unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------

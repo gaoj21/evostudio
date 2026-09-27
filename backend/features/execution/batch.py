@@ -248,7 +248,7 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
         try:
             # A crash after Run completion must leave an ID recovery can reconcile.
             with _lock:
-                _persist_batch(state)
+                _persist_item(state, item)
             runner.start_run(graph, record, background=False,
                              gray_zone=state.get("gray_zone"),
                              run_id=item["run_id"], batch_id=batch_id,
@@ -271,6 +271,7 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
                     item["output_summary"] = _summarize(
                         json.dumps(run.get("result"), ensure_ascii=False, default=str)
                     )
+                _persist_item(state, item)
             if state.get("metric") and run.get("status") == "success":
                 _score_item(state, item, run.get("result"))
         except Exception as e:
@@ -775,7 +776,7 @@ def mark_interrupted() -> int:
     for path in BATCHES_DIR.glob("*.json"):
         try:
             with open(path, encoding="utf-8") as f:
-                data = json.load(f)
+                data = _with_journal(path.stem, json.load(f))
         except (json.JSONDecodeError, OSError):
             continue
         if data.get("status") not in ("running", "cancelling"):
@@ -791,22 +792,76 @@ def mark_interrupted() -> int:
                 item["status"] = "failed"
                 item["error"] = "Interrupted by a server restart."
         try:
-            write_json(path, data)
+            write_json(path, data, indent=None)
+            _journal_path(path.stem).unlink(missing_ok=True)
             marked += 1
         except OSError:
             continue
     return marked
 
 
+# A batch's file holds every record, and rewriting it whole for each record
+# made a long batch spend more time saving itself the longer it ran — and on
+# a synced folder, far more. Each record's changes go to an append-only
+# journal beside it instead; the whole file is written at most every few
+# seconds (and always at the end), and a reader applies the journal on top.
+JOURNAL_SUFFIX = ".items.jsonl"
+SNAPSHOT_SECONDS = 2.0
+_JOURNALED = ("index", "run_id", "status", "error", "attempt_started_at", "part", "attempts",
+              "retryable", "review_status", "output_summary", "token_usage", "score", "score_detail")
+_PRIVATE = ("persistence_error", "_snapshot_at")
+
+
+def _journal_path(batch_id: str):
+    return BATCHES_DIR / f"{batch_id}{JOURNAL_SUFFIX}"
+
+
 def _persist_batch(state: dict) -> None:
+    """The whole batch to disk; the journal it supersedes is dropped."""
     BATCHES_DIR.mkdir(parents=True, exist_ok=True)
-    data = {k: v for k, v in state.items() if k != "persistence_error"}
+    data = {k: v for k, v in state.items() if k not in _PRIVATE}
     try:
-        write_json(BATCHES_DIR / f"{state['batch_id']}.json", data)
+        write_json(BATCHES_DIR / f"{state['batch_id']}.json", data, indent=None)
+        _journal_path(state["batch_id"]).unlink(missing_ok=True)
+        state["_snapshot_at"] = time.monotonic()
         state.pop("persistence_error", None)
     except OSError as exc:
         state["persistence_error"] = f"Could not save batch: {exc}"
         raise
+
+
+def _persist_item(state: dict, item: dict) -> None:
+    """One record's change, durably and cheaply. Called with _lock held."""
+    if time.monotonic() - state.get("_snapshot_at", 0.0) >= SNAPSHOT_SECONDS:
+        _persist_batch(state)
+        return
+    line = {key: item[key] for key in _JOURNALED if key in item}
+    try:
+        with open(_journal_path(state["batch_id"]), "a", encoding="utf-8") as stream:
+            stream.write(json.dumps(line, ensure_ascii=False, default=str) + "\n")
+    except OSError:
+        _persist_batch(state)
+
+
+def _with_journal(batch_id: str, data: dict) -> dict:
+    """A batch read from disk, with what was journaled since its snapshot."""
+    path = _journal_path(batch_id)
+    if not path.is_file():
+        return data
+    by_index = {item.get("index"): item for item in data.get("items") or []}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return data
+    for raw in lines:
+        try:
+            change = json.loads(raw)
+        except ValueError:
+            continue                      # a line cut off by a crash
+        item = by_index.get(change.get("index"))
+        if item is not None:
+            item.update(change)
+    return data
 
 
 def retry_persistence(batch_id):
@@ -989,7 +1044,7 @@ def _read_batch(batch_id: str) -> dict | None:
         return None
     try:
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
+            return _with_journal(batch_id, json.load(f))
     except (json.JSONDecodeError, OSError):
         return None
 
