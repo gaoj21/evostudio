@@ -37,14 +37,27 @@ def list_agents(graph_id: str) -> list[str]:
     return display_names(graph_id, [p.name for p in base.iterdir() if p.is_dir()])
 
 
+def _off_the_loop(call, *args, **kwargs):
+    """Run `call` here — or on a helper thread when this thread runs an event
+    loop: the framework opens and searches its index with asyncio.run(),
+    which refuses to run inside one (a workflow node, an async route)."""
+    import asyncio
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return call(*args, **kwargs)
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(call, *args, **kwargs).result()
+
+
 def open_memory(graph_id: str, agent: str, create: bool = False):
     """Open the LongTermMemory for a graph/agent store, loading saved data.
 
     Returns None when the store does not exist and create=False.
     """
-    return _backend().open_memory(
-        store_dir(graph_id, agent), corpus_id(graph_id, agent), create=create
-    )
+    return _off_the_loop(_backend().open_memory,
+                         store_dir(graph_id, agent), corpus_id(graph_id, agent), create=create)
 
 
 def close_memory(memory) -> None:
@@ -71,6 +84,17 @@ def close_memory(memory) -> None:
             connection.close()
         except Exception:
             pass
+
+
+def search(memory, query: str, n: int = 5) -> list:
+    """[(Message, memory_id)] for `query` — the second item is the entry's
+    id, never a score.
+
+    The framework's search is `asyncio.run(...)` inside, which refuses to run
+    in a thread that already has an event loop (a workflow node, an async
+    route); there it runs on a helper thread instead.
+    """
+    return _off_the_loop(memory.search, query, n=n)
 
 
 def list_entries(graph_id: str, agent: str) -> list[dict]:

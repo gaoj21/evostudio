@@ -62,7 +62,10 @@ def search_memory(
             memory = memory_store.open_memory(graph_id, agent)
             if memory is None:
                 return {"agent": agent, "query": q, "entries": []}
-            hits = memory.search(q, n=n)
+            try:
+                hits = memory_store.search(memory, q, n=n)
+            finally:
+                memory_store.close_memory(memory)
             entries = [
                 {
                     "memory_id": memory_id,

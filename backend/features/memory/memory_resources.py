@@ -42,11 +42,18 @@ def read(graph, resource, query='', limit=10, before=None, offset=0):
                 and (not before or memory_policy._earlier(r['at'], before))]
         rows.sort(key=lambda r: (r['at'], r['subject']), reverse=True)
         return [{'subject': r['subject'], 'at': r['at'], 'content': r['payload']} for r in rows[offset:offset + limit]]
+    if not query:
+        return memory_store.list_entries(graph['id'], resource['node'])[:limit]
     store = memory_store.open_memory(graph['id'], resource['node'], create=False)
     if store is None: return []
-    if not query: return memory_store.list_entries(graph['id'], resource['node'])[:limit]
     from memory import unquote_content
-    return [{'content': str(unquote_content(message.content)), 'score': float(score)} for message, score in store.search(query, n=limit)]
+    try:
+        hits = memory_store.search(store, query, n=limit)
+    finally:
+        memory_store.close_memory(store)
+    # Ranked by relevance, best first; the second item is the entry's id.
+    return [{'content': str(unquote_content(message.content)), 'memory_id': str(memory_id), 'rank': rank}
+            for rank, (message, memory_id) in enumerate(hits, start=1)]
 
 
 def preview(graph, resource, query, limit=5):

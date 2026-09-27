@@ -121,13 +121,16 @@ def search_memory(session: str, query: str) -> list[str]:
     memory = _open_memory(session, create=False)
     if memory is None:
         return []
+    from backend.features.memory import memory_store
     try:
         from memory import unquote_content
 
         return [str(unquote_content(msg.content))[:800]
-                for msg, _ in memory.search(query, n=MEMORY_HITS)]
+                for msg, _ in memory_store.search(memory, query, n=MEMORY_HITS)]
     except Exception as e:
         raise AgentError(f"memory search failed: {e}")
+    finally:
+        memory_store.close_memory(memory)
 
 
 def remember(session: str, text: str) -> str:
