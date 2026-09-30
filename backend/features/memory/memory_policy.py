@@ -446,7 +446,7 @@ async def _search(memory, query: str, n: int):
     The framework backend's `search()` wraps its own implementation in
     `asyncio.run()`, which raises when there is already a loop running — and
     recall happens inside the workflow's loop. Its async entry point is used
-    where there is one; the langchain backend has only the synchronous call,
+    where there is one; the langgraph backend has only the synchronous call,
     so that goes to a worker thread rather than blocking the loop.
     """
     search_async = getattr(memory, "search_async", None)

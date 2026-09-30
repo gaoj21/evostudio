@@ -633,7 +633,8 @@ async def execute_llm_node(agent, task: dict, inputs: dict, state: dict) -> dict
     """
     from evoagentx.core.message import MessageType
 
-    if (task.get('harness') or {}).get('engine') == 'deepagents':
+    from backend.features.agents.graph_agent import is_agent_engine
+    if is_agent_engine(task.get('harness')):
         from backend.api.harness import run_workflow_node
         block = ''
         if task.get('use_long_term_memory'):

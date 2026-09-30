@@ -17,7 +17,7 @@ def client(tmp_path, monkeypatch):
 def test_agent_settings_scope_and_sessions(client):
     root = '/api/graphs/a/agents'
     agent = client.post(root, json={}).json()
-    assert client.get(root).json()['agents'][0]['engine'] == 'deepagents'
+    assert client.get(root).json()['agents'][0]['engine'] == 'langgraph'
     assert client.get('/api/graphs/b/agents').json() == {'agents': []}
     assert client.post(f'/api/graphs/b/agents/{agent["id"]}/sessions').status_code == 404
     assert client.post(root, json={'memories': [{'space_id': 'b' * 32}]}).status_code == 422

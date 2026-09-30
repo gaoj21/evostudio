@@ -4,7 +4,8 @@
 
 ## 文件职责
 
-- `harness.py` — Deep Agents runtime shared by standalone canvas conversations.
+- `harness.py` — the Chat Agent runtime shared by canvas conversations and agent nodes.
+- `graph_agent.py` — the agent itself: a LangGraph graph (model ⇄ tools), with a plan and scratch files in its state.
 - `harness_api.py` — Durable, independently runnable canvas Agents and chat sessions.
 
 ## 修改边界

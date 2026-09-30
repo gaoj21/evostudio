@@ -42,7 +42,7 @@ dependencies = [
 evoagentx-studio = "backend.api.app:main"
 
 [project.optional-dependencies]
-harness = ["deepagents==0.7.13", "langgraph==1.2.11", "langgraph-checkpoint-sqlite==3.1.1", "langchain-litellm==0.7.1", "langchain-openai==1.6.1", "langchain-google-genai==4.3.7", "google-genai<2"]
+harness = ["langgraph==1.2.11", "langgraph-checkpoint-sqlite==3.1.1", "sqlite-vec", "langchain-litellm==0.7.1", "langchain-openai==1.6.1", "langchain-google-genai==4.3.7", "google-genai<2"]
 mem0 = ["mem0ai==2.0.20", "sentence-transformers", "ollama"]
 dev = [
     "pytest",

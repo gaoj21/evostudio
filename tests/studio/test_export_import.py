@@ -87,7 +87,7 @@ class TestGeneratedProject:
         )
         text = read(build(with_memory), "requirements.txt")
         assert "EAX_MEMORY_BACKEND=framework" in text
-        assert "EAX_MEMORY_BACKEND=langchain" in text
+        assert "EAX_MEMORY_BACKEND=langgraph" in text
 
 
 class TestRoundTrip:

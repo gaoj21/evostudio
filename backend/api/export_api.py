@@ -126,11 +126,11 @@ def _requirements(needs_memory: bool = False) -> str:
         if extras:
             text += ("\n# Long-term memory, EAX_MEMORY_BACKEND=framework (default):\n"
                      + "\n".join(extras) + "\n")
-        text += ("\n# Long-term memory, EAX_MEMORY_BACKEND=langchain — uncomment\n"
+        text += ("\n# Long-term memory, EAX_MEMORY_BACKEND=langgraph — uncomment\n"
                  "# instead of the block above if you switch backends:\n"
-                 "# langchain-community\n"
-                 "# langchain-huggingface\n"
-                 "# faiss-cpu==1.8.0.post1\n"
+                 "# langgraph\n"
+                 "# langgraph-checkpoint-sqlite\n"
+                 "# sqlite-vec\n"
                  "# sentence-transformers\n")
     return text
 
@@ -449,8 +449,9 @@ def project_files(graph: dict, include_vendor: bool = True) -> tuple[dict, dict]
     tasks = graph.get("tasks", []) or []
     if graph.get('evaluators') or any((t.get('source') or {}).get('type') == 'dataloader' for t in tasks):
         raise HTTPException(422, 'DataLoader and Evaluator workflows run in Studio. Export the graph JSON to preserve their configuration; standalone Python export is not supported.')
-    if any((t.get('harness') or {}).get('engine') == 'deepagents' for t in tasks):
-        raise HTTPException(422, 'Standalone export of Deep Agents harness nodes is not supported yet. Run this workflow in the platform.')
+    from backend.features.agents.graph_agent import is_agent_engine
+    if any(is_agent_engine(t.get('harness')) for t in tasks):
+        raise HTTPException(422, 'Standalone export of LangGraph agent nodes is not supported yet. Run this workflow in the platform.')
     if any(t.get('use_long_term_memory') and (t.get('memory') or {}).get('provider') == 'mem0' for t in tasks):
         raise HTTPException(422, 'Standalone export of shared Mem0 spaces is not supported yet. Run this task in the platform, or use a separate copy without the Mem0 binding.')
     edges = graph.get("edges", []) or []
@@ -535,7 +536,7 @@ def project_files(graph: dict, include_vendor: bool = True) -> tuple[dict, dict]
         "# A different provider from vendor/llm/providers.json:\n"
         "# EAX_PROVIDER=openrouter\n"
         "\n"
-        "# EAX_MEMORY_BACKEND=langchain  # default: framework\n"
+        "# EAX_MEMORY_BACKEND=langgraph  # default: framework\n"
     )
     files["README.md"] = _readme(
         name, goal, llm_tasks, tool_nodes, source_nodes, edges,

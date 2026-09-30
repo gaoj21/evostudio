@@ -146,7 +146,8 @@ def validate(graph, value):
     size = batch_size(value)
     if size is not None:
         function = batch_function()
-        if any((t.get('harness') or {}).get('engine') == 'deepagents' or t.get('tool_names')
+        from backend.features.agents.graph_agent import is_agent_engine
+        if any(is_agent_engine(t.get('harness')) or t.get('tool_names')
                for t in graph.get('tasks', [])) and not _accepts_tools(function):
             raise ValueError('This workflow uses tools. Native batching requires llm.batch_result to '
                              'accept tools; use Standard execution with the current adapter.')

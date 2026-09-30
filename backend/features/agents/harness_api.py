@@ -44,7 +44,8 @@ class MemoryBinding(BaseModel):
 class AgentSettings(BaseModel):
     model_config = ConfigDict(extra='forbid')
     name: str = Field(default='Chat Agent', min_length=1, max_length=120)
-    engine: Literal['deepagents'] = 'deepagents'
+    # "deepagents" is what agents saved before say; it is the same engine.
+    engine: Literal['langgraph', 'deepagents'] = 'langgraph'
     provider: str | None = None
     instructions: str = Field(default='You are a helpful research assistant.', max_length=30000)
     max_steps: int = Field(default=20, ge=1, le=100)
@@ -252,7 +253,7 @@ def _execute(graph, agent, session, event):
         session['error'] = None
     except Exception as exc:
         import logging
-        logging.getLogger(__name__).exception('Deep Agent execution failed')
+        logging.getLogger(__name__).exception('Chat Agent execution failed')
         session['status'] = 'stopped' if event.is_set() else 'failed'
         # Provider errors may contain request headers. Do not expose raw exceptions.
         session['error'] = GONE_ERROR if event.is_set() else execution_error(exc)

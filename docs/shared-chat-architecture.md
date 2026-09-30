@@ -16,7 +16,7 @@
 
 画布与结果页各自按任务管理一份会话列表。结果数据范围保存在 Session 上下文中，切换记录不会切换会话；用户可以显式使用当前选中记录。旧范围消息携带上下文标记，避免当作当前计算的数据。
 
-工作流里的独立 Chat Agent 是用户配置的执行节点，仍由 Deep Agents/LangGraph 执行，保存服务端 checkpoint；不把它的任务执行状态混入页面助手历史。
+工作流里的独立 Chat Agent 是用户配置的执行节点，由 LangGraph agent 执行（backend/features/agents/graph_agent.py），保存服务端 checkpoint；不把它的任务执行状态混入页面助手历史。
 
 ## Session
 

@@ -4,8 +4,8 @@
 - ltm: persistent per-agent long-term memory with two interchangeable
   backends, selected by the EAX_MEMORY_BACKEND env var:
     - "framework" (default): evoagentx LongTermMemory (FAISS + SQLite)
-    - "langchain": langchain_community FAISS + HuggingFaceEmbeddings
-      (see ltm_langchain.py; stores are NOT interchangeable)
+    - "langgraph": a LangGraph SqliteStore with a vector index
+      (see ltm_langgraph.py; stores are NOT interchangeable)
 
   Both expose open_memory(store_dir, corpus_id, create=False) returning an
   object with add(messages) / search(query, n) / save() / load(), plus
@@ -22,16 +22,21 @@ DEFAULT_BACKEND = "framework"
 
 def _backend():
     name = os.getenv(BACKEND_ENV, DEFAULT_BACKEND)
-    if name == "langchain":
-        from . import ltm_langchain
+    if name == "langgraph":
+        from . import ltm_langgraph
 
-        return ltm_langchain
+        return ltm_langgraph
+    if name == "langchain":
+        raise ValueError(
+            f"{BACKEND_ENV}=langchain was replaced by {BACKEND_ENV}=langgraph. Its stores "
+            "are a different format: switching starts a fresh memory for existing stores."
+        )
     if name == "framework":
         from . import ltm
 
         return ltm
     raise ValueError(
-        f"Unknown {BACKEND_ENV}={name!r} (expected 'framework' or 'langchain')"
+        f"Unknown {BACKEND_ENV}={name!r} (expected 'framework' or 'langgraph')"
     )
 
 

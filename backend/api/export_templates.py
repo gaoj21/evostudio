@@ -986,8 +986,8 @@ def _readme(name, goal, llm_tasks, tool_nodes, source_nodes, edges,
             "what earlier ones learned. Delete the folder to reset it.", "",
             "The memory layer has two interchangeable backends, chosen by "
             "`EAX_MEMORY_BACKEND`: `framework` (the default — evoagentx "
-            "LongTermMemory over FAISS + SQLite) and `langchain` "
-            "(langchain-community FAISS + langchain-huggingface embeddings). "
+            "LongTermMemory over FAISS + SQLite) and `langgraph` "
+            "(a LangGraph SqliteStore with a sqlite-vec vector index). "
             "Both use the same embedding model, but **their on-disk formats "
             "are not interchangeable**: switching backends starts from an "
             "empty store. `requirements.txt` lists the packages each one "

@@ -1,38 +1,50 @@
-# Deep Agents + LangGraph integration
+# The Chat Agent on LangGraph
 
-Implemented 2026-09-09.
+Rebuilt on LangGraph directly 2026-09-30 (it was a Deep Agents agent,
+`deepagents.create_deep_agent`, with LangChain agent middleware).
 
 ## Runtime and responsibilities
 
-`backend/features/agents/harness.py` builds a real
-`deepagents.create_deep_agent` with a LangGraph SQLite checkpointer. It does
-not route execution through the old JSON-prompt agent loop. Its chat model
-comes from `backend.features.model_bridge.agent_model()`, a LangChain
-`BaseChatModel` over the standalone `llm` package: the harness names no
-provider and imports no provider SDK, so which model answers is decided by
-`llm/providers.json` and `EAX_PROVIDER`/`LLM_PROVIDER` alone. Token usage
-arrives as LangChain's `usage_metadata`, filled from `LLMResult.usage`. Keys
-remain server-side.
+`backend/features/agents/graph_agent.py` is the agent: a LangGraph
+`StateGraph`, `START → agent ⇄ tools → END`. `agent` calls the model with the
+tools bound; `tools` is LangGraph's `ToolNode`; a reply without tool calls ends
+the turn. `backend/features/agents/harness.py` builds it for each turn with a
+LangGraph SQLite checkpointer, the Studio tools and the connected memories.
 
-Install with `pip install -e '.[studio,harness,mem0]'` in the project virtual
-environment. The harness extra pins Deep Agents 0.7.13, LangGraph 1.2.11,
-SQLite checkpointer 3.1.1 and provider adapters. Google adapter 4.3.7 and
-Google GenAI <2 keep the existing browser-use dependency compatible.
+The state holds `messages`, `files` (scratch files) and `todos` (the plan) —
+the keys Deep Agents used, so conversations saved before still open. Besides
+the Studio tools the agent always has `write_todos` (its plan, shown in the
+chat) and `ls` / `read_file` / `write_file` / `edit_file` on the scratch
+files, which live in the conversation's state, not on disk. There are no
+subagents.
 
-The runtime provides planning and checkpoint-backed virtual working files,
-context management, model-step limits, and a cooperative execution deadline.
-Subagent delegation is currently filtered out of model tools and rejected at
-the execution boundary, so it cannot bypass per-Agent limits.
+Its chat model comes from `backend.features.model_bridge.agent_model()`, a
+LangChain `BaseChatModel` (from `langchain_core`, which LangGraph itself is
+built on) over the standalone `llm` package: the agent names no provider, and
+which model answers is decided by the `llm` package's configuration. Tools
+reach the model as text (`text_tool_calls.py`), so a provider without native
+function calling works too. Token usage arrives as `usage_metadata`, filled
+from `LLMResult.usage`.
+
+Before every model call the turn checks its stop, its deadline and its
+model-step limit. A model call that is blocked in the provider is given up
+the moment Stop is pressed.
+
+Install with `pip install -e '.[studio,harness,mem0]'`. The harness extra pins
+LangGraph 1.2.11 and the SQLite checkpointer 3.1.1.
+
+The engine is named `langgraph` in a node's `harness` and an Agent's settings;
+`deepagents`, which configurations saved before say, means the same engine.
 
 ## Existing workflow Agents
 
-Inspector → Harness → Deep Agents + LangGraph opts a node into the new runtime.
+Inspector → Execution engine → LangGraph agent opts a node into this runtime.
 Existing nodes retain their standard engine until changed. The harness
 configuration survives canvas serialization, save and reload and contributes
 to the existing run-plan revision hash.
 
 The runner preserves upstream inputs, the configured prompt, attached Skills,
-selected toolkits, and the existing Memory recall policy. Deep Agents receives
+selected toolkits, and the existing Memory recall policy. The agent receives
 an isolated checkpoint thread for each node execution and returns JSON fields
 matching the declared outputs. Missing required fields fail the node. Normal
 post-run Memory writes remain handled by the workflow runner; the harness does
@@ -44,7 +56,7 @@ Workflow stop signals are propagated to the harness at its next operation
 boundary. A currently executing blocking tool or provider request may finish
 first; stopping does not roll back completed tool side effects.
 
-Standalone Python export of a Deep Agents workflow is explicitly rejected for
+Standalone Python export of a workflow with LangGraph agent nodes is rejected for
 now, rather than silently exporting the standard engine. JSON graph data keeps
 the harness settings. The previous OpenAI-compatible standalone agent endpoint
 and workflow-editing Chat remain available with their previous behavior.
@@ -133,21 +145,19 @@ API prefix: `/api/graphs/{graph_id}/agents`.
 
 ## Validation
 
-Tests run without paid model calls. Scripted native-tool-calling models execute
-the actual Deep Agents/LangGraph graph, verifying tool dispatch, SQLite history
+Tests run without paid model calls. Scripted models execute the actual
+LangGraph graph, verifying tool dispatch, SQLite history
 across runtime instances, session isolation and cancellation. API tests cover
 scope checks, Memory permissions, busy sessions, stop and invalid providers.
 Canvas tests cover node creation, independent sending, Harness navigation and
 Memory connection/disconnection. The workflow adapter test checks prompt/input
 and recalled Memory propagation, declared outputs and isolated thread IDs.
 
-Real provider completion and external tool side effects have not been exercised
-as part of this implementation. Native tool support must be available on the
-selected provider/model.
+A real provider turn (planning, scratch files written and read back) has been
+exercised; external tool side effects have not.
 
 References:
-- https://github.com/langchain-ai/deepagents
-- https://docs.langchain.com/oss/python/deepagents/customization
+- https://docs.langchain.com/oss/python/langgraph/graph-api
 - https://docs.langchain.com/oss/python/langgraph/persistence
 
 ### Chat agent Tools and Skills

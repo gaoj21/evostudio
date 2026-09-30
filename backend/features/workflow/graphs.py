@@ -320,7 +320,8 @@ def validate_harness_tasks(tasks):
     for task in tasks:
         config = task.get('harness')
         if config is not None:
-            if not isinstance(config, dict) or config.get('engine') != 'deepagents':
+            from backend.features.agents.graph_agent import ENGINES
+            if not isinstance(config, dict) or config.get('engine') not in ENGINES:
                 raise GraphValidationError(['Invalid Agent harness.'])
             for key, default, minimum, maximum in [('max_steps', 20, 1, 100), ('timeout', 300, 10, 1800)]:
                 value = config.get(key, default)

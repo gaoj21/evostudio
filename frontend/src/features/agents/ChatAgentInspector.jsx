@@ -85,7 +85,7 @@ export default function ChatAgentInspector({ graphId, agent, onBack, onSave, sav
     <header className="memory-inspector-header">
       <button className="link" onClick={page === 'settings' ? () => setPage('chat') : onBack}>{page === 'settings' ? '← Back to chat' : backLabel}</button>
       <h3>{agent.name}</h3>
-      <span className="muted small">Independent Agent · Deep Agents + LangGraph</span>
+      <span className="muted small">Independent Agent · LangGraph</span>
     </header>
     <div className="memory-inspector-body">
       {error && <p role="alert">{error}</p>}

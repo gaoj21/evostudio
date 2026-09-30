@@ -562,10 +562,11 @@ export default function Inspector({ node, runInfo, runMode, onUpdate, onRename, 
       <ParamList label="Outputs" items={d.outputs} onChange={(outputs) => onUpdate(node.id, { outputs })} />
       <fieldset className="field">
         <legend>Harness</legend>
-        <label>Execution engine<select value={d.harness?.engine || 'workflow'} onChange={e => onUpdate(node.id, { harness: e.target.value === 'workflow' ? null : { engine: 'deepagents', max_steps: 20, timeout: 300 } })}>
-          <option value="workflow">Standard workflow Agent</option><option value="deepagents">Deep Agents + LangGraph</option>
+        {/* "deepagents" is what nodes saved before say: the same LangGraph agent. */}
+        <label>Execution engine<select value={d.harness ? 'langgraph' : 'workflow'} onChange={e => onUpdate(node.id, { harness: e.target.value === 'workflow' ? null : { engine: 'langgraph', max_steps: 20, timeout: 300 } })}>
+          <option value="workflow">Standard workflow Agent</option><option value="langgraph">LangGraph agent (tools, plan, scratch files)</option>
         </select></label>
-        {d.harness?.engine === 'deepagents' && <>
+        {d.harness && <>
           <label>Maximum model steps<NumberInput type="number" min="1" max="100" value={d.harness.max_steps || 20} onChange={e => onUpdate(node.id, { harness: { ...d.harness, max_steps: Number(e.target.value) } })} /></label>
           <label>Time limit (seconds)<NumberInput type="number" min="10" max="1800" value={d.harness.timeout || 300} onChange={e => onUpdate(node.id, { harness: { ...d.harness, timeout: Number(e.target.value) } })} /></label>
           <p className="muted small">Uses this node’s selected tools, Skills and Memory. Each workflow execution has isolated conversation state.</p>

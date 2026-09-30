@@ -23,7 +23,7 @@ def local(monkeypatch, tmp_path):
     monkeypatch.setattr(harness.workspace, 'files_dir', lambda g: tmp_path)
     return {'id': 'test'}
 
-def test_real_deepagents_tool_loop_and_sqlite_history(local):
+def test_real_langgraph_tool_loop_and_sqlite_history(local):
     events = []
     model = ScriptedModel(replies=[AIMessage(content='', tool_calls=[{'name': 'call_studio_tool', 'args': {'name': 'double', 'arguments': {'n': 4}}, 'id': 'call-1'}]), AIMessage(content='8')])
     assert harness.run_turn(local, {}, 'session-1', 'double four', events.append, threading.Event(), model=model) == '8'
@@ -159,3 +159,41 @@ def test_usage_counts_new_turn_only(local):
     second=ScriptedModel(replies=[AIMessage(content='second',usage_metadata={'input_tokens':15,'output_tokens':3,'total_tokens':18})])
     harness.run_turn(local,{},'usage-session','again',events.append,threading.Event(),model=second)
     assert sum(e['content']['total_tokens'] for e in events if e['type']=='token_usage' and e['content']) == 18
+
+
+def test_the_agent_plans_and_keeps_scratch_files_across_turns(local):
+    """The graph's own tools: a plan shown in the chat, and files kept in the
+    conversation's state — written in one turn, read back in the next."""
+    events = []
+    first = ScriptedModel(replies=[
+        AIMessage(content='', tool_calls=[
+            {'name': 'write_todos', 'args': {'todos': [{'content': 'draft', 'status': 'in_progress'}]}, 'id': 't1'},
+            {'name': 'write_file', 'args': {'file_path': '/notes.md', 'content': 'hello\nworld'}, 'id': 'w1'}]),
+        AIMessage(content='', tool_calls=[
+            {'name': 'edit_file', 'args': {'file_path': '/notes.md', 'old_string': 'world', 'new_string': 'there'}, 'id': 'e1'}]),
+        AIMessage(content='noted')])
+    assert harness.run_turn(local, {}, 'files', 'take notes', events.append, threading.Event(), model=first) == 'noted'
+    assert {'type': 'plan', 'items': [{'content': 'draft', 'status': 'in_progress'}]} in events
+
+    second = ScriptedModel(replies=[
+        AIMessage(content='', tool_calls=[{'name': 'read_file', 'args': {'file_path': '/notes.md'}, 'id': 'r1'}]),
+        AIMessage(content='read')])
+    harness.run_turn(local, {}, 'files', 'what did you note?', events.append, threading.Event(), model=second)
+    read = [e for e in events if e['type'] == 'tool_result' and e['name'] == 'read_file'][-1]['content']
+    assert 'hello' in read and 'there' in read and 'world' not in read
+
+
+def test_the_step_limit_ends_a_turn_that_keeps_calling_tools(local):
+    loop = [AIMessage(content='', tool_calls=[{'name': 'list_available_tools', 'args': {}, 'id': f'c{i}'}]) for i in range(10)]
+    with pytest.raises(RuntimeError, match='model-step limit'):
+        harness.run_turn(local, {'max_steps': 3}, 'limit', 'go', lambda e: None, threading.Event(),
+                         model=ScriptedModel(replies=loop))
+
+
+def test_nodes_saved_with_the_old_engine_name_still_run_on_the_agent():
+    from backend.features.agents.graph_agent import is_agent_engine
+    from backend.features.workflow.graphs import validate_harness_tasks
+    assert is_agent_engine({'engine': 'langgraph'}) and is_agent_engine({'engine': 'deepagents'})
+    assert not is_agent_engine({'engine': 'other'}) and not is_agent_engine(None)
+    validate_harness_tasks([{'name': 'a', 'harness': {'engine': 'deepagents'}},
+                            {'name': 'b', 'harness': {'engine': 'langgraph'}}])
