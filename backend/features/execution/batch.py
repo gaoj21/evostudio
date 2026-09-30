@@ -220,6 +220,7 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
         state["sequencing"] = assign_sequences(graph, pairs)
 
     def work(item: dict, record: dict, gate=None, run_id: str | None = None) -> None:
+        cancelled = False
         with _lock:
             # The pool hands out work one item at a time, so a cancelled batch
             # stops at the next item rather than at the next record read: at
@@ -227,10 +228,16 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
             if state.get("cancel_requested"):
                 item["status"] = "cancelled"
                 state["cancelled_items"] += 1
-                if gate is not None and run_id:
-                    gate.leave(run_id)       # never holds the chunk it was registered in
-                return
-            item["status"] = "running"
+                cancelled = True
+            else:
+                item["status"] = "running"
+        if cancelled:
+            # Outside the lock: leaving the gate reports the stage, which
+            # takes the lock itself — inside it, the batch deadlocked.
+            if gate is not None and run_id:
+                gate.leave(run_id)       # never holds the chunk it was registered in
+            return
+        with _lock:
             # Which Run is this attempt's: a session reuses its item's run id,
             # and a Run left from an earlier attempt must not count as live.
             item["attempt_started_at"] = _utcnow()
