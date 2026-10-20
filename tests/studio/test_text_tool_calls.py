@@ -77,3 +77,32 @@ def test_only_the_tools_given_are_read_as_calls():
     assert calls[0]["args"] == {"name": "x"} and text == ""
     assert text_tool_calls.parse('{"tool_calls": [{"name": "rm", "arguments": {}}]}', tools)[1] == []
     assert text_tool_calls.parse('Plain {"a": 1} answer', tools) == ('Plain {"a": 1} answer', [])
+
+
+TOOLS = [{"name": "lookup", "parameters": {}}, {"name": "ls", "parameters": {}}]
+
+
+def test_openai_function_shape_with_string_arguments():
+    text, calls = text_tool_calls.parse(
+        '{"tool_calls": [{"id": "x1", "type": "function", "function": {"name": "lookup", "arguments": "{\\"name\\": \\"ACME\\"}"}}]}', TOOLS)
+    assert text == "" and calls[0]["name"] == "lookup" and calls[0]["args"] == {"name": "ACME"} and calls[0]["id"] == "x1"
+
+
+def test_several_tool_call_objects_are_merged():
+    text, calls = text_tool_calls.parse(
+        'First {"tool_calls": [{"name": "ls", "arguments": {}}]} then\n{"tool_calls": [{"name": "lookup", "arguments": {"name": "b"}}]}', TOOLS)
+    assert [c["name"] for c in calls] == ["ls", "lookup"] and text == "First  then"
+
+
+def test_trailing_commas_and_python_quotes_are_tolerated():
+    assert text_tool_calls.parse('{"tool_calls": [{"name": "ls", "arguments": {},},]}', TOOLS)[1][0]["name"] == "ls"
+    assert text_tool_calls.parse("{'tool_calls': [{'name': 'lookup', 'arguments': {'name': 'x'}}]}", TOOLS)[1][0]["args"] == {"name": "x"}
+
+
+def test_unreadable_or_unknown_calls_get_a_correction_naming_the_valid_tools():
+    unknown = text_tool_calls.unreadable_call('{"tool_calls": [{"name": "rm", "arguments": {}}]}', TOOLS)
+    assert "rm" in unknown and "lookup, ls" in unknown
+    broken = text_tool_calls.unreadable_call('{"tool_calls": [{"name": "ls", "arguments": {', TOOLS)
+    assert "could not be read" in broken
+    assert text_tool_calls.unreadable_call('{"tool_calls": [{"name": "ls", "arguments": {}}]}', TOOLS) is None
+    assert text_tool_calls.unreadable_call("A plain answer.", TOOLS) is None

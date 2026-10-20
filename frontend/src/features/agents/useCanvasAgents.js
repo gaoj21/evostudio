@@ -49,7 +49,15 @@ export function useCanvasAgents(graphId, reportError) {
   }, [graphId]);
   const remove = useCallback(async id => {
     await api.removeCanvasAgent(graphId, id);
-    if (currentGraph.current === graphId) setAgents(list => list.filter(a => a.id !== id));
+    // latest too: a save queued in the same turn writes latest back and
+    // would otherwise bring the removed Agent back on screen.
+    if (currentGraph.current === graphId) { latest.current = latest.current.filter(a => a.id !== id); setAgents(latest.current); }
+  }, [graphId]);
+  // Undo of a removal: only this Agent comes back, unlike restore().
+  const unarchive = useCallback(async id => {
+    const agent = await api.restoreCanvasAgent(graphId, id);
+    if (currentGraph.current === graphId) { latest.current = [...latest.current.filter(a => a.id !== id), agent]; setAgents(latest.current); }
+    return agent;
   }, [graphId]);
   const add = async () => {
     if (adding.current) throw new Error('Agent creation is already in progress');
@@ -66,5 +74,5 @@ export function useCanvasAgents(graphId, reportError) {
     ...(m.read ? [{ id: `chat-read:${a.id}:${memoryId(m)}`, source: memoryId(m), target: chatNodeId(a.id), sourceHandle: m.read_source_handle || 's-out', targetHandle: m.read_target_handle || 'in', label: 'reads', data: { chatAgent: a.id, agent: chatNodeId(a.id), resource: memoryId(m), memory: 'read', space: memoryId(m), direction: 'read' } }] : []),
     ...(m.write ? [{ id: `chat-write:${a.id}:${memoryId(m)}`, source: chatNodeId(a.id), target: memoryId(m), sourceHandle: m.write_source_handle || 'out', targetHandle: m.write_target_handle || 's-in', label: 'writes', data: { chatAgent: a.id, agent: chatNodeId(a.id), resource: memoryId(m), memory: 'write', space: memoryId(m), direction: 'write' } }] : []),
   ])), [agents]);
-  return { agents, loaded, nodes, edges, add, save, remove, restore, busy, setAgents, isSaving: id => !!pendingSaves[`${graphId}:${id}`] };
+  return { agents, loaded, nodes, edges, add, save, remove, restore, unarchive, busy, setAgents, isSaving: id => !!pendingSaves[`${graphId}:${id}`] };
 }

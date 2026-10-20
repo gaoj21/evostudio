@@ -61,6 +61,8 @@ export const api = {
   canvasAgents: g => req(agentPath(g)),
   createCanvasAgent: (g, body) => req(agentPath(g), { method: 'POST', body }),
   removeCanvasAgent: (g, a) => req(agentPath(g, a), { method: 'DELETE' }),
+  // Bring back one removed Chat Agent (archived, sessions kept); other Agents are untouched.
+  restoreCanvasAgent: (g, a) => req(`${agentPath(g, a)}/restore`, { method: 'POST' }),
   updateCanvasAgent: (g, a, body) => req(agentPath(g, a), { method: 'PUT', body }),
   agentSessions: (g, a) => req(`${agentPath(g, a)}/sessions`),
   deleteAgentSession: (g, a, s) => req(`${agentPath(g, a)}/sessions/${encodeURIComponent(s)}`, { method: 'DELETE' }),
@@ -194,6 +196,9 @@ export const api = {
   applyEvolve: (taskId, mode = 'new') =>
     req(`/api/evolve/${encodeURIComponent(taskId)}/apply?mode=${encodeURIComponent(mode)}`, { method: 'POST' }),
   chatGraph: (id, body, options) => assistantRequest(id, 'canvas', body, options),
+  // A settled turn's canvas edits, replayed onto a canvas edited meanwhile.
+  replayChatOperations: (id, body) =>
+    req(`/api/graphs/${encodeURIComponent(id)}/chat/replay`, { method: 'POST', body }),
   chatJob: (id, jobId) =>
     req(`/api/graphs/${encodeURIComponent(id)}/chat/jobs/${encodeURIComponent(jobId)}`),
   runningChatJob: (id) => req(`/api/graphs/${encodeURIComponent(id)}/chat/jobs`),

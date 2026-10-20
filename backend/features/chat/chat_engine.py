@@ -17,8 +17,21 @@ class ChatEngine:
 
     def ask(self):
         chat_control.check()
-        answer = model_json.extract_json(self.ask_model(self.messages))
+        text = self.ask_model(self.messages)
         chat_control.check()
+        try:
+            answer = model_json.extract_json(text)
+        except model_json.MalformedJSON:
+            # A cut-off reply is asked for again, whole; none of it is acted on.
+            retry = self.messages + [
+                {'role': 'assistant', 'content': str(text)[:4000]},
+                {'role': 'user', 'content': 'Your reply was cut off or was not valid JSON, so none of it was applied. '
+                                            'Send the complete JSON object again; keep it shorter if it was long.'}]
+            try:
+                answer = model_json.extract_json(self.ask_model(retry))
+            except model_json.MalformedJSON:
+                raise ValueError('The model reply was cut off or malformed, so nothing was applied. Please retry.')
+            chat_control.check()
         if not isinstance(answer, dict):
             raise ValueError('The model returned an invalid response. Please retry.')
         if answer.get('op'):
@@ -29,14 +42,32 @@ class ChatEngine:
         self.last_answer = {**answer, 'reply': str(answer.get('reply') or answer.get('message') or ''), 'operations': operations}
         return self.last_answer
 
-    def run(self, execute, initial=None, max_steps=10):
+    def run(self, execute, initial=None, max_steps=10, expects_edit=False):
+        """Ask, execute, observe, repeat.
+
+        `expects_edit`: the user asked for a change. A first answer that
+        claims one without any operation is reminded once that nothing was
+        applied, so "I deleted it" cannot stand in for the deletion.
+        """
         answer = initial
+        reminded = False
         for step in range(max_steps):
             chat_control.check()
             answer = answer if answer is not None else self.ask()
             self.last_answer = answer
             operations = answer.get('operations') or []
             if not operations:
+                if answer.get('reply') and expects_edit and not reminded and not self.turns:
+                    reminded = True
+                    self.messages += [
+                        {'role': 'assistant', 'content': json.dumps(answer, ensure_ascii=False)},
+                        {'role': 'user', 'content': 'Your reply has no operations, so nothing was changed. '
+                                                    'If the user asked for a change, return the operations that make it now. '
+                                                    'If you cannot (for example nothing on the canvas matches), say so plainly '
+                                                    'and do not claim the change was made.'},
+                    ]
+                    answer = None
+                    continue
                 if answer.get('reply'):
                     return answer
                 self.messages.append({'role': 'user', 'content': 'Return a nonempty reply or operations to gather evidence.'})
@@ -49,9 +80,12 @@ class ChatEngine:
             observations = result.get('observations') or []
             if result.get('stop') or not observations:
                 return answer
+            # The canvas summary in the system prompt is from the start of
+            # the turn; the page restates what it looks like now.
+            canvas = ('\nCurrent canvas after these operations (authoritative):\n' + result['canvas']) if result.get('canvas') else ''
             self.messages += [
                 {'role': 'assistant', 'content': json.dumps(answer, ensure_ascii=False)},
-                {'role': 'user', 'content': 'Tool observations:\n' + json.dumps(observations, ensure_ascii=False, default=str) + '\nContinue using tools if needed; otherwise reply with an empty operations list.'},
+                {'role': 'user', 'content': 'Tool observations:\n' + json.dumps(observations, ensure_ascii=False, default=str) + canvas + '\nContinue using tools if needed; otherwise reply with an empty operations list.'},
             ]
             answer = None
-        return {'reply': '已达到本轮分析上限。可以继续追问或缩小范围。', 'operations': []}
+        return {'reply': 'Reached the step limit for this turn. Ask a follow-up or narrow the request.', 'operations': []}

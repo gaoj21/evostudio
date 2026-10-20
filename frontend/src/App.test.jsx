@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   chatMemoryResources: vi.fn(),
   canvasAgents: vi.fn(),
   restoreCanvasAgents: vi.fn(async (_id, agents) => ({agents})),
+  restoreCanvasAgent: vi.fn(),
   createCanvasAgent: vi.fn(),
   updateCanvasAgent: vi.fn(),
   removeCanvasAgent: vi.fn(),
@@ -85,7 +86,7 @@ vi.mock('./features/execution/SchedulePanel.jsx', () => ({
 }));
 vi.mock('./features/memory/MemorySettings.jsx', () => ({ memorySiblings: () => [] }));
 vi.mock('./features/chat/ChatPanel.jsx', () => ({
-  default: () => <div data-testid="chat-panel">Chat panel</div>,
+  default: props => { state.chat = props; return <div data-testid="chat-panel">Chat panel</div>; },
   renameChatHistory: vi.fn(),
 }));
 vi.mock('./features/workspace/WorkspacePanel.jsx', () => ({
@@ -682,4 +683,32 @@ it('keeps settings edited while a save is in flight', async () => {
   await act(async () => { finish({ ...GRAPH, name: 'Renamed workflow', goal: '' }); });
   expect(screen.getByTestId('goal')).toHaveTextContent('edited during save');
   await waitFor(() => expect(screen.getByTestId('dirty')).toHaveTextContent('dirty'));
+});
+
+it('undoes the Chat Agent changes an assistant turn made', async () => {
+  const helper = { id: 'a1', name: 'Helper', instructions: 'Help.', memories: [], x: 0, y: 0 };
+  const writer = { id: 'a2', name: 'Writer', instructions: 'Write.', memories: [], x: 40, y: 0 };
+  api.canvasAgents.mockResolvedValue({ agents: [helper, writer] });
+  api.updateCanvasAgent.mockImplementation(async (_g, id, body) => ({ id, ...body }));
+  api.removeCanvasAgent.mockResolvedValue({ removed: true });
+  api.restoreCanvasAgent.mockResolvedValue(helper);
+  const user = userEvent.setup();
+  render(<App initialGraphId="old-id" />);
+  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:a2')).toBe(true));
+  await user.click(screen.getByRole('button', { name: 'Ask Chat' }));
+
+  let outcome;
+  await act(async () => { outcome = await state.chat.onAgentActions([
+    { action: 'remove', id: 'a1' }, { action: 'update', id: 'a2', patch: { name: 'Editor', instructions: 'Edit.' } }]); });
+  expect(outcome.failed).toEqual([]);
+  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:a1')).toBe(false));
+  expect(state.canvas.nodes.find(n => n.id === 'chat:a2').data.title).toBe('Editor');
+
+  let failed;
+  await act(async () => { failed = await state.chat.onUndoAgentActions(outcome.undo); });
+  expect(failed).toEqual([]);
+  expect(api.restoreCanvasAgent).toHaveBeenCalledWith('old-id', 'a1');
+  expect(api.updateCanvasAgent).toHaveBeenLastCalledWith('old-id', 'a2', expect.objectContaining({ name: 'Writer', instructions: 'Write.' }));
+  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:a1')).toBe(true));
+  expect(state.canvas.nodes.find(n => n.id === 'chat:a2').data.title).toBe('Writer');
 });

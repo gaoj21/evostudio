@@ -148,3 +148,26 @@ def test_legacy_owner_migration_preserves_agent_session_and_checkpoint_scope(cli
         assert db.execute('SELECT count(*) FROM objects WHERE owner=?',('a',)).fetchone()[0]==0
         assert db.execute('SELECT count(*) FROM objects WHERE owner=?',('stable-task',)).fetchone()[0]==2
     assert client.get(root).json()['agents'][0]['id']==agent['id']
+
+
+def test_delete_conversation_removes_checkpoints_of_a_migrated_session(client, monkeypatch, tmp_path):
+    """A session moved from an older owner keeps its checkpoint namespace;
+    deleting it must delete those checkpoints, not the new owner's."""
+    import hashlib
+    from langgraph.checkpoint.sqlite import SqliteSaver
+    from langgraph.checkpoint.base import empty_checkpoint
+    monkeypatch.setattr(api.harness, 'data_path', lambda *p: tmp_path.joinpath(*p))
+    root = '/api/graphs/a/agents'
+    agent = client.post(root, json={}).json()
+    session = client.post(f'{root}/{agent["id"]}/sessions').json()
+    monkeypatch.setattr(api.graphs, 'load_graph', lambda id: {'id': id, 'task_id': 'stable-task'} if id == 'a' else None)
+    assert client.get(f'{root}/{agent["id"]}/sessions').json()['sessions'][0]['checkpoint_scope'] == 'a'
+    legacy = hashlib.sha256(f'a:{agent["id"]}:{session["id"]}'.encode()).hexdigest()
+    assert api.thread_id('stable-task', agent['id'], {**session, 'checkpoint_scope': 'a'}) == legacy
+    checkpoint_path = tmp_path / 'harness' / 'checkpoints.sqlite'
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    with SqliteSaver.from_conn_string(str(checkpoint_path)) as saver:
+        saver.put({'configurable': {'thread_id': legacy, 'checkpoint_ns': ''}}, empty_checkpoint(), {}, {})
+    assert client.delete(f'{root}/{agent["id"]}/sessions/{session["id"]}').status_code == 200
+    with SqliteSaver.from_conn_string(str(checkpoint_path)) as saver:
+        assert saver.get_tuple({'configurable': {'thread_id': legacy}}) is None

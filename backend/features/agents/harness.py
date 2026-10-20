@@ -11,6 +11,14 @@ from backend.api import tools_registry, mem0_service, skills_api, workspace, mem
 from backend.api.studio_config import data_path
 
 
+# A Chat Agent reads and works with Studio tools and memory; it does not edit
+# the workflow canvas. Said in its instructions so a request to edit the
+# canvas gets pointed at the assistant that can, instead of a claimed edit.
+CANVAS_NOTE = ('\nYou cannot change the workflow canvas (its nodes, edges or Chat Agents). If asked to, '
+               'say that canvas edits are made by the workflow assistant in the Chat panel, and do not '
+               'claim to have made them.')
+
+
 def make_model(provider=None):
     from backend.features.model_bridge import agent_model
     return agent_model(provider)
@@ -18,11 +26,12 @@ def make_model(provider=None):
 
 def build_tools(graph, settings, cancelled=None, deadline=None):
     from langchain_core.tools import tool
+    from backend.features.agents.graph_agent import TurnStopped, TurnTimedOut
     def check():
         if cancelled and cancelled.is_set():
-            raise RuntimeError('Execution stopped')
+            raise TurnStopped('Execution stopped')
         if deadline and time.monotonic() > deadline:
-            raise TimeoutError('Execution time limit reached')
+            raise TurnTimedOut('Execution time limit reached')
     selected_tools = settings.get('tools')
     selected_skills = set(settings.get('skill_names') or [])
     allowed = settings.get('toolkits')  # None means every available toolkit.
@@ -120,12 +129,12 @@ def build_tools(graph, settings, cancelled=None, deadline=None):
 def run_turn(graph, settings, thread_id, message, emit, cancelled, model=None):
     from langgraph.checkpoint.sqlite import SqliteSaver
     from langchain_core.messages import AIMessage, ToolMessage
-    from backend.features.agents.graph_agent import build_agent
+    from backend.features.agents.graph_agent import build_agent, TurnStopped, TurnTimedOut
     deadline = time.monotonic() + settings.get('timeout', 300)
     model_calls = 0
     def check():
-        if cancelled.is_set(): raise RuntimeError('Execution stopped')
-        if time.monotonic() > deadline: raise TimeoutError('Execution time limit reached')
+        if cancelled.is_set(): raise TurnStopped('Execution stopped')
+        if time.monotonic() > deadline: raise TurnTimedOut('Execution time limit reached')
     # A turn stopped before its worker was free must not read memory, build an
     # agent or reach the model at all.
     check()
@@ -136,7 +145,7 @@ def run_turn(graph, settings, thread_id, message, emit, cancelled, model=None):
         check()
         model_calls += 1
         if model_calls > settings.get('max_steps', 20):
-            raise RuntimeError('Agent reached its model-step limit')
+            raise TurnStopped('Agent reached its model-step limit')
     connected = []
     recalled = []
     for binding in settings.get('memories', []):
@@ -160,7 +169,7 @@ def run_turn(graph, settings, thread_id, message, emit, cancelled, model=None):
             tools=build_tools(graph, settings, cancelled, deadline),
             system_prompt=skills_api.inject_into_tasks([{'system_prompt': settings.get('instructions') or 'You are a helpful research assistant.', 'skill_names': settings.get('skill_names') or []}])[0]['system_prompt'] +
                 '\nUse Studio tools and connected memories as needed. Discover tools before using them. '
-                'Never invent tool results. Respond in the user\'s language.' + memory_context,
+                'Never invent tool results. Respond in the user\'s language.' + CANVAS_NOTE + memory_context,
             checkpointer=saver, before_model=before_model,
         )
         config = {'configurable': {'thread_id': thread_id}, 'recursion_limit': settings.get('max_steps', 20) * 4 + 20}

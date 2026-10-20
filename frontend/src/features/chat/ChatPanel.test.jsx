@@ -3,11 +3,12 @@ import userEvent from '@testing-library/user-event';
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import ChatPanel, { summarise, conversationHistory } from './ChatPanel.jsx';
+import ChatPanel, { summarise, conversationHistory, appliedOperations } from './ChatPanel.jsx';
 
 vi.mock('../../api.js', () => ({
   api: {
     chatGraph: vi.fn(),
+    replayChatOperations: vi.fn(),
     stopAssistant: vi.fn(),
     stopChatJob: vi.fn(),
     chatJob: vi.fn(),
@@ -472,4 +473,148 @@ it('lets the user copy their own message and the reply', async () => {
   expect(await screen.findByText('Copied')).toBeInTheDocument();
   await user.click(screen.getByRole('button', { name: 'Copy reply' }));
   expect(await navigator.clipboard.readText()).toBe('Here is the answer');
+});
+
+
+describe('applied operations', () => {
+  it('summarises what took effect, not what the model asked for', () => {
+    expect(summarise(appliedOperations({
+      operations: [{ op: 'delete_node', name: 'ghost' }, { op: 'validate' }],
+      canvas_operations: [],
+      agent_actions: [{ action: 'remove', id: 'a1' }],
+    }))).toBe('removed Chat Agent · checked');
+    // An older server without canvas_operations: the operations stand.
+    expect(appliedOperations({ operations: [{ op: 'add_node' }] })).toEqual([{ op: 'add_node' }]);
+  });
+});
+
+describe('a canvas edited while the turn ran', () => {
+  const EDITED = { name: 'demo', tasks: [{ name: 'summarise' }, { name: 'mine' }] };
+  const RESULT = { name: 'demo', tasks: [] };
+
+  function racing(response) {
+    let current = GRAPH;
+    api.chatGraph.mockImplementation(async () => { current = EDITED; return response; });
+    return setup({ getGraph: () => current });
+  }
+
+  it('replays the turn\'s edits onto the current canvas instead of replacing it', async () => {
+    const replayed = { name: 'demo', tasks: [{ name: 'mine' }] };
+    api.replayChatOperations.mockResolvedValue({ applied: true, graph: replayed, errors: [], notes: [] });
+    const { onApply, user } = racing({ reply: 'Deleted.', operations: [{ op: 'delete_node', name: 'Summarise' }],
+      canvas_operations: [{ op: 'delete_node', name: 'summarise' }], applied: true, graph: RESULT });
+
+    await send(user, 'delete summarise');
+
+    await waitFor(() => expect(onApply).toHaveBeenCalledWith(replayed));
+    expect(api.replayChatOperations).toHaveBeenCalledWith('g1', { graph: EDITED, operations: [{ op: 'delete_node', name: 'summarise' }] });
+    expect(onApply).not.toHaveBeenCalledWith(RESULT);
+    expect(await screen.findByText(/applied on top of your changes/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Undo this change' }));
+    expect(onApply).toHaveBeenLastCalledWith(EDITED);
+  });
+
+  it('keeps the person\'s edits when the turn\'s edits no longer apply', async () => {
+    api.replayChatOperations.mockResolvedValue({ applied: false, graph: EDITED, errors: [], notes: ['delete_node: nothing matches'] });
+    const { onApply, user } = racing({ reply: 'Deleted.', operations: [{ op: 'delete_node' }],
+      canvas_operations: [{ op: 'delete_node', name: 'summarise' }], applied: true, graph: RESULT });
+
+    await send(user, 'delete summarise');
+
+    expect(await screen.findByText(/my edits were not applied, to keep yours/)).toBeInTheDocument();
+    expect(onApply).not.toHaveBeenCalled();
+    expect(screen.queryByText('✓ deleted')).not.toBeInTheDocument();
+  });
+});
+
+describe('Chat Agent changes', () => {
+  it('hands agent actions to the canvas and shows what failed', async () => {
+    const onAgentActions = vi.fn().mockResolvedValue(["Chat Agent 'Helper' was not removed: busy"]);
+    api.chatGraph.mockResolvedValue({ reply: 'Removed.', operations: [{ op: 'delete_agent', name: 'helper' }],
+      canvas_operations: [], agent_actions: [{ action: 'remove', id: 'a1', name: 'Helper' }], applied: false });
+    const { user } = setup({ onAgentActions });
+
+    await send(user, 'delete the helper chat');
+
+    await waitFor(() => expect(onAgentActions).toHaveBeenCalledWith([{ action: 'remove', id: 'a1', name: 'Helper' }]));
+    expect(await screen.findByText("Chat Agent 'Helper' was not removed: busy")).toBeInTheDocument();
+    expect(screen.getByText('✓ removed Chat Agent')).toBeInTheDocument();
+  });
+});
+
+describe('a canvas edited while a generation ran', () => {
+  const EDITED = { name: 'demo', tasks: [{ name: 'summarise' }, { name: 'mine' }] };
+  const GENERATED = { name: 'demo', tasks: [{ name: 'fetch' }, { name: 'report' }] };
+
+  function racing() {
+    let current = GRAPH;
+    api.chatGraph.mockImplementation(async () => { current = EDITED; return { reply: 'Generating', operations: [{ op: 'generate_workflow' }], job_id: 'race' }; });
+    api.chatJob.mockResolvedValue({ status: 'done', graph: GENERATED, elapsed: 3 });
+    return setup({ getGraph: () => current });
+  }
+
+  it('asks before replacing the canvas, and Undo brings the edited canvas back', async () => {
+    const { onApply, user } = racing();
+    await send(user, 'Generate a workflow');
+
+    expect(await screen.findByText(/canvas changed while generating/, {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(onApply).not.toHaveBeenCalled();
+    expect(screen.queryByText(/✓ generated/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Replace' }));
+    expect(onApply).toHaveBeenCalledWith(GENERATED);
+    expect(screen.getByText('✓ generated 2 nodes in 3s')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Replace' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Undo this change' }));
+    expect(onApply).toHaveBeenLastCalledWith(EDITED);
+  });
+
+  it('keeps the person\'s canvas when they say so', async () => {
+    const { onApply, user } = racing();
+    await send(user, 'Generate a workflow');
+
+    await user.click(await screen.findByRole('button', { name: 'Keep mine' }, { timeout: 4000 }));
+    expect(onApply).not.toHaveBeenCalled();
+    expect(screen.getByText(/Kept your canvas/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Replace' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Undo this change' })).not.toBeInTheDocument();
+  });
+});
+
+describe('undoing Chat Agent changes', () => {
+  it('hands the turn\'s agent undo to the canvas along with the workflow snapshot', async () => {
+    const next = { name: 'demo', tasks: [] };
+    const undoEntries = [{ action: 'remove', id: 'a1', name: 'Helper' }, { action: 'update', id: 'a2', name: 'Writer', previous: { name: 'Writer' } }];
+    const onAgentActions = vi.fn().mockResolvedValue({ failed: [], undo: undoEntries });
+    const onUndoAgentActions = vi.fn().mockResolvedValue([]);
+    api.chatGraph.mockResolvedValue({ reply: 'Done.', operations: [{ op: 'delete_node' }, { op: 'delete_agent' }, { op: 'update_agent' }],
+      canvas_operations: [{ op: 'delete_node', name: 'summarise' }], applied: true, graph: next,
+      agent_actions: [{ action: 'remove', id: 'a1' }, { action: 'update', id: 'a2', patch: { name: 'Editor' } }] });
+    const { onApply, user } = setup({ onAgentActions, onUndoAgentActions });
+
+    await send(user, 'tidy up');
+    await screen.findByText('Done.');
+    expect(screen.queryByText(/Undo restores the workflow only/)).not.toBeInTheDocument();
+
+    await user.click(await screen.findByRole('button', { name: 'Undo this change' }));
+    expect(onApply).toHaveBeenLastCalledWith(GRAPH);
+    await waitFor(() => expect(onUndoAgentActions).toHaveBeenCalledWith(undoEntries));
+    expect(screen.getByText('Change undone.')).toBeInTheDocument();
+  });
+
+  it('offers Undo for a turn that only changed Chat Agents, and shows what could not be undone', async () => {
+    const onAgentActions = vi.fn().mockResolvedValue({ failed: [], undo: [{ action: 'remove', id: 'a1', name: 'Helper' }] });
+    const onUndoAgentActions = vi.fn().mockResolvedValue(["Chat Agent 'Helper' was not restored: gone"]);
+    api.chatGraph.mockResolvedValue({ reply: 'Removed.', operations: [{ op: 'delete_agent' }], canvas_operations: [],
+      agent_actions: [{ action: 'remove', id: 'a1' }], applied: false });
+    const { onApply, user } = setup({ onAgentActions, onUndoAgentActions });
+
+    await send(user, 'delete the helper chat');
+    await user.click(await screen.findByRole('button', { name: 'Undo this change' }));
+
+    expect(onApply).not.toHaveBeenCalled();
+    expect(onUndoAgentActions).toHaveBeenCalledWith([{ action: 'remove', id: 'a1', name: 'Helper' }]);
+    expect(await screen.findByText("Chat Agent 'Helper' was not restored: gone")).toBeInTheDocument();
+  });
 });

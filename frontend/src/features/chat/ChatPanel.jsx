@@ -42,6 +42,8 @@ export function summarise(operations) {
     rename_node: 'renamed',
     add_edge: 'edge',
     delete_edge: 'edge removed',
+    delete_agent: 'removed Chat Agent',
+    update_agent: 'updated Chat Agent',
     generate_workflow: 'generated workflow',
     create_tool: 'created tool',
     delete_tool: 'deleted tool',
@@ -68,6 +70,29 @@ export function summarise(operations) {
     .join(' · ');
 }
 
+// Operations that edit the canvas graph, and those that change Chat Agents.
+const CANVAS_OPS = new Set(['add_node', 'update_node', 'delete_node', 'rename_node', 'add_edge',
+  'delete_edge', 'set_goal', 'set_name', 'auto_layout', 'configure_workflow', 'set_output_dir']);
+const AGENT_OPS = new Set(['delete_agent', 'update_agent']);
+
+// What a turn actually did. A server that reports the canvas edits that took
+// effect is believed over the operations the model asked for: a delete that
+// matched nothing must not read as "deleted".
+export function appliedOperations(res) {
+  if (!Array.isArray(res?.canvas_operations)) return res?.operations || [];
+  const agentOps = (res.agent_actions || []).map(a => ({ op: a.action === 'remove' ? 'delete_agent' : 'update_agent' }));
+  const others = (res.operations || []).filter(o => !CANVAS_OPS.has(o?.op) && !AGENT_OPS.has(o?.op));
+  return [...res.canvas_operations, ...agentOps, ...others];
+}
+
+// The canvas as a comparable value; Chat Agents travel alongside and are
+// tracked by the harness, not by this comparison.
+export function canvasKey(graph) {
+  if (!graph) return '';
+  const { canvas_agents: _agents, ...rest } = graph;
+  return JSON.stringify(rest);
+}
+
 export function conversationHistory(messages) {
   return messages.map(m => ({ role: m.role, content: [m.content,
     m.role === 'assistant' && m.summary ? `Applied changes: ${m.summary}` : '',
@@ -82,6 +107,8 @@ export default function ChatPanel({
   graphId,
   getGraph,
   onApply,
+  onAgentActions,
+  onUndoAgentActions,
   onSaved,
   onRunRequest,
   onOpenPanel,
@@ -114,6 +141,11 @@ export default function ChatPanel({
   const pollJobRef = useRef(null);
   const getGraphRef = useRef(getGraph);
   getGraphRef.current = getGraph;
+  // A turn settles minutes after it was asked; act on the canvas as it is then.
+  const onAgentActionsRef = useRef(onAgentActions);
+  onAgentActionsRef.current = onAgentActions;
+  const onUndoAgentActionsRef = useRef(onUndoAgentActions);
+  onUndoAgentActionsRef.current = onUndoAgentActions;
   // Which graph is open right now. A generation started minutes ago must not
   // drop its result onto a different canvas if the user switched graphs.
   const activeGraph = useRef(graphId);
@@ -178,10 +210,20 @@ export default function ChatPanel({
             });
             return;
           }
+          const summary = `generated ${(job.graph.tasks || []).length} nodes in ${job.elapsed}s`;
+          // Generation returns a whole new workflow, not edits that could be
+          // replayed. If the person changed the canvas while it ran, replacing
+          // it would silently throw their work away: ask first.
+          const current = before ? getGraphRef.current?.() : null;
+          if (current && canvasKey(current) !== canvasKey(before)) {
+            patch({ stage: '', pendingGraph: job.graph, pendingSummary: summary,
+              notes: job.graph.migration_warnings || [] });
+            return;
+          }
           onApply(job.graph);
           patch({
             stage: '',
-            summary: `generated ${(job.graph.tasks || []).length} nodes in ${job.elapsed}s`,
+            summary,
             snapshot: before,
             notes: job.graph.migration_warnings || [],
           });
@@ -246,6 +288,38 @@ export default function ChatPanel({
   // was asked in, even if the chat was closed and reopened meanwhile.
   const settle = useCallback(async (res, { sessionId, before }) => {
     const id = newId();
+    let graphToApply = (res.applied || res.saved) && res.graph ? res.graph : null;
+    let base = before;
+    let notes = res.notes || [];
+    let errors = res.errors || [];
+    let summary = res.job_id || errors.length ? '' : summarise(appliedOperations(res));
+    // The turn worked on the canvas sent with the message. If the person
+    // edited it meanwhile, its result would wipe their edits: replay the
+    // turn's canvas edits onto the canvas as it is now instead.
+    const current = graphToApply && before ? getGraphRef.current?.() : null;
+    if (current && canvasKey(current) !== canvasKey(before)) {
+      const operations = res.canvas_operations || [];
+      let replayed = null;
+      if (operations.length && api.replayChatOperations) {
+        try {
+          const { canvas_agents: _agents, ...graph } = current;
+          replayed = await api.replayChatOperations(graphId, { graph, operations });
+        } catch (err) {
+          replayed = { applied: false, errors: [err?.body?.detail || err.message] };
+        }
+      }
+      if (replayed?.applied) {
+        graphToApply = { ...replayed.graph, id: res.graph.id ?? replayed.graph.id };
+        base = current;
+        notes = [...notes, 'The canvas changed while I was working, so my edits were applied on top of your changes.'];
+      } else {
+        graphToApply = null;
+        summary = '';
+        errors = [...errors, 'The canvas changed while I was working, so my edits were not applied, to keep yours. Ask again to redo them on the current canvas.',
+          ...(replayed?.errors || []), ...(replayed?.notes || [])];
+      }
+    }
+    const agentActions = res.agent_actions || [];
     const nextMessages = [
       ...messagesOf(sessionId),
       {
@@ -253,13 +327,13 @@ export default function ChatPanel({
         role: 'assistant',
         content: res.reply || '',
         activity: res.activity || [],
-        summary: res.job_id || res.errors?.length ? '' : summarise(res.operations),
-        errors: res.errors || [],
-        notes: res.notes || [],
+        summary,
+        errors,
+        notes,
         tools: res.tools_created || [],
         // The canvas as it was before this turn, so the edit can be undone
         // without a global undo stack.
-        snapshot: res.applied && before ? { ...before, id: res.graph?.id || before.id } : null,
+        snapshot: graphToApply && res.applied && base ? { ...base, id: res.graph?.id || base.id } : null,
         stage: res.job_id ? 'Starting…' : '',
         saved: !!res.saved,
         // A run the model proposed: it does not start until the user says so.
@@ -267,7 +341,18 @@ export default function ChatPanel({
       },
     ];
     updateSession(sessionId, nextMessages);
-    if ((res.applied || res.saved) && res.graph) onApply(res.graph);
+    if (graphToApply) onApply(graphToApply);
+    if (agentActions.length && onAgentActionsRef.current) {
+      // { failed, undo } — or, from an older host, just the failures.
+      const outcome = await onAgentActionsRef.current(agentActions);
+      const failed = Array.isArray(outcome) ? outcome : outcome?.failed || [];
+      const agentUndo = Array.isArray(outcome) ? [] : outcome?.undo || [];
+      if (failed.length || agentUndo.length) {
+        updateSession(sessionId, m => m.map(msg => msg.id === id ? { ...msg,
+          errors: failed.length ? [...(msg.errors || []), ...failed] : msg.errors,
+          agentUndo: agentUndo.length ? agentUndo : msg.agentUndo } : msg));
+      }
+    }
     if (res.saved && res.graph?.id && res.graph.id !== graphId) saveHistory(res.graph.id, nextMessages);
     if (res.saved) onSaved && onSaved();
     if (res.panel) onOpenPanel?.(res.panel);
@@ -466,17 +551,40 @@ export default function ChatPanel({
     );
   }, [setMessages]);
 
+  // Takes back a turn: the canvas as it was before it, and the Chat Agents it
+  // removed or changed.
   const undo = useCallback(
-    (id) => {
-      const message = messages.find((m) => m.id === id);
-      if (!message?.snapshot) return;
-      onApply(message.snapshot);
+    async (id) => {
+      const message = messagesRef.current.find((m) => m.id === id);
+      const agentUndo = message?.agentUndo || [];
+      if (!message?.snapshot && !agentUndo.length) return;
       setMessages((m) =>
-        m.map((msg) => (msg.id === id ? { ...msg, snapshot: null, undone: true } : msg))
+        m.map((msg) => (msg.id === id ? { ...msg, snapshot: null, agentUndo: null, undone: true } : msg))
       );
+      if (message.snapshot) onApply(message.snapshot);
+      const failed = agentUndo.length && onUndoAgentActionsRef.current
+        ? (await onUndoAgentActionsRef.current(agentUndo)) || [] : [];
+      if (failed.length) {
+        setMessages((m) => m.map((msg) => (msg.id === id ? { ...msg, errors: [...(msg.errors || []), ...failed] } : msg)));
+      }
     },
-    [messages, onApply, setMessages]
+    [onApply, setMessages]
   );
+
+  // A generation that finished on a canvas the person had changed meanwhile
+  // waits for them to choose.
+  const replaceWithGenerated = useCallback((id) => {
+    const message = messagesRef.current.find((m) => m.id === id);
+    if (!message?.pendingGraph) return;
+    const current = getGraphRef.current?.();
+    onApply(message.pendingGraph);
+    setMessages((m) => m.map((msg) => (msg.id === id ? { ...msg, pendingGraph: null, pendingSummary: null,
+      summary: msg.pendingSummary || 'generated workflow', snapshot: current || null } : msg)));
+  }, [onApply, setMessages]);
+  const keepCanvas = useCallback((id) => {
+    setMessages((m) => m.map((msg) => (msg.id === id ? { ...msg, pendingGraph: null, pendingSummary: null,
+      notes: [...(msg.notes || []), 'Kept your canvas; the generated workflow was not applied.'] } : msg)));
+  }, [setMessages]);
 
   async function stopChat() {
     const turnId = cancellation.current.current?.id;
@@ -539,7 +647,14 @@ export default function ChatPanel({
               <div key={j} className="chat-error">{e}</div>
             ))}
             {m.stage && <div className="chat-thinking">{m.stage}</div>}
-            {m.snapshot && (
+            {m.pendingGraph && (
+              <div className="chat-confirm" role="group" aria-label="Apply generated workflow">
+                <div className="chat-note">The canvas changed while generating. Replace it with the generated workflow?</div>
+                <button type="button" onClick={() => replaceWithGenerated(m.id)}>Replace</button>
+                <button type="button" onClick={() => keepCanvas(m.id)}>Keep mine</button>
+              </div>
+            )}
+            {(m.snapshot || m.agentUndo?.length > 0) && (
               <button type="button" className="chat-undo" onClick={() => undo(m.id)}>
                 Undo this change
               </button>

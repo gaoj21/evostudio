@@ -220,6 +220,14 @@ def execution_error(exc):
     return f'Execution failed ({type(exc).__name__}). You can send again in this conversation; server logs contain diagnostic details.'
 
 
+def thread_id(scope, agent_id, session, generation=None):
+    """The checkpoint thread of a session's execution generation. Sessions
+    moved from an older owner keep the namespace they were created under."""
+    generation = session.get('generation') if generation is None else generation
+    base = f"{session.get('checkpoint_scope', scope)}:{agent_id}:{session['id']}"
+    return hashlib.sha256((base + (f':recovery:{generation}' if generation else '')).encode()).hexdigest()
+
+
 def _execute(graph, agent, session, event):
     scope, sid, aid = owner(graph), session['id'], agent['id']
     def persist():
@@ -241,8 +249,7 @@ def _execute(graph, agent, session, event):
     control.event = event
     token = chat_control.current.set(control)
     try:
-        thread_id = hashlib.sha256((f"{session.get('checkpoint_scope', scope)}:{aid}:{sid}" + (f":recovery:{session['generation']}" if session.get('generation') else '')).encode()).hexdigest()
-        answer = harness.run_turn(graph, agent, thread_id, session['messages'][-1]['content'], emit, event)
+        answer = harness.run_turn(graph, agent, thread_id(scope, aid, session), session['messages'][-1]['content'], emit, event)
         if event.is_set():
             session['status'] = 'stopped'
         else:
@@ -327,6 +334,21 @@ def remove_agent(graph_id: str, agent_id: str):
     return {'removed': True, 'history_retained': True}
 
 
+@router.post('/{agent_id}/restore')
+def restore_agent(graph_id: str, agent_id: str):
+    """Bring back one removed canvas Agent, its definition and sessions as
+    they were archived. Restoring an Agent that is already on the canvas is a
+    no-op, so a repeated undo cannot fail half-way."""
+    scope = owner(graph_for(graph_id))
+    with _lock, database() as db:
+        row = db.execute("SELECT kind, body FROM objects WHERE id=? AND owner=? AND kind IN ('agent','archived-agent')",
+                         (agent_id, scope)).fetchone()
+        if not row: raise HTTPException(404, 'Agent not found')
+        agent = json.loads(row[1])
+        if row[0] == 'archived-agent': put(db, agent_id, scope, 'agent', '', agent)
+    return agent
+
+
 @router.delete('/{agent_id}/sessions/{session_id}')
 def delete_session(graph_id: str, agent_id: str, session_id: str):
     scope = owner(graph_for(graph_id))
@@ -339,8 +361,6 @@ def delete_session(graph_id: str, agent_id: str, session_id: str):
         if path.exists():
             with SqliteSaver.from_conn_string(str(path)) as saver:
                 for generation in range(session.get('generation', 0) + 1):
-                    suffix = f':recovery:{generation}' if generation else ''
-                    thread = hashlib.sha256(f'{scope}:{agent_id}:{session_id}{suffix}'.encode()).hexdigest()
-                    saver.delete_thread(thread)
+                    saver.delete_thread(thread_id(scope, agent_id, session, generation))
         db.execute('DELETE FROM objects WHERE id=?', (session_id,))
     return {'removed': True}

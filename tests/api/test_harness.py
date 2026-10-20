@@ -197,3 +197,57 @@ def test_nodes_saved_with_the_old_engine_name_still_run_on_the_agent():
     assert not is_agent_engine({'engine': 'other'}) and not is_agent_engine(None)
     validate_harness_tasks([{'name': 'a', 'harness': {'engine': 'deepagents'}},
                             {'name': 'b', 'harness': {'engine': 'langgraph'}}])
+
+
+def test_a_failing_tool_is_reported_to_the_model_not_the_end_of_the_turn(local, monkeypatch):
+    """Any tool error (not only bad arguments) comes back as "Error: ...", so
+    the model can retry; the turn goes on."""
+    monkeypatch.setattr(harness.skills_api, 'get_skill', lambda name: None)
+    events = []
+    model = ScriptedModel(replies=[
+        AIMessage(content='', tool_calls=[{'name': 'load_skill', 'args': {'name': 'missing'}, 'id': 'c1'}]),
+        AIMessage(content='That skill is not available.')])
+    answer = harness.run_turn(local, {'skill_names': ['missing']}, 'tool-error', 'load it', events.append,
+                              threading.Event(), model=model)
+    assert answer == 'That skill is not available.'
+    result = next(e for e in events if e['type'] == 'tool_result')
+    assert result['content'].startswith('Error: ValueError: Skill not found')
+
+
+def test_a_stop_inside_a_tool_still_ends_the_turn(local, monkeypatch):
+    from backend.features.agents.graph_agent import TurnStopped
+    event = threading.Event()
+    def stop_then_call(name, args, **kw):
+        event.set()
+        raise TurnStopped('Execution stopped')
+    monkeypatch.setattr(harness.tools_registry, 'call_tool', stop_then_call)
+    model = ScriptedModel(replies=[
+        AIMessage(content='', tool_calls=[{'name': 'call_studio_tool', 'args': {'name': 'double', 'arguments': {'n': 1}}, 'id': 'c1'}]),
+        AIMessage(content='should not be reached')])
+    with pytest.raises(RuntimeError, match='stopped'):
+        harness.run_turn(local, {}, 'tool-stop', 'go', lambda e: None, event, model=model)
+    assert len(model.calls) == 1
+
+
+def test_an_unreadable_tool_call_is_corrected_instead_of_answered(local):
+    model = ScriptedModel(replies=[
+        AIMessage(content='{"tool_calls": [{"name": "delete_node", "arguments": {"name": "x"}}]}'),
+        AIMessage(content='I cannot edit the canvas; use the workflow assistant.')])
+    answer = harness.run_turn(local, {}, 'correct', 'delete node x', lambda e: None, threading.Event(), model=model)
+    assert answer == 'I cannot edit the canvas; use the workflow assistant.'
+    correction = model.calls[1][-1].content
+    assert 'delete_node' in correction and 'list_available_tools' in correction
+
+
+def test_unreadable_calls_are_corrected_a_bounded_number_of_times(local):
+    from backend.features.agents.graph_agent import MAX_CORRECTIONS
+    broken = '{"tool_calls": [{"name": "ls", "arguments": {'
+    model = ScriptedModel(replies=[AIMessage(content=broken) for _ in range(MAX_CORRECTIONS + 1)])
+    answer = harness.run_turn(local, {}, 'bounded', 'go', lambda e: None, threading.Event(), model=model)
+    assert answer == broken and len(model.calls) == MAX_CORRECTIONS + 1
+
+
+def test_the_agent_is_told_it_does_not_edit_the_canvas(local):
+    model = ScriptedModel(replies=[AIMessage(content='ok')])
+    harness.run_turn(local, {}, 'canvas-note', 'delete a node', lambda e: None, threading.Event(), model=model)
+    assert 'workflow assistant' in model.calls[0][0].content

@@ -11,6 +11,7 @@
 - `result_chat.py` — Read-only result exploration with scoped, deterministic aggregation.
 - `result_compute.py` — Run result-analysis Python in an OS sandbox, never in the API process.
 - `model_json.py` — Reading a model's structured answer.
+- `node_resolver.py` — Finding the canvas object a chat operation names (tiered, with candidates).
 - `agent_api.py` — An OpenAI-compatible chat endpoint that turns Studio into a callable agent.
 
 ## 修改边界

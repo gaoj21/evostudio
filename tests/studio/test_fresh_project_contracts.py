@@ -76,8 +76,32 @@ def test_generic_saved_results_choose_generic_metric_and_keep_inputs():
     assert 'company' not in captured[0]['records'][0]
 
 
-def test_chat_canvas_restore_preserves_sessions_and_checks_ownership(monkeypatch):
+def test_removed_chat_agent_can_be_restored_with_its_sessions(monkeypatch, tmp_path):
     from backend.features.agents import harness_api as api
+    monkeypatch.setattr(api, 'data_path', lambda *p: tmp_path.joinpath(*p))
+    graph = {'id':'restore-one'}
+    monkeypatch.setattr(api, 'graph_for', lambda _:graph)
+    keep = api.create_agent(graph['id'], api.AgentSettings(name='Keep'))
+    agent = api.create_agent(graph['id'], api.AgentSettings(name='Research', instructions='Be brief.'))
+    session = api.create_session(graph['id'], agent['id'])
+    api.remove_agent(graph['id'], agent['id'])
+    assert [a['id'] for a in api.list_agents(graph['id'])['agents']] == [keep['id']]
+    assert api.restore_agent(graph['id'], agent['id']) == agent
+    # Other Agents are left alone, unlike a whole-canvas restore.
+    assert sorted(a['id'] for a in api.list_agents(graph['id'])['agents']) == sorted([keep['id'], agent['id']])
+    with api.database() as db:
+        assert api.get(db, session['id'], api.owner(graph), 'session')['id'] == session['id']
+    # Already on the canvas: nothing to do, and not an error.
+    assert api.restore_agent(graph['id'], agent['id']) == agent
+    with pytest.raises(HTTPException) as exc: api.restore_agent(graph['id'], 'f' * 32)
+    assert exc.value.status_code == 404
+
+
+def test_chat_canvas_restore_preserves_sessions_and_checks_ownership(monkeypatch, tmp_path):
+    from backend.features.agents import harness_api as api
+    # The harness store is not in conftest's redirected paths: without this the
+    # test wrote into the real studio-data and failed on every other run.
+    monkeypatch.setattr(api, 'data_path', lambda *p: tmp_path.joinpath(*p))
     graph = {'id':'restore-test'}
     monkeypatch.setattr(api, 'graph_for', lambda _:graph)
     agent = api.create_agent(graph['id'], api.AgentSettings(name='Research'))

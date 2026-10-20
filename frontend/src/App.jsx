@@ -984,6 +984,13 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
     () => flowToGraph(graph, nodes, edges),
     [graph, nodes, edges]
   );
+  // The assistant also sees the Chat Agents on the canvas, to address them by
+  // name. They are not part of the workflow graph and are never saved in it.
+  const assistantSnapshot = useCallback(
+    () => ({ ...flowToGraph(graph, nodes, edges),
+      canvas_agents: canvasAgents.agents.map(a => ({ id: a.id, name: a.name, instructions: a.instructions })) }),
+    [graph, nodes, edges, canvasAgents.agents]
+  );
 
   const openPastRun = useCallback(
     async (listedRun) => {
@@ -1192,6 +1199,57 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
       setSelectedMemoryEdges(new Set());
     } catch (e) { reportAgentError(e); }
   }, [graph?.id, graph?.memory_resources, canvasAgents.remove, canvasAgents.save, canvasAgents.agents, setNodes, reportAgentError]);
+  // Chat Agent changes the assistant made, carried out through the same
+  // calls the canvas's own controls use, so the harness store and the canvas
+  // agree. Returns what could not be done, for the chat to show, and how to
+  // take back what was done, for its Undo.
+  const applyAgentActions = useCallback(async actions => {
+    const failed = [];
+    const undo = [];
+    for (const action of actions || []) {
+      const agent = canvasAgents.agents.find(a => a.id === action.id);
+      const label = agent?.name || action.name || action.id;
+      try {
+        if (!agent) throw new Error('it is no longer on the canvas');
+        if (action.action === 'remove') {
+          await canvasAgents.remove(agent.id);
+          undo.push({ action: 'remove', id: agent.id, name: agent.name });
+          const nodeId = chatNodeId(agent.id);
+          setSelectedId(selected => selected === nodeId ? null : selected);
+          setInspectorParent(parent => parent === nodeId ? null : parent);
+        } else if (action.action === 'update') {
+          const patch = action.patch || {};
+          await canvasAgents.save(agent, patch);
+          undo.push({ action: 'update', id: agent.id, name: agent.name,
+            previous: Object.fromEntries(Object.keys(patch).map(key => [key, agent[key]])) });
+        }
+      } catch (e) {
+        failed.push(`Chat Agent '${label}' was not ${action.action === 'remove' ? 'removed' : 'updated'}: ${e?.body?.detail || e.message}`);
+      }
+    }
+    return { failed, undo };
+  }, [canvasAgents.agents, canvasAgents.remove, canvasAgents.save]);
+  // The chat's Undo for those changes, newest first: a removed Agent comes
+  // back (with its sessions), an updated one gets its previous settings.
+  const undoAgentActions = useCallback(async entries => {
+    const failed = [];
+    const present = new Set(canvasAgents.agents.map(a => a.id));
+    for (const entry of [...(entries || [])].reverse()) {
+      const label = entry.name || entry.id;
+      try {
+        if (entry.action === 'remove') {
+          await canvasAgents.unarchive(entry.id);
+          present.add(entry.id);
+        } else if (entry.action === 'update') {
+          if (!present.has(entry.id)) throw new Error('it is no longer on the canvas');
+          await canvasAgents.save({ id: entry.id }, () => entry.previous || {});
+        }
+      } catch (e) {
+        failed.push(`Chat Agent '${label}' was not ${entry.action === 'remove' ? 'restored' : 'reverted'}: ${e?.body?.detail || e.message}`);
+      }
+    }
+    return failed;
+  }, [canvasAgents.agents, canvasAgents.unarchive, canvasAgents.save]);
   const memoryNodes = useMemo(() => {
     if (!showMemory) return [];
     const wrote = {};
@@ -1631,8 +1689,10 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
           <ChatPanel
             key={graph?.id}
             graphId={graph?.id}
-            getGraph={chatSnapshot}
+            getGraph={assistantSnapshot}
             onApply={applyChatGraph}
+            onAgentActions={applyAgentActions}
+            onUndoAgentActions={undoAgentActions}
             onSaved={() => { pendingCleanRef.current = true; refreshList(); }}
             onOpenPanel={panel => panel === 'workspace' ? openWorkspace() : openOverlay(panel)}
             onRunRequest={startRun}

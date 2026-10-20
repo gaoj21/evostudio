@@ -31,7 +31,7 @@ from fastapi import APIRouter, Body, HTTPException
 from backend.api import custom_tools
 from backend.api import model_json, chat_control
 from backend.api.chat_engine import ChatEngine
-from backend.features.chat import turn_jobs
+from backend.features.chat import node_resolver, turn_jobs
 from backend.api import graphs as graph_store
 from backend.api import skills_api
 from backend.api import tools_registry
@@ -58,7 +58,15 @@ JOB_TTL = 3600
 
 
 class ChatError(Exception):
-    """User-facing chat failure (HTTP 422)."""
+    """User-facing chat failure (HTTP 422).
+
+    `candidates` are the canvas objects a failed name lookup could have
+    meant; they go back to the model with the error so it can retry or ask.
+    """
+
+    def __init__(self, message, candidates=None):
+        super().__init__(message)
+        self.candidates = candidates or []
 
 
 # --------------------------------------------------------------------------
@@ -145,6 +153,20 @@ merges the patch into that task; only include fields you are changing.
   Field names must exist. For ordering only use "control_only": true instead.
   Without either, same-name fields are mapped automatically; an edge with no shared fields is control-only.
 - {"op": "delete_edge", "source": "a", "target": "b"}
+- {"op": "delete_agent", "name": "<Chat Agent name or chat:id>"} -- remove a \
+Chat Agent from the canvas (its conversations are archived, not erased).
+- {"op": "update_agent", "name": "<Chat Agent name or chat:id>", "patch": \
+{"name": "...", "instructions": "..."}} -- rename a Chat Agent or change its \
+instructions.
+
+Chat Agents (listed under canvas_agents) are independent conversations placed \
+on the canvas, not workflow nodes: no edges, not part of runs. Use the \
+operations above for them; delete_node and rename_node also accept them.
+Names you are given may differ slightly from the stored ones (case, spaces, \
+another language); operations resolve them and report what they matched. When \
+an operation reports that nothing matched or several things did, it lists the \
+candidates: use the exact id, or ask the user which one they meant. Never \
+claim a change was made unless an operation for it was applied.
 - {"op": "set_goal", "goal": "..."} / {"op": "set_name", "name": "..."}
 - {"op": "auto_layout"} -- re-arranges every node by dependency depth. Add \
 this after structural changes so the canvas stays readable.
@@ -302,10 +324,31 @@ def _source_catalog() -> str:
         return f"(unavailable: {type(e).__name__})"
 
 
-def _build_system_prompt(graph: dict) -> str:
+def _agent_listing(agents: list) -> list:
+    return [{"id": c["id"], "name": c["labels"][0] if c["labels"] else c["id"]}
+            for c in node_resolver.agent_candidates(agents)]
+
+
+def _canvas_summary(graph: dict, agents: list) -> str:
+    """The canvas as it stands mid-turn, compact enough to repeat each step."""
+    def fields(params):
+        return [p.get("name") for p in params or [] if isinstance(p, dict)]
+    tasks = [{"name": t.get("name"), **({"kind": t["kind"]} if t.get("kind") else {}),
+              "description": str(t.get("description") or "")[:120],
+              "inputs": fields(t.get("inputs")), "outputs": fields(t.get("outputs")),
+              **({"enabled": False} if t.get("enabled") is False else {})}
+             for t in graph.get("tasks", []) if isinstance(t, dict)]
+    edges = [{k: e[k] for k in ("source", "target", "mappings", "control_only") if k in e}
+             for e in graph.get("edges", []) if isinstance(e, dict)]
+    return json.dumps({"goal": graph.get("goal"), "tasks": tasks, "edges": edges,
+                       "canvas_agents": _agent_listing(agents)}, ensure_ascii=False, default=str)
+
+
+def _build_system_prompt(graph: dict, agents: list | None = None) -> str:
     canvas = {"tasks": graph.get("tasks", []), "edges": graph.get("edges", []),
               "output_dir": graph.get("output_dir", "runs"), "preprocess": graph.get("preprocess"),
-              "memory_resources": graph.get("memory_resources", [])}
+              "memory_resources": graph.get("memory_resources", []),
+              "canvas_agents": _agent_listing(agents or [])}
     return SYSTEM_PROMPT % {
         "tools": _tool_catalog(),
         "skills": _skill_catalog(),
@@ -340,6 +383,33 @@ def _find(tasks: list, name: str) -> dict | None:
         if t.get("name") == name:
             return t
     return None
+
+
+def _resolve(op: str, query, tasks: list, agents: list = (), *, destructive: bool = False,
+             notes: list | None = None) -> dict:
+    """The canvas object an operation names (node_resolver), or ChatError.
+
+    Returns the resolver's candidate: `kind` is the task kind or
+    "chat_agent", `ref` the task/agent dict itself.
+    """
+    candidates = node_resolver.task_candidates(tasks) + node_resolver.agent_candidates(agents)
+    result = node_resolver.resolve(query, candidates, destructive=destructive)
+    if result["status"] != "ok":
+        raise ChatError(node_resolver.failure(op, query, result), result["candidates"])
+    if result.get("note") and notes is not None:
+        notes.append(f"{op}: {result['note']}")
+    return result["match"]
+
+
+def _resolve_task(op: str, query, tasks: list, agents: list = (), *, destructive: bool = False,
+                  notes: list | None = None) -> dict:
+    """Like _resolve, for operations that only apply to workflow nodes."""
+    match = _resolve(op, query, tasks, agents, destructive=destructive, notes=notes)
+    if match["kind"] == "chat_agent":
+        raise ChatError(f"{op}: '{query}' is the Chat Agent {match['id']}, not a workflow node. "
+                        "Use update_agent / delete_agent for Chat Agents.",
+                        [node_resolver.summary(match)])
+    return match["ref"]
 
 
 def _workflow_from_goal(goal: str, on_stage=None) -> dict:
@@ -436,7 +506,17 @@ def _run_digest(run: dict) -> dict:
     }
 
 
-def apply_operations(graph: dict, operations: list, graph_id: str | None = None) -> dict:
+# Operations that change the canvas graph itself. These are what a turn's
+# result replays onto a canvas the person edited while the turn ran; reads and
+# side effects (files, tools, runs, saves) already happened and are not redone.
+CANVAS_OPS = ("add_node", "update_node", "delete_node", "rename_node", "add_edge",
+              "delete_edge", "set_goal", "set_name", "auto_layout",
+              "configure_workflow", "set_output_dir")
+AGENT_FIELDS = ("name", "instructions")
+
+
+def apply_operations(graph: dict, operations: list, graph_id: str | None = None,
+                     agents: list | None = None) -> dict:
     """Apply the model's operations to a copy of the graph.
 
     Returns a dict with the updated graph, per-operation notes, anything created,
@@ -444,20 +524,55 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None)
     back so the model can act on what it found -- and `pending_run`, a run the
     model proposed for the user to confirm.
 
+    Chat Agents on the canvas are not part of the workflow graph: they live in
+    the harness store and the frontend owns their canvas state. `agents` (or
+    the graph's `canvas_agents`) is the list the assistant can see; an
+    operation on one comes back in `agent_actions` for the frontend to carry
+    out through the same calls its own buttons use, and `canvas_agents` is the
+    list as it stands after this batch.
+
+    `canvas_operations` are the canvas edits that took effect, with names as
+    resolved, so the client can replay them onto a canvas that changed meanwhile.
+
     A malformed single operation is reported as a note and skipped rather than
     failing the whole turn: one bad edge should not throw away four good nodes.
     """
     graph = copy.deepcopy(graph)
+    listed = graph.pop("canvas_agents", None)
+    agents = copy.deepcopy(listed if agents is None else agents) or []
     notes: list[str] = []
     tools_created: list[str] = []
     skills_created: list[str] = []
     observations: list[dict] = []
+    agent_actions: list[dict] = []
+    canvas_operations: list[dict] = []
     saved = False
     pending_run: dict | None = None
     panel = None
 
     def observe(op_name: str, payload):
         observations.append({"op": op_name, "result": payload})
+
+    def remove_agent(match):
+        agents[:] = [a for a in agents if node_resolver.agent_candidates([a])[0]["id"] != match["id"]]
+        agent_actions.append({"action": "remove", "id": match["id"][len("chat:"):],
+                              "name": (match["ref"] or {}).get("name")})
+        notes.append(f"Removed Chat Agent '{(match['ref'] or {}).get('name') or match['id']}' "
+                     "(its conversations are archived, not erased)")
+
+    def update_agent(match, patch):
+        patch = {k: v for k, v in (patch or {}).items() if k in AGENT_FIELDS}
+        if not patch:
+            raise ChatError(f"update_agent: nothing to change; supported fields: {', '.join(AGENT_FIELDS)}")
+        name = patch.get("name")
+        if name is not None and not (isinstance(name, str) and 1 <= len(name.strip()) <= 120):
+            raise ChatError("update_agent: name must be 1-120 characters")
+        if "instructions" in patch and not (isinstance(patch["instructions"], str) and len(patch["instructions"]) <= 30000):
+            raise ChatError("update_agent: instructions must be text of at most 30000 characters")
+        if name is not None:
+            patch["name"] = name.strip()
+        match["ref"].update(patch)
+        agent_actions.append({"action": "update", "id": match["id"][len("chat:"):], "patch": patch})
 
     for raw in operations or []:
         chat_control.check()
@@ -468,6 +583,7 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None)
         tasks = graph.setdefault("tasks", [])
         edges = graph.setdefault("edges", [])
         taken = {t.get("name") for t in tasks}
+        applied = None  # the canvas edit, as resolved, when it took effect
 
         try:
             if op == "generate_workflow":
@@ -491,42 +607,52 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None)
                 task.setdefault("x", 0)
                 task.setdefault("y", 0)
                 tasks.append(task)
+                applied = raw
 
             elif op == "update_node":
-                task = _find(tasks, raw.get("name"))
-                if task is None:
-                    raise ChatError(f"update_node: no node named '{raw.get('name')}'")
+                task = _resolve_task("update_node", raw.get("name"), tasks, agents, notes=notes)
                 patch = dict(raw.get("patch") or {})
                 patch.pop("name", None)  # renaming goes through rename_node
                 task.update(patch)
+                applied = {**raw, "name": task["name"]}
 
-            elif op == "delete_node":
-                name = raw.get("name")
-                if _find(tasks, name) is None:
-                    raise ChatError(f"delete_node: no node named '{name}'")
-                graph["tasks"] = [t for t in tasks if t.get("name") != name]
-                graph["edges"] = [e for e in edges
-                                  if e.get("source") != name and e.get("target") != name]
+            elif op in ("delete_node", "delete_agent"):
+                match = _resolve(op, raw.get("name") or raw.get("id"), tasks if op == "delete_node" else [],
+                                 agents, destructive=True, notes=notes)
+                if match["kind"] == "chat_agent":
+                    remove_agent(match)
+                else:
+                    name = match["id"]
+                    graph["tasks"] = [t for t in tasks if t.get("name") != name]
+                    graph["edges"] = [e for e in edges
+                                      if e.get("source") != name and e.get("target") != name]
+                    applied = {"op": "delete_node", "name": name}
+
+            elif op == "update_agent":
+                match = _resolve(op, raw.get("name") or raw.get("id"), [], agents, notes=notes)
+                update_agent(match, raw.get("patch"))
 
             elif op == "rename_node":
-                task = _find(tasks, raw.get("name"))
-                if task is None:
-                    raise ChatError(f"rename_node: no node named '{raw.get('name')}'")
-                new_name = _unique(raw.get("new_name") or "", taken - {task["name"]})
-                old = task["name"]
-                task["name"] = new_name
-                from backend.features.memory.identity import rename_references
-                rename_references(graph, old, new_name)
-                for e in edges:
-                    if e.get("source") == old:
-                        e["source"] = new_name
-                    if e.get("target") == old:
-                        e["target"] = new_name
+                match = _resolve("rename_node", raw.get("name"), tasks, agents, notes=notes)
+                if match["kind"] == "chat_agent":
+                    update_agent(match, {"name": raw.get("new_name")})
+                else:
+                    task = match["ref"]
+                    new_name = _unique(raw.get("new_name") or "", taken - {task["name"]})
+                    old = task["name"]
+                    task["name"] = new_name
+                    from backend.features.memory.identity import rename_references
+                    rename_references(graph, old, new_name)
+                    for e in edges:
+                        if e.get("source") == old:
+                            e["source"] = new_name
+                        if e.get("target") == old:
+                            e["target"] = new_name
+                    applied = {**raw, "name": old}
 
             elif op == "add_edge":
-                src, tgt = raw.get("source"), raw.get("target")
-                if _find(tasks, src) is None or _find(tasks, tgt) is None:
-                    raise ChatError(f"add_edge: unknown node in {src} -> {tgt}")
+                src = _resolve_task("add_edge", raw.get("source"), tasks, agents, notes=notes)["name"]
+                tgt = _resolve_task("add_edge", raw.get("target"), tasks, agents, notes=notes)["name"]
                 if src == tgt:
                     raise ChatError("add_edge: a node cannot feed itself")
                 existing = next((e for e in edges if e.get("source") == src and e.get("target") == tgt), None)
@@ -544,21 +670,38 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None)
                     else: edge['control_only'] = True
                 if existing is None: edges.append(edge)
                 else: existing.clear(); existing.update(edge)
+                applied = {**raw, "source": src, "target": tgt}
 
             elif op == "delete_edge":
-                src, tgt = raw.get("source"), raw.get("target")
+                src = _resolve_task("delete_edge", raw.get("source"), tasks, agents,
+                                    destructive=True, notes=notes)["name"]
+                tgt = _resolve_task("delete_edge", raw.get("target"), tasks, agents,
+                                    destructive=True, notes=notes)["name"]
+                if not any(e.get("source") == src and e.get("target") == tgt for e in edges):
+                    touching = [{"source": e.get("source"), "target": e.get("target")} for e in edges
+                                if {e.get("source"), e.get("target")} & {src, tgt}]
+                    raise ChatError(
+                        f"delete_edge: there is no edge {src} -> {tgt}"
+                        + (". Edges touching these nodes: "
+                           + ", ".join(f"{e['source']} -> {e['target']}" for e in touching)
+                           if touching else " and no edges touch these nodes"),
+                        touching)
                 graph["edges"] = [e for e in edges
                                   if not (e.get("source") == src and e.get("target") == tgt)]
+                applied = {"op": "delete_edge", "source": src, "target": tgt}
 
             elif op == "set_goal":
                 graph["goal"] = raw.get("goal") or ""
+                applied = raw
 
             elif op == "set_name":
                 if raw.get("name"):
                     graph["name"] = raw["name"]
+                    applied = raw
 
             elif op == "auto_layout":
                 graph_store.auto_layout(graph)
+                applied = raw
 
             elif op == "create_skill":
                 skills_api.save_skill(dict(raw.get("spec") or {}))
@@ -593,16 +736,17 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None)
                 observe("validate", {"errors": errors, "workflow_inputs": inputs})
 
             elif op == "inspect_node":
-                task = _find(tasks, raw.get("name"))
-                if task is None:
-                    raise ChatError(f"inspect_node: no node named '{raw.get('name')}'")
-                observe("inspect_node", task)
+                match = _resolve("inspect_node", raw.get("name"), tasks, agents, notes=notes)
+                observe("inspect_node", match["ref"] if match["kind"] != "chat_agent" else
+                        {"id": match["id"], **{k: match["ref"].get(k) for k in ("name", "instructions")},
+                         "kind": "chat_agent"})
 
             elif op == "configure_workflow":
                 patch = raw.get('patch') or {}
                 if not isinstance(patch, dict) or set(patch) - {'goal', 'preprocess', 'output_dir'}:
                     raise ChatError('configure_workflow: unsupported setting')
                 graph.update(copy.deepcopy(patch))
+                applied = raw
 
             elif op == "open_panel":
                 panel = raw.get('panel')
@@ -721,6 +865,7 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None)
 
             elif op == "set_output_dir":
                 graph["output_dir"] = (raw.get("path") or "runs").strip() or "runs"
+                applied = raw
 
             elif op == "write_file":
                 from backend.api import workspace as workspace_mod
@@ -768,19 +913,25 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None)
 
             else:
                 notes.append(f"Ignored unknown operation {op!r}")
+            if applied is not None:
+                canvas_operations.append(copy.deepcopy(applied))
         except custom_tools.CustomToolError as e:
             notes.append(f"create_tool failed: {e}")
         except skills_api.SkillError as e:
             notes.append(f"{op} failed: {e}")
         except ChatError as e:
             notes.append(str(e))
-            observe('operation_error', {'operation': op, 'error': str(e)})
+            observe('operation_error', {'operation': op, 'error': str(e),
+                                        **({'candidates': e.candidates} if e.candidates else {})})
         except Exception as e:  # one bad operation must not lose the others
             notes.append(f"{op} failed: {type(e).__name__}: {e}")
             observe("operation_error", {"operation": op, "error": str(e)})
 
     return {
         "graph": graph,
+        "canvas_agents": agents,
+        "agent_actions": agent_actions,
+        "canvas_operations": canvas_operations,
         "notes": notes,
         "tools_created": tools_created,
         "skills_created": skills_created,
@@ -823,6 +974,47 @@ def _validate(graph: dict) -> list[str]:
         return [f"{type(e).__name__}: {e}"]
 
 
+# A request to change something, in either of the languages Studio's users
+# write in. Used only to decide whether a reply with no operations deserves
+# one reminder and a visible "nothing changed" -- never to pick an operation.
+_EDIT_WORDS = re.compile(
+    r"\b(delete|remove|drop|add|insert|create|rename|connect|disconnect|link|wire|"
+    r"update|change|modify|replace|set|move|attach|detach)\b"
+    r"|删|移除|去掉|去除|添加|增加|新增|加上|创建|新建|改|重命名|连接|连上|断开|更新|替换|设置|移动",
+    re.I)
+
+
+def looks_like_edit(message: str) -> bool:
+    text = (message or "").strip()
+    if not text or text.endswith(("?", "？")):
+        return False
+    return bool(_EDIT_WORDS.search(text))
+
+
+@router.post("/graphs/{graph_id}/chat/replay")
+def replay(graph_id: str, body: dict = Body(...)):
+    """Apply a settled turn's canvas edits to the canvas as it is now.
+
+    A turn works on the canvas sent with the message; if the person edited the
+    canvas while it ran, replacing the canvas with the turn's result would
+    throw their edits away. The client sends the current canvas and the turn's
+    `canvas_operations` instead. Only canvas edits are replayed: everything
+    else the turn did (files, tools, saves, Chat Agents) already happened.
+    """
+    if not graph_store.graph_exists(graph_id):
+        raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found")
+    graph = dict(body.get("graph") or {})
+    graph.pop("canvas_agents", None)
+    operations = [o for o in (body.get("operations") or [])
+                  if isinstance(o, dict) and o.get("op") in CANVAS_OPS]
+    result = apply_operations(graph, operations, graph_id, agents=[])
+    errors = _validate(result["graph"]) if operations else []
+    failed = [o for o in result["observations"] if o.get("op") == "operation_error"]
+    return {"graph": graph if errors else result["graph"],
+            "applied": not errors and not failed,
+            "errors": errors, "notes": result["notes"]}
+
+
 @router.post("/graphs/{graph_id}/chat")
 def chat(graph_id: str, body: dict = Body(...)):
     if not graph_store.graph_exists(graph_id):
@@ -834,11 +1026,14 @@ def chat(graph_id: str, body: dict = Body(...)):
 
     # The client sends the canvas it is looking at, which may hold unsaved
     # edits; falling back to the stored graph only if it sent nothing.
-    graph = body.get("graph") or graph_store.load_graph(graph_id) or {}
+    graph = dict(body.get("graph") or graph_store.load_graph(graph_id) or {})
+    # Chat Agents the canvas shows. They are not part of the workflow graph
+    # (never saved into it); the assistant sees them to address them.
+    agents = graph.pop("canvas_agents", None) or []
     history = [m for m in (body.get("history") or [])
                if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
 
-    engine = ChatEngine(_ask, _build_system_prompt(graph), history, message)
+    engine = ChatEngine(_ask, _build_system_prompt(graph, agents), history, message)
     messages = engine.messages
     try:
         answer = engine.ask()
@@ -889,6 +1084,8 @@ def chat(graph_id: str, body: dict = Body(...)):
     # Agent loop: read operations answer back, and the model gets another turn to
     # act on what it found. Bounded so a model that keeps reading cannot spin.
     updated, notes = graph, []
+    agent_actions: list[dict] = []
+    canvas_operations: list[dict] = []
     tools_created: list[str] = []
     skills_created: list[str] = []
     steps: list[dict] = []
@@ -898,9 +1095,12 @@ def chat(graph_id: str, body: dict = Body(...)):
     activity = []
 
     def execute(operations):
-        nonlocal updated, graph_id, notes, saved, pending_run, panel
-        result = apply_operations(updated, operations, graph_id)
+        nonlocal updated, graph_id, notes, saved, pending_run, panel, agents
+        result = apply_operations(updated, operations, graph_id, agents=agents)
         updated = result["graph"]
+        agents = result["canvas_agents"]
+        agent_actions.extend(result["agent_actions"])
+        canvas_operations.extend(result["canvas_operations"])
         remaining = [o for o in operations if isinstance(o, dict)]
         for observation in result["observations"]:
             index = next((i for i, o in enumerate(remaining) if o.get('op') == observation.get('op')), None)
@@ -914,10 +1114,13 @@ def chat(graph_id: str, body: dict = Body(...)):
         saved = saved or result["saved"]
         pending_run = result["pending_run"] or pending_run
         panel = result.get("panel") or panel
-        return {"observations": result["observations"], "stop": bool(pending_run)}
+        return {"observations": result["observations"], "stop": bool(pending_run),
+                "canvas": _canvas_summary(updated, agents)}
 
+    original_agents = copy.deepcopy(agents)
+    expects_edit = looks_like_edit(message)
     try:
-        answer = engine.run(execute, initial=answer, max_steps=MAX_STEPS)
+        answer = engine.run(execute, initial=answer, max_steps=MAX_STEPS, expects_edit=expects_edit)
         reply = str(answer.get("reply") or reply).strip()
     except (ChatError, ValueError) as exc:
         notes.append(str(exc))
@@ -942,26 +1145,37 @@ def chat(graph_id: str, body: dict = Body(...)):
             retry_answer = model_json.extract_json(_ask(repair))
             retry_ops = retry_answer.get("operations") or []
             if isinstance(retry_ops, list) and retry_ops:
-                retry = apply_operations(graph, retry_ops, graph_id)
+                retry = apply_operations(graph, retry_ops, graph_id, agents=original_agents)
                 retry_errors = _validate(retry["graph"])
                 if not retry_errors:
                     updated, errors = retry["graph"], []
                     notes = notes + retry["notes"]
                     all_operations = retry_ops
+                    agent_actions[:] = retry["agent_actions"]
+                    canvas_operations[:] = retry["canvas_operations"]
                     tools_created += retry["tools_created"]
                     skills_created += retry["skills_created"]
                     saved = saved or retry["saved"]
                     reply = str(retry_answer.get("reply") or reply).strip()
-        except ChatError:
+        except (ChatError, ValueError):
             pass  # keep the first attempt's errors for the user to see
 
+    applied = not errors and json.dumps(updated, sort_keys=True) != json.dumps(graph, sort_keys=True)
+    if expects_edit and not applied and not errors and not agent_actions and not saved and not pending_run:
+        notes.append("No changes were applied to the canvas.")
     return {
         "reply": reply or ("Done." if all_operations else ""),
         "operations": all_operations,
+        # The canvas edits that took effect, names resolved: what the client
+        # replays if the person changed the canvas while this turn ran.
+        "canvas_operations": [] if errors else canvas_operations,
+        # Chat Agent changes for the client to carry out; independent of the
+        # workflow graph, so a graph that fails validation does not hold them.
+        "agent_actions": agent_actions,
         # `graph` is the canvas to show; on failure it is the unchanged input,
         # so a rejected turn never half-applies.
         "graph": graph if errors else updated,
-        "applied": not errors and json.dumps(updated, sort_keys=True) != json.dumps(graph, sort_keys=True),
+        "applied": applied,
         "errors": errors,
         "notes": notes,
         "tools_created": tools_created,
