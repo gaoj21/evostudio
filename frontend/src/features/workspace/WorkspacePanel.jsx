@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import JsonView from '../../components/JsonView.jsx';
 import { parseJsonLines } from '../../jsonView.js';
 import { api } from '../../api.js';
+import { singleFlight } from '../../singleFlight.js';
 
 /**
  * Right-click menu for one workspace entry.
@@ -250,8 +251,9 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
     setEditing(false);
     setError(null);
     load();
-    // refresh the tree while docked so new run artifacts show up
-    const t = setInterval(load, 5000);
+    // refresh the tree while docked so new run artifacts show up — one
+    // request at a time: a large tree can take longer than the interval
+    const t = setInterval(singleFlight(load), 5000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, graphId]);

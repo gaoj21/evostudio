@@ -38,8 +38,15 @@ class NodeGate:
         # Who has been let into each node so far, in record order.
         self._started: list[set] = [set() for _ in self.nodes]
         self._on_stage = on_stage
+        # Stages are reported outside `_cv`: the callback takes the batch's
+        # lock, and a reader holding that lock must never stall every record
+        # of the chunk. Numbered so a late report never overwrites a newer one.
+        self._report_lock = threading.Lock()
+        self._reports = 0
+        self._reported = 0
         # All records of a chunk are running, so the model calls in flight
-        # are bounded here instead of by the thread pool. Counted under the
+        # are bounded here instead of by the thread pool (by default one per
+        # record of the chunk, up to batch.DEFAULT_CONCURRENCY). Counted under the
         # same lock as the order, so calls also *start* in record order.
         # With the provider batch configured the coalescer decides, and a
         # limit here would only split one wave into several requests.
@@ -57,8 +64,9 @@ class NodeGate:
             self._progress[run_id] = 0
             self._order[run_id] = self._joined
             self._joined += 1
-            self._report()
+            report = self._report()
             self._cv.notify_all()
+        self._send(report)
 
     # A record is registered before its thread starts: otherwise the first
     # records to arrive see nobody behind them and run ahead into the next
@@ -68,8 +76,9 @@ class NodeGate:
     def leave(self, run_id: str) -> None:
         with self._cv:
             self._progress.pop(run_id, None)
-            self._report()
+            report = self._report()
             self._cv.notify_all()
+        self._send(report)
 
     # -- stepping ---------------------------------------------------------
 
@@ -113,8 +122,9 @@ class NodeGate:
             self._progress[run_id] = index + 1
             if 0 <= index < len(self._completed):
                 self._completed[index] += 1
-            self._report()
+            report = self._report()
             self._cv.notify_all()
+        self._send(report)
 
     def release_slot(self) -> None:
         with self._cv:
@@ -143,10 +153,22 @@ class NodeGate:
         return {"node": self.nodes[index], "index": index + 1, "of": len(self.nodes),
                 "done": self._completed[index], "total": total}
 
-    def _report(self) -> None:
+    def _report(self) -> tuple[int, dict | None] | None:
+        """The stage to report, taken under `_cv`; `_send` delivers it."""
         if self._on_stage is None:
+            return None
+        self._reports += 1
+        return self._reports, self._stage_locked()
+
+    def _send(self, report) -> None:
+        if report is None:
             return
-        try:
-            self._on_stage(self._stage_locked())
-        except Exception:
-            pass                      # progress is a view; it never stops a run
+        number, stage = report
+        with self._report_lock:
+            if number < self._reported:
+                return                # a newer stage was already reported
+            self._reported = number
+            try:
+                self._on_stage(stage)
+            except Exception:
+                pass                  # progress is a view; it never stops a run

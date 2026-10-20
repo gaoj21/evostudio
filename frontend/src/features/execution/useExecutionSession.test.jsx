@@ -116,3 +116,23 @@ it('keeps the total unknown for a streaming Dataset without length',async()=>{
   act(()=>result.current.beginBatch('batch-1'));
   await waitFor(()=>expect(result.current.batchProgress.total).toBeNull());
 });
+
+it('never stacks a batch poll on one still in flight', async () => {
+  vi.useFakeTimers();
+  try {
+    let answer;
+    api.getBatch.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    const { result } = setup();
+    act(() => result.current.beginBatch('batch-1'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(7000); });
+    // Three ticks have passed; the first request is still unanswered.
+    expect(api.getBatch).toHaveBeenCalledTimes(1);
+
+    api.getBatch.mockResolvedValue({ batch_id: 'batch-1', status: 'running', items: [] });
+    await act(async () => { answer({ batch_id: 'batch-1', status: 'running', items: [] }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(api.getBatch).toHaveBeenCalledTimes(2);
+  } finally {
+    vi.useRealTimers();
+  }
+});

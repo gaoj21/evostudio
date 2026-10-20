@@ -67,7 +67,7 @@ def usage(run_id: str | None = Query(default=None), batch_id: str | None = Query
         raise HTTPException(422, "Give exactly one of run_id or batch_id.")
     if batch_id:
         from backend.api import batch as batch_store
-        batch = batch_store.get_batch(batch_id)
+        batch = batch_store.get_batch(batch_id, inputs=False)
         if batch is None:
             raise HTTPException(404, f"Batch '{batch_id}' not found")
         return batch_usage(batch)

@@ -172,6 +172,37 @@ def is_transient(error: BaseException | None) -> bool:
     return False
 
 
+# How the package says it has already retried a failure itself (rate limits,
+# server errors, timeouts): its error carries the wording below, or a
+# `retried`/`attempts` mark. Trying such a call again here stacked both sets
+# of pauses — three package attempts for each of the bridge's three.
+RETRIED_WORDS = ("after retries", "retries exhausted")
+
+
+def already_retried(error: BaseException | None) -> bool:
+    """Whether the package retried this failure before raising it."""
+    seen = 0
+    while error is not None and seen < 10:
+        if getattr(error, "retried", False) is True:
+            return True
+        attempts = getattr(error, "attempts", None)
+        if isinstance(attempts, int) and not isinstance(attempts, bool) and attempts > 1:
+            return True
+        if isinstance(error, ProviderError) and any(
+                word in str(error).lower() for word in RETRIED_WORDS):
+            return True
+        error = error.__cause__ or error.__context__
+        seen += 1
+    return False
+
+
+def _retry_here(error: BaseException) -> bool:
+    """Whether the bridge should try the call again: transient, and not
+    already retried by the package (a gateway timeout reported as a 400, for
+    one, the package rightly raises at once)."""
+    return is_transient(error) and not already_retried(error)
+
+
 def _stopped_while_waiting(delay: float) -> bool:
     """Wait out a retry pause — or less, when the run or batch doing the call
     is stopped meanwhile. True when it was stopped."""
@@ -222,13 +253,14 @@ def _abandonable(call):
 
 def _retrying(call):
     """`call()` again after each pause while it fails transiently — never
-    after a stop: a stopped record makes no further model call."""
+    after a stop: a stopped record makes no further model call, and never a
+    failure the package already retried."""
     from backend.features.chat import chat_control
     for delay in (*TRANSIENT_RETRY_DELAYS, None):
         try:
             return call()
         except Exception as error:
-            if delay is None or not is_transient(error):
+            if delay is None or not _retry_here(error):
                 raise
             if _stopped_while_waiting(delay):
                 raise chat_control.Cancelled() from error
@@ -240,7 +272,7 @@ async def _aretrying(call):
         try:
             return await call()
         except Exception as error:
-            if delay is None or not is_transient(error):
+            if delay is None or not _retry_here(error):
                 raise
             control = chat_control.current.get()
             waited = 0.0

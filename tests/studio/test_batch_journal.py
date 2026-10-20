@@ -45,7 +45,8 @@ def test_the_whole_file_every_few_seconds_supersedes_the_journal(batches, tmp_pa
     assert (tmp_path / 'b1.items.jsonl').is_file()
     s['_snapshot_at'] -= batches.SNAPSHOT_SECONDS + 1            # time for the next snapshot
     s['items'][2].update(status='failed', run_id='r2')
-    batches._persist_item(s, s['items'][2])
+    # Due now: the copy is taken here, under the lock, and written after it.
+    batches._write_snapshot(batches._persist_item(s, s['items'][2]))
     assert not (tmp_path / 'b1.items.jsonl').exists()
     on_disk = json.loads((tmp_path / 'b1.json').read_text())
     assert [i['status'] for i in on_disk['items']] == ['success', 'pending', 'failed']

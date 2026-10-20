@@ -30,7 +30,7 @@ def get_execution(occurrence):
 def launch(graph, inputs, schedule, occurrence):
     execution_id, due = occurrence['run_id'], occurrence['due']
     if occurrence.get('kind') == 'batch':
-        previous = batch.get_batch(execution_id)
+        previous = batch.get_batch(execution_id, inputs=False)
         if previous:
             if previous['status'] == 'succeeded':
                 return execution_id

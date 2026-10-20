@@ -30,9 +30,11 @@ Only new runs write artifacts; historical runs are untouched.
 """
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from backend.api.studio_config import data_path
+from backend.features.persistence import contains
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -275,10 +277,9 @@ def _memory_entries(graph_id: str) -> list[dict]:
         listing.append({"path": f"{MEMORY_DIR_NAME}/{LONG_TERM}/{agent}", "dir": True})
         entries = _ordered_memory(graph_id, agent)
         for name, entry in zip(_memory_names(entries), entries):
-            body = _memory_text(entry)
             listing.append({
                 "path": f"{MEMORY_DIR_NAME}/{LONG_TERM}/{agent}/{name}",
-                "size": len(body.encode("utf-8")),
+                "size": _memory_size(entry),
                 "mtime": str(entry.get("timestamp") or ""),
             })
     if listing:
@@ -301,14 +302,14 @@ def _session_entries(graph_id: str) -> list[dict]:
     from backend.api import stm_store
     listing: list[dict] = []
     try:
-        sessions = stm_store.sessions(graph_id)
+        # One read of the store, not one per session.
+        logs = stm_store.logs(graph_id, stm_store.MAX_PER_SESSION)
     except Exception:
         return listing
-    for session in sessions:
+    for session, log in logs.items():
         safe = _safe_name(session)
         listing.append({"path": f"{MEMORY_DIR_NAME}/{SHORT_TERM}/{safe}", "dir": True})
-        for position, entry in enumerate(
-                stm_store.recent(graph_id, session, stm_store.MAX_PER_SESSION), start=1):
+        for position, entry in enumerate(log, start=1):
             body = json.dumps(entry, indent=2, ensure_ascii=False, default=str)
             listing.append({
                 "path": f"{MEMORY_DIR_NAME}/{SHORT_TERM}/{safe}/{position:03d}.json",
@@ -357,6 +358,60 @@ def _memory_text(entry: dict) -> str:
     return json.dumps(readable, indent=2, ensure_ascii=False, default=str)
 
 
+def _memory_size(entry: dict) -> int:
+    """About how large an entry reads: its stored content. The listing is
+    polled; rendering every entry (`_memory_text`) for a size was most of it."""
+    content = entry.get("content")
+    text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, default=str)
+    return len(text.encode("utf-8"))
+
+
+# vendor/ is the framework a workflow's project carries — thousands of files
+# that change only when Studio regenerates them (and rewrites the stamp). Its
+# listing is kept per workspace until the stamp or the folder changes.
+_vendor_listings: dict[str, tuple] = {}
+
+
+def _walk(root: Path, top: Path) -> list[dict]:
+    """Entries for everything under `top`, paths relative to `root`."""
+    entries = []
+    for folder, dirs, files in os.walk(top):
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        base = Path(folder)
+        for name in dirs:
+            path = base / name
+            entries.append({"path": path.relative_to(root).as_posix(), "dir": True,
+                            "absolute_path": str(path.resolve())})
+        for name in files:
+            path = base / name
+            try:
+                if not path.is_file():
+                    continue
+                stat = path.stat()
+            except OSError:
+                continue
+            entries.append({
+                "path": path.relative_to(root).as_posix(), "absolute_path": str(path.resolve()),
+                "size": stat.st_size,
+                "mtime": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+            })
+    return entries
+
+
+def _vendor_entries(root: Path) -> list[dict]:
+    vendor = root / VENDOR_DIR
+    try:
+        version = ((root / VENDOR_STAMP).stat().st_mtime_ns, vendor.stat().st_mtime_ns)
+    except OSError:
+        return _walk(root, vendor)            # no stamp: nothing says it is unchanged
+    cached = _vendor_listings.get(str(root))
+    if cached is not None and cached[0] == version:
+        return cached[1]
+    entries = _walk(root, vendor)
+    _vendor_listings[str(root)] = (version, entries)
+    return entries
+
+
 def tree(graph_id: str) -> list[dict]:
     """Relative file listing (path, size, mtime) of the graph's workspace.
 
@@ -368,24 +423,27 @@ def tree(graph_id: str) -> list[dict]:
     entries = _memory_entries(graph_id) + dataset_mounts.entries(graph_id)
     if not root.is_dir():
         return entries
-    for path in sorted(root.rglob("*")):
-        rel = path.relative_to(root).as_posix()
+    files = []
+    for path in sorted(root.iterdir()):
+        rel = path.name
         # Bookkeeping, not part of the project: it says which version of the
         # framework is sitting in vendor/, and means nothing to a reader.
-        if rel in (VENDOR_STAMP, GENERATED_MANIFEST) or "__pycache__" in rel:
+        if rel in (VENDOR_STAMP, GENERATED_MANIFEST, "__pycache__"):
             continue
         if path.is_dir():
-            entries.append({"path": rel, "dir": True, "absolute_path": str(path.resolve())})
-            continue
-        if not path.is_file():
-            continue
-        stat = path.stat()
-        entries.append({
-            "path": rel, "absolute_path": str(path.resolve()),
-            "size": stat.st_size,
-            "mtime": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
-        })
-    return entries
+            files.append({"path": rel, "dir": True, "absolute_path": str(path.resolve())})
+            files += (_vendor_entries(root) if rel == VENDOR_DIR and not path.is_symlink()
+                      else _walk(root, path))
+        elif path.is_file():
+            stat = path.stat()
+            files.append({
+                "path": rel, "absolute_path": str(path.resolve()),
+                "size": stat.st_size,
+                "mtime": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+            })
+    # In path order, as a recursive glob gave them.
+    files.sort(key=lambda entry: entry["path"].split("/"))
+    return entries + files
 
 
 class WorkspaceError(Exception):
@@ -395,11 +453,14 @@ class WorkspaceError(Exception):
         self.not_found = not_found
 
 
-def _resolve_in_workspace(graph_id: str, relpath: str) -> Path:
-    """Resolve relpath inside the graph workspace; rejects traversal."""
+def _resolve_in_workspace(graph_id: str, relpath: str, allow_root: bool = True) -> Path:
+    """Resolve relpath inside the graph workspace; rejects traversal (and the
+    workspace itself unless `allow_root`)."""
     root = workspace_root(graph_id).resolve()
     target = (root / relpath).resolve()
-    if not str(target).startswith(str(root) + "/") and target != root:
+    if not contains(root, target, allow_root=allow_root):
+        if target == root:
+            raise WorkspaceError(f"Not a path inside the workspace: {relpath!r}")
         raise WorkspaceError(f"Path escapes the workspace: {relpath!r}")
     return target
 
@@ -419,11 +480,12 @@ def _table_entries(graph_id: str) -> list[dict]:
         return listing
     for node in nodes:
         listing.append({"path": f"{MEMORY_DIR_NAME}/{TABLE}/{node}", "dir": True})
-        for subject in table_store.subjects(graph_id, node):
-            body = _table_text(graph_id, node, subject)
+        # Counted by the database: reading out and rendering every row of
+        # every subject, every few seconds, only to report a size.
+        for subject, _count, payload in table_store.subject_sizes(graph_id, node):
             listing.append({
                 "path": f"{MEMORY_DIR_NAME}/{TABLE}/{node}/{_safe_name(subject)}.json",
-                "size": len(body.encode("utf-8")),
+                "size": payload,
                 "mtime": "",
             })
     if listing:
@@ -585,7 +647,15 @@ def upload_file(graph_id: str, relpath: str, stream) -> dict:
             temp = Path(out.name)
             shutil.copyfileobj(stream, out, length=1024 * 1024)
         try:
-            os.link(temp, target)
+            try:
+                os.link(temp, target)
+            except FileExistsError:
+                raise
+            except OSError:
+                # No hard links here (FAT/exFAT, some network and synced
+                # folders): copy instead, still never over an existing file.
+                with open(temp, "rb") as source, open(target, "xb") as out:
+                    shutil.copyfileobj(source, out, length=1024 * 1024)
         except FileExistsError:
             raise WorkspaceError(f"{relpath!r} already exists. Choose another path or delete the existing file first.")
         return {"path": relpath, "size": target.stat().st_size, "absolute_path": str(target)}
@@ -614,7 +684,7 @@ def delete_file(graph_id: str, relpath: str, recursive: bool = False) -> dict:
     import shutil
 
     _refuse_if_memory(relpath, "delete")
-    target = _resolve_in_workspace(graph_id, relpath)
+    target = _resolve_in_workspace(graph_id, relpath, allow_root=False)
     if target.is_dir():
         contents = [p for p in target.rglob("*") if p.is_file()]
         if contents and not recursive:

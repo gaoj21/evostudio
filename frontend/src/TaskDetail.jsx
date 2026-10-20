@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from './api.js';
+import { singleFlight } from './singleFlight.js';
 import RunResultPage from './features/execution/RunResultPage.jsx';
 
 export default function TaskDetail({ graphId, onBack, onEdit, onRun, onOpenBatch }) {
@@ -36,7 +37,8 @@ export default function TaskDetail({ graphId, onBack, onEdit, onRun, onOpenBatch
   useEffect(()=>{
     if(!runs.some(r=>r.status==='running'))return;
     let active=true;
-    const timer=setInterval(()=>{api.listResultRuns(graphId).then(r=>{if(active)setRuns(r);}).catch(e=>{if(active)setError(e.message);});},3000);
+    const poll=singleFlight(()=>api.listResultRuns(graphId).then(r=>{if(active)setRuns(r);}).catch(e=>{if(active)setError(e.message);}));
+    const timer=setInterval(poll,3000);
     return ()=>{active=false;clearInterval(timer);};
   },[graphId,runs]);
   useEffect(()=>{
@@ -45,7 +47,7 @@ export default function TaskDetail({ graphId, onBack, onEdit, onRun, onOpenBatch
       if(active)setBatches(result.batches || result);
     }).catch(e=>{if(active)setError(e.message);});
     load();
-    const timer=setInterval(load,3000);
+    const timer=setInterval(singleFlight(load),3000);
     return ()=>{active=false;clearInterval(timer);};
   },[graphId,revision]);
   function inspect(run){

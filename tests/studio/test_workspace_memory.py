@@ -194,3 +194,44 @@ class TestDownloading:
         with pytest.raises(workspace.WorkspaceError) as raised:
             workspace.download("probe", "memory/long-term/decide")
         assert raised.value.not_found
+
+
+class TestTheListingIsCheap:
+    """The tree is polled every few seconds while the panel is open: sizes
+    come from counting, not from rendering every entry and every row."""
+
+    def test_tables_are_listed_without_reading_their_rows(self, remembering, tmp_path, monkeypatch):
+        workspace, _ = remembering
+        from backend.api import table_store
+        monkeypatch.setattr(table_store, "TABLES_DIR", tmp_path / "tables")
+        for subject, at in (("alpha", "2026-01-01"), ("alpha", "2026-01-02"), ("beta", "2026-01-01")):
+            table_store.upsert("probe", "note", subject, at, {"outputs": {"value": subject}}, "t")
+
+        def refuse(*args, **kwargs):
+            raise AssertionError("rendered to be listed")
+        monkeypatch.setattr(table_store, "rows", refuse)
+        monkeypatch.setattr(workspace, "_memory_text", refuse)
+
+        listed = {e["path"]: e for e in workspace.tree("probe")}
+        assert listed["memory/table/note/alpha.json"]["size"] > listed["memory/table/note/beta.json"]["size"] > 0
+        assert any(p.startswith("memory/long-term/decide/") for p in listed)
+
+    def test_the_vendored_framework_is_walked_once_per_version(self, remembering, monkeypatch):
+        workspace, _ = remembering
+        root = workspace.workspace_root("probe")
+        (root / "vendor" / "pkg").mkdir(parents=True)
+        (root / "vendor" / "pkg" / "a.py").write_text("x = 1\n")
+        (root / workspace.VENDOR_STAMP).write_text("v1")
+        (root / "tools").mkdir(exist_ok=True)
+        (root / "tools" / "t.py").write_text("y = 2\n")
+
+        first = [e["path"] for e in workspace.tree("probe") if not e["path"].startswith("memory")]
+        assert {"vendor", "vendor/pkg", "vendor/pkg/a.py", "tools/t.py"} <= set(first)
+        assert workspace.VENDOR_STAMP not in first
+
+        walked = []
+        real = workspace._walk
+        monkeypatch.setattr(workspace, "_walk", lambda root, top: walked.append(top.name) or real(root, top))
+        again = [e["path"] for e in workspace.tree("probe") if not e["path"].startswith("memory")]
+        assert again == first
+        assert "vendor" not in walked                   # unchanged: not walked again

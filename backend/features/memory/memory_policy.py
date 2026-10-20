@@ -763,7 +763,13 @@ async def recall_async(stores, task: dict, inputs: dict, history=None,
 
     if settings["match"] and history is not None:
         for name in (settings["read_from"] if settings["read_from"] is not None else [task.get("name")]):
-            block = history_for(history(name), task, inputs)
+            # Only this subject's entries, where the history can look them
+            # up: history_for would pass over every other one anyway.
+            wanted = (inputs or {}).get(settings["match"])
+            about = getattr(history, "about", None)
+            entries = (about(name, task, str(wanted))
+                       if callable(about) and wanted not in (None, "") else history(name))
+            block = history_for(entries, task, inputs)
             if block:
                 blocks.append(block)
 

@@ -73,6 +73,15 @@ def sessions(graph_id: str) -> list[str]:
         return open_store(graph_id).sessions()
 
 
+def logs(graph_id: str, n: int) -> dict[str, list[dict]]:
+    """Every session's last `n` entries, the store read once."""
+    if not _path(graph_id).is_file() or n <= 0:
+        return {}
+    with _lock:
+        store = open_store(graph_id)
+        return {session: store.get(session, n) for session in store.sessions()}
+
+
 def clear(graph_id: str, session: str | None = None) -> None:
     with _lock:
         open_store(graph_id).clear(session)

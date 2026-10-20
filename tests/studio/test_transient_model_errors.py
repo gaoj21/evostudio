@@ -139,3 +139,39 @@ def test_a_blocked_model_call_is_given_up_the_moment_it_is_stopped(monkeypatch):
     finally:
         chat_control.current.reset(token)
         release.set()
+
+
+def test_a_failure_the_package_already_retried_is_not_retried_again(no_pause, monkeypatch):
+    """The package retries rate limits and server errors itself and then says
+    so; the bridge trying again stacked its pauses on the package's."""
+    from llm import ProviderError as PackageError
+    attempts = []
+
+    def exhausted(provider, messages, **options):
+        attempts.append(1)
+        raise PackageError("LLM call to 'p' failed after retries: Request timed out.")
+    monkeypatch.setattr(model_bridge, 'chat_result', exhausted)
+    with pytest.raises(PackageError):
+        model_bridge._call('p', [], {})
+    assert len(attempts) == 1
+    assert model_bridge.is_transient(PackageError("failed after retries: Request timed out."))
+
+    # Marked rather than worded: the same.
+    marked = ProviderError('Request timed out.')
+    marked.attempts = 3
+    assert model_bridge.already_retried(marked)
+    assert not model_bridge.already_retried(ProviderError(DEADLINE))
+
+
+@pytest.mark.asyncio
+async def test_the_async_path_does_not_retry_it_either(no_pause, monkeypatch):
+    from llm import ProviderError as PackageError
+    attempts = []
+
+    def exhausted(provider, messages, **options):
+        attempts.append(1)
+        raise PackageError("LLM call to 'p' failed after retries: 503 Service Unavailable")
+    monkeypatch.setattr(model_bridge, 'chat_result', exhausted)
+    with pytest.raises(PackageError):
+        await model_bridge._acall('p', [], {})
+    assert len(attempts) == 1

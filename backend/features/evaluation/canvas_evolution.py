@@ -38,7 +38,7 @@ def discard_candidate_batches(batch_ids):
     records are already in the task, and they belong to no real workflow."""
     from backend.api import batch, runner
     for batch_id in batch_ids or []:
-        saved = batch.get_batch(batch_id) or {}
+        saved = batch.get_batch(batch_id, inputs=False) or {}
         for item in saved.get('items') or []:
             run_id = item.get('run_id')
             if run_id:
@@ -50,6 +50,7 @@ def discard_candidate_batches(batch_ids):
             batch._threads.pop(batch_id, None)
         (batch.BATCHES_DIR / f'{batch_id}.json').unlink(missing_ok=True)
         batch._journal_path(batch_id).unlink(missing_ok=True)
+        batch._inputs_path(batch_id).unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +378,7 @@ def _execute(state, graph, rows, params, stage):
                 if state.get('stop_requested'):
                     batch.cancel_batch(batch_id)
                     stage('stopping')          # raises: a stopped replay is not a result
-                at = (batch.get_batch(batch_id) or {}).get('stage') or {}
+                at = (batch.get_batch(batch_id, inputs=False) or {}).get('stage') or {}
                 text = (f"{generation}: node {at.get('index')}/{at.get('of')} · {at.get('node')} · "
                         f"{at.get('done', 0)}/{at.get('total', '?')}") if at.get('node') else f'{generation}: running'
                 if text != shown:
@@ -385,7 +386,7 @@ def _execute(state, graph, rows, params, stage):
         except BaseException:
             batch.cancel_batch(batch_id)
             raise
-        done = batch.get_batch(batch_id) or {}
+        done = batch.get_batch(batch_id, inputs=False) or {}
         # One step: the live view reads either the running batch or its
         # settled usage, never both.
         state.update(current_batch=None, token_usage=combined(state.get('token_usage'), done.get('token_usage')))

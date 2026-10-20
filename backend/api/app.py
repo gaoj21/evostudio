@@ -13,6 +13,7 @@ from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
+from backend.features.http_util import content_disposition
 
 from . import agent_api
 from . import batch as batch_store
@@ -694,7 +695,8 @@ async def _batch_payload(graph_id: str, request: Request):
     try:
         content_type = request.headers.get("content-type", "")
         review_zone = None
-        workers = 2
+        # None: the batch picks (one model call per record, up to its cap).
+        workers = None
         # Present only for an evaluation; a plain batch leaves them unset.
         metric = None
         label_key = None
@@ -707,8 +709,7 @@ async def _batch_payload(graph_id: str, request: Request):
             source = {"type": "upload", "filename": upload.filename}
             if form.get("review_zone"):
                 review_zone = json.loads(form["review_zone"])
-            if form.get("workers"):
-                workers = int(form["workers"])
+            workers = _workers(form.get("workers"))
             metric = form.get("metric") or None
             label_key = form.get("label_key") or None
         else:
@@ -735,7 +736,7 @@ async def _batch_payload(graph_id: str, request: Request):
                     "JSON body must be {\"source\": \"canvas\", ...}; upload a file for other records."
                 )
             review_zone = body.get("review_zone")
-            workers = int(body.get("workers") or 2)
+            workers = _workers(body.get("workers"))
             metric = body.get("metric") or None
             label_key = body.get("label_key") or None
         from backend.features.execution import provider_batch
@@ -785,6 +786,13 @@ async def _batch_payload(graph_id: str, request: Request):
         raise HTTPException(status_code=422, detail=str(e))
 
     return graph, records, mapped, source, review_zone, workers, metric, labels
+
+
+def _workers(value):
+    try:
+        return batch_store.requested_workers(value)
+    except (TypeError, ValueError) as exc:
+        raise sources.SourceError(f"workers must be a whole number from 1 to {batch_store.MAX_WORKERS}.") from exc
 
 
 @app.post("/api/graphs/{graph_id}/run-batch")
@@ -894,7 +902,7 @@ async def preview_batch(graph_id: str, request: Request):
         "steps": max(per_sample) if per_sample else 1,
         "steps_min": min(per_sample) if per_sample else 1,
         "source": source,
-        "workers": workers,
+        "workers": workers if workers is not None else batch_store.default_workers("node", len(mapped)),
         "metric": metric,
         "nodes": plan["nodes"],
         "skipped": plan["skipped"],
@@ -921,8 +929,10 @@ def list_batches(graph_id: str | None = Query(default=None)):
 
 
 @app.get("/api/batches/{batch_id}")
-def get_batch(batch_id: str):
-    batch = batch_store.get_batch(batch_id)
+def get_batch(batch_id: str, inputs: bool = Query(default=False)):
+    """A batch with its items. The page polls this, so each item's input
+    record is left out unless `inputs=true` asks for it."""
+    batch = batch_store.get_batch(batch_id) if inputs else batch_store.batch_view(batch_id)
     if batch is None:
         raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found")
     return batch
@@ -960,7 +970,7 @@ def export_batch(batch_id: str, format: str = Query(default="csv")):
     return Response(
         content=body,
         media_type=media_type,
-        headers={"content-disposition": f'attachment; filename="{name}"'},
+        headers={"content-disposition": content_disposition(name)},
     )
 
 
@@ -978,7 +988,7 @@ def cancel_batch(batch_id: str):
 @app.post("/api/batches/{batch_id}/resume")
 def resume_batch(batch_id: str):
     """Run the records of a stopped batch that did not finish; keep the rest."""
-    existing = batch_store.get_batch(batch_id)
+    existing = batch_store.get_batch(batch_id, inputs=False)
     if existing is None:
         raise HTTPException(status_code=404, detail=f"Batch '{batch_id}' not found")
     graph = graph_store.load_graph(existing.get("graph_id") or "")

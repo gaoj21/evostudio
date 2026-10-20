@@ -218,8 +218,23 @@ describe('starting a canvas batch', () => {
     await waitFor(() => expect(run).toBeEnabled());
     await user.click(run);
 
-    await waitFor(() => expect(api.runBatchCanvas).toHaveBeenCalledWith(
-      'renamed-graph', expect.objectContaining({ workers: 2 })));
+    await waitFor(() => expect(api.runBatchCanvas).toHaveBeenCalledWith('renamed-graph', expect.anything()));
+    // Unset: the server runs one model call per record, up to its limit.
+    expect(api.runBatchCanvas.mock.calls[0][1]).not.toHaveProperty('workers');
+  });
+
+  it('sends a fixed number of concurrent model calls when one is chosen', async () => {
+    api.runBatchCanvas.mockResolvedValue({ batch_id: 'b1' });
+    const user = open();
+    await batchTab(user);
+    await user.selectOptions(await screen.findByLabelText('Concurrent model calls'), 'fixed');
+    const field = screen.getByLabelText('Workers (model calls at the same time)');
+    await user.clear(field);
+    await user.type(field, '12');
+    const run = await screen.findByRole('button', { name: /run batch/i });
+    await waitFor(() => expect(run).toBeEnabled());
+    await user.click(run);
+    await waitFor(() => expect(api.runBatchCanvas).toHaveBeenCalledWith('g1', expect.objectContaining({ workers: 12 })));
   });
 });
 
@@ -687,7 +702,8 @@ it('offers streaming batches with a record threshold and no duplicate final run'
   await user.clear(screen.getByLabelText('Records per batch'));
   await user.type(screen.getByLabelText('Records per batch'), '3');
   await user.click(screen.getByRole('button', { name: 'Start collecting and running' }));
-  expect(api.collectSource).toHaveBeenCalledWith('g1', expect.objectContaining({ mode: 'stream', batch_size: 3, workers: 2 }));
+  expect(api.collectSource).toHaveBeenCalledWith('g1', expect.objectContaining({ mode: 'stream', batch_size: 3 }));
+  expect(api.collectSource.mock.calls[0][1]).not.toHaveProperty('workers');
   await screen.findByText(/Collection and all batches completed/, {}, { timeout: 2500 });
   expect(screen.getByRole('button', { name: 'View batch 3' })).toBeEnabled();
   expect(screen.queryByRole('button', { name: 'Run batch' })).not.toBeInTheDocument();
@@ -715,7 +731,7 @@ it('sends native API batch size instead of workers to preview and run', async ()
   await user.selectOptions(screen.getByLabelText('Model execution'), 'native');
   await user.clear(screen.getByLabelText('API batch size'));
   await user.type(screen.getByLabelText('API batch size'), '16');
-  expect(screen.queryByLabelText('Workers (records run at the same time)')).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('Concurrent model calls')).not.toBeInTheDocument();
   await waitFor(() => expect(api.previewBatchCanvas).toHaveBeenLastCalledWith('g1', {llm_batch_size:16}));
   const run = await screen.findByRole('button', {name:'Run batch (24)'});
   await waitFor(() => expect(run).toBeEnabled());

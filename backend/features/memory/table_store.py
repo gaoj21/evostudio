@@ -9,6 +9,7 @@ import threading
 from pathlib import Path
 from .identity import storage_name, display_names
 from backend.api.studio_config import data_path
+from backend.features.persistence import contains
 
 TABLES_DIR = data_path("tables")
 
@@ -153,8 +154,8 @@ def forget(graph_id: str | None = None) -> None:
         if graph_id is None:
             _ready.clear()
         else:
-            prefix = str(TABLES_DIR / graph_id) + "/"
-            for key in [k for k in _ready if k.startswith(prefix)]:
+            folder = TABLES_DIR / graph_id
+            for key in [k for k in _ready if contains(folder, Path(k))]:
                 _ready.discard(key)
 
 
@@ -225,6 +226,20 @@ def subjects(graph_id: str, node: str) -> list[str]:
     try:
         return [r[0] for r in conn.execute(
             "SELECT DISTINCT subject FROM rows_ ORDER BY subject").fetchall()]
+    finally:
+        conn.close()
+
+
+def subject_sizes(graph_id: str, node: str) -> list[tuple[str, int, int]]:
+    """(subject, rows, payload bytes) for every subject, in subject order —
+    what a listing needs, counted by the database instead of read out."""
+    conn = _connect(graph_id, node, create=False)
+    if conn is None:
+        return []
+    try:
+        return [(r[0], int(r[1]), int(r[2] or 0)) for r in conn.execute(
+            "SELECT subject, COUNT(*), SUM(LENGTH(payload)) FROM rows_ "
+            "GROUP BY subject ORDER BY subject").fetchall()]
     finally:
         conn.close()
 

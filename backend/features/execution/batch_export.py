@@ -74,9 +74,8 @@ def _row(item: dict, input_columns: list[str], score_columns: list[str]) -> dict
 
 def to_rows(batch: dict) -> tuple[list[str], list[dict]]:
     """Column names and one row per record."""
-    from .batch import BATCHES_DIR
-    items = [{**item, 'inputs':json.loads((BATCHES_DIR / item['input_file']).read_text())} if item.get('input_file') else item
-             for item in batch.get('items') or []]
+    from .batch import with_inputs
+    items = with_inputs(batch).get('items') or []
     input_columns = _input_columns(items)
     score_columns = _score_columns(items)
     columns = (_BASE_COLUMNS[:4]

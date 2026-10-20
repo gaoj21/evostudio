@@ -8,11 +8,14 @@ and is persisted to studio-data/batches/{batch_id}.json on completion.
 
 import json
 import copy
-from backend.features.persistence import write_json
+import os
+from backend.features.persistence import write_json, replace
+import tempfile
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from backend.features.execution.node_gate import NodeGate
 from datetime import datetime, timezone
@@ -26,6 +29,43 @@ BATCHES_DIR = data_path("batches")
 # thousands, and the useful number of workers is the number of samples
 # (their steps run one after another). Sixty-four covers any split here.
 MAX_WORKERS = 64
+
+# Node by node, every record of a chunk runs at once and the gate bounds the
+# model calls in flight. Unless the user sets a number, that bound is one call
+# per record of the chunk, up to this many (EAX_STUDIO_BATCH_CONCURRENCY).
+# Two, the old default, left a chunk of a hundred records waiting on two calls.
+def _concurrency_cap() -> int:
+    try:
+        value = int(os.environ.get("EAX_STUDIO_BATCH_CONCURRENCY", "32"))
+    except ValueError:
+        value = 32
+    return max(1, min(value, MAX_WORKERS))
+
+
+DEFAULT_CONCURRENCY = _concurrency_cap()
+# Record by record, workers are threads each walking a whole record: the
+# default stays as it was.
+RECORD_MODE_WORKERS = 2
+
+
+def default_workers(mode: str, records: int | None) -> int:
+    """The worker count a batch runs with when none was asked for."""
+    if mode != "node":
+        return RECORD_MODE_WORKERS
+    return max(1, min(records or DEFAULT_CONCURRENCY, DEFAULT_CONCURRENCY))
+
+
+def requested_workers(value) -> int | None:
+    """A worker count from a request: None (the default) when absent, else a
+    whole number from 1 to MAX_WORKERS. Raises ValueError otherwise."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise ValueError("workers must be a whole number")
+    workers = int(value)
+    if not 1 <= workers <= MAX_WORKERS:
+        raise ValueError(f"workers must be 1–{MAX_WORKERS}")
+    return workers
 
 _batches: dict[str, dict] = {}
 # The worker thread for each batch, so a caller can wait for one to wind down.
@@ -50,8 +90,107 @@ def _summarize(text, limit: int = _SUMMARY_CHARS) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
+# A batch's records, kept beside it rather than inside it. Every item used to
+# carry its whole record, and the batch file — rewritten every few seconds
+# while it runs — grew to tens of megabytes with them. The records are fixed
+# for the batch's life, so they are written once, one per line, and each item
+# keeps where its line is plus what identifies it in a list (`brief_inputs`).
+# A streamed batch archives the same way, one file per record (stream_batch).
+INPUTS_SUFFIX = ".inputs.jsonl"
+
+
+def _inputs_path(batch_id: str):
+    return BATCHES_DIR / f"{batch_id}{INPUTS_SUFFIX}"
+
+
+def brief_inputs(record: dict) -> dict:
+    """What an item keeps of its record once the record is archived: short
+    scalar fields, and the loader's bookkeeping (it orders the records)."""
+    return {k: v for k, v in record.items()
+            if k == '_dataloader' or isinstance(v, (str, int, float, bool, type(None))) and len(str(v)) <= 160}
+
+
+def _archive_inputs(batch_id: str, pairs: list) -> None:
+    """Move the records of a batch about to start out of its items, into the
+    batch's inputs file. A record its brief keeps whole stays inline, and a
+    batch with nothing to move writes no file. If the file cannot be written,
+    the records stay inline: a large batch file beats lost inputs."""
+    lines, moved, offset = [], [], 0
+    for item, record in pairs:
+        if not isinstance(record, dict):
+            continue
+        brief = brief_inputs(record)
+        if brief == record:
+            continue
+        line = json.dumps(record, ensure_ascii=False, default=str).encode("utf-8") + b"\n"
+        moved.append((item, brief, [offset, len(line)]))
+        lines.append(line)
+        offset += len(line)
+    path = _inputs_path(batch_id)
+    if not lines:
+        path.unlink(missing_ok=True)             # a reused id: not the old batch's records
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.writelines(lines)
+                stream.flush()
+                os.fsync(stream.fileno())
+            replace(temporary, path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+    except OSError:
+        return
+    for item, brief, at in moved:
+        item.update(inputs=brief, inputs_archived=True, input_at=at)
+
+
+def item_inputs(item: dict, batch_id: str | None = None, _streams: dict | None = None) -> dict:
+    """An item's whole record: inline, or read back from where the batch
+    archived it (its own input file when streamed, a line of the batch's
+    inputs file otherwise). Falls back to what the item still holds."""
+    try:
+        if item.get("input_file"):
+            return json.loads((BATCHES_DIR / item["input_file"]).read_text(encoding="utf-8"))
+        at = item.get("input_at")
+        if item.get("inputs_archived") and at and batch_id:
+            stream = (_streams or {}).get(batch_id)
+            if stream is None:
+                stream = open(_inputs_path(batch_id), "rb")
+                if _streams is None:
+                    with stream:
+                        stream.seek(at[0])
+                        return json.loads(stream.read(at[1]))
+                _streams[batch_id] = stream
+            stream.seek(at[0])
+            return json.loads(stream.read(at[1]))
+    except (OSError, ValueError):
+        pass
+    return item.get("inputs") or {}
+
+
+def with_inputs(batch: dict) -> dict:
+    """`batch` with every item's whole record in `inputs` (a copy where any
+    had to be read back). Items keep saying they are archived: the batch
+    file itself still holds only their brief."""
+    items = batch.get("items") or []
+    archived = lambda item: item.get("inputs_archived") or item.get("input_file")   # noqa: E731
+    if not any(archived(item) for item in items):
+        return batch
+    streams: dict = {}
+    try:
+        filled = [{**item, "inputs": item_inputs(item, batch.get("batch_id"), streams)}
+                  if archived(item) else item for item in items]
+    finally:
+        for stream in streams.values():
+            stream.close()
+    return {**batch, "items": filled}
+
+
 def start_batch(graph: dict, records: list[dict], source: dict, gray_zone=None,
-                workers: int = 2, metric: str | None = None,
+                workers: int | None = None, metric: str | None = None,
                 labels: list | None = None, record_chunks=None, *, batch_id=None,
                 session=None, session_started_at=None, mode: str = "record") -> str:
     """Start a batch over pre-mapped input records; returns the batch_id.
@@ -70,9 +209,12 @@ def start_batch(graph: dict, records: list[dict], source: dict, gray_zone=None,
         graph = {**graph, '_llm_batch_size': size}
     graph, source = copy.deepcopy(graph), copy.deepcopy(source)
     batch_id = batch_id or uuid.uuid4().hex[:12]
+    mode = mode if mode in EXECUTION_MODES else "record"
     if size is not None:
         workers = min(size, MAX_WORKERS)
-    workers = max(1, min(int(workers or 2), MAX_WORKERS))
+    elif workers is None:
+        workers = default_workers(mode, record_batch_size or len(records))
+    workers = max(1, min(int(workers), MAX_WORKERS))
     state = {
         "batch_id": batch_id,
         "session": session,
@@ -87,7 +229,7 @@ def start_batch(graph: dict, records: list[dict], source: dict, gray_zone=None,
         # "node": each chunk moves through the workflow one node at a time
         # (node_gate.py). "record": each record walks the whole workflow on
         # its own, as batches did before.
-        "mode": mode if mode in EXECUTION_MODES else "record",
+        "mode": mode,
         "stage": None,
         "workers": workers,
         "llm_batch_size": size,
@@ -110,6 +252,10 @@ def start_batch(graph: dict, records: list[dict], source: dict, gray_zone=None,
         # Marked before the first write: a stream interrupted in its first
         # chunk must still read as unread, or resume finds nothing to do.
         state.update(streaming=True, collection_complete=False)
+    else:
+        # Before the first write, so the batch file is small from the start.
+        # The run itself is handed the records directly, below.
+        _archive_inputs(batch_id, list(zip(state["items"], records)))
     with _lock:
         _batches[batch_id] = state
     # Persisted before execution: a batch the process never finishes would
@@ -241,6 +387,9 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
             # Which Run is this attempt's: a session reuses its item's run id,
             # and a Run left from an earlier attempt must not count as live.
             item["attempt_started_at"] = _utcnow()
+            # Recorded again when this attempt settles.
+            item.pop("node_status", None)
+            item.pop("node_usage", None)
             # pre-assign the run id so live node progress is visible while
             # this item executes (start_run runs synchronously here)
             item["run_id"] = run_id or _new_run_id(state, batch_id, item)
@@ -255,7 +404,8 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
         try:
             # A crash after Run completion must leave an ID recovery can reconcile.
             with _lock:
-                _persist_item(state, item)
+                snapshot = _persist_item(state, item)
+            _write_snapshot(snapshot)
             runner.start_run(graph, record, background=False,
                              gray_zone=state.get("gray_zone"),
                              run_id=item["run_id"], batch_id=batch_id,
@@ -267,8 +417,11 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
             run = runner.get_run(item["run_id"]) or {}
             if run.get("persistence_error"):
                 raise OSError(run["persistence_error"])
+            nodes = _node_record(run) if run else {}
             with _lock:
                 item["status"] = run.get("status", "failed")
+                # What node progress needs, so a poll never reads this Run back.
+                item.update(nodes)
                 item["error"] = run.get("error")
                 settle_usage(run.get('token_usage'))
                 item["review_status"] = run.get("review_status")
@@ -278,14 +431,16 @@ def _execute_batch(batch_id: str, graph: dict, pairs: list, workers: int, finali
                     item["output_summary"] = _summarize(
                         json.dumps(run.get("result"), ensure_ascii=False, default=str)
                     )
-                _persist_item(state, item)
+                snapshot = _persist_item(state, item)
+            _write_snapshot(snapshot)
             if state.get("metric") and run.get("status") == "success":
                 _score_item(state, item, run.get("result"))
         except Exception as e:
+            spent = _in_flight_usage(item)          # read outside the lock
             with _lock:
                 if item.get("status") == "running":
                     # What the Run spent before this failure was still spent.
-                    settle_usage(_in_flight_usage(item))
+                    settle_usage(spent)
                 item["status"] = "failed"
                 item["error"] = str(e)
 
@@ -674,7 +829,8 @@ def resume_batch(batch_id: str, graph: dict) -> dict:
             if run.get('status') == 'success' and not run.get('persistence_error'):
                 reconciled = True
                 item.update(status='success', error=None, retryable=False,
-                            output_summary=_summarize(json.dumps(run.get('result'), default=str)))
+                            output_summary=_summarize(json.dumps(run.get('result'), default=str)),
+                            **_node_record(run))
                 if state.get('metric'):
                     recovered_scores.append((item, run.get('result')))
         todo = unfinished(state)
@@ -696,7 +852,7 @@ def resume_batch(batch_id: str, graph: dict) -> dict:
         # Re-run in order, so the blocks a failure caused are decided again.
         state["blocked_groups"] = {}
         _batches[batch_id] = state
-        pairs = [(item, json.loads((BATCHES_DIR / item['input_file']).read_text()) if item.get('input_file') else item.get('inputs') or {}) for item in todo]
+        pairs = [(item, item_inputs(item, batch_id)) for item in todo]
         workers = max(1, min(int(state.get("workers") or 2), MAX_WORKERS))
     for item, result in recovered_scores:
         _score_item(state, item, result)
@@ -815,7 +971,8 @@ def mark_interrupted() -> int:
 JOURNAL_SUFFIX = ".items.jsonl"
 SNAPSHOT_SECONDS = 2.0
 _JOURNALED = ("index", "run_id", "status", "error", "attempt_started_at", "part", "attempts",
-              "retryable", "review_status", "output_summary", "token_usage", "score", "score_detail")
+              "retryable", "review_status", "output_summary", "token_usage", "score", "score_detail",
+              "node_status", "node_usage")
 _PRIVATE = ("persistence_error", "_snapshot_at")
 
 
@@ -823,13 +980,53 @@ def _journal_path(batch_id: str):
     return BATCHES_DIR / f"{batch_id}{JOURNAL_SUFFIX}"
 
 
+# Whole-file writes, kept in order: a snapshot is numbered when its copy is
+# taken, and one older than what is already on disk is dropped. The journal
+# bytes a snapshot covers are counted from the journal's start (`base`: what
+# earlier snapshots already removed), so each drops only its own share; a
+# journal started afresh since the copy (`gen`) holds only newer lines.
+_persist_lock = threading.Lock()
+_disk: dict[str, dict] = {}
+
+
+def _disk_state(batch_id: str) -> dict:
+    """Called with _persist_lock held."""
+    return _disk.setdefault(batch_id, {"seq": 0, "written": 0, "base": 0, "gen": 0})
+
+
+def _write_temporary(path, data):
+    """`data` serialised and synced beside `path`; the caller swaps it in."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, ensure_ascii=False, default=str)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+    return temporary
+
+
 def _persist_batch(state: dict) -> None:
     """The whole batch to disk; the journal it supersedes is dropped."""
-    BATCHES_DIR.mkdir(parents=True, exist_ok=True)
+    batch_id = state["batch_id"]
+    path = BATCHES_DIR / f"{batch_id}.json"
     data = {k: v for k, v in state.items() if k not in _PRIVATE}
     try:
-        write_json(BATCHES_DIR / f"{state['batch_id']}.json", data, indent=None)
-        _journal_path(state["batch_id"]).unlink(missing_ok=True)
+        temporary = _write_temporary(path, data)
+        try:
+            with _persist_lock:
+                # The live batch, so it is the newest: snapshots copied
+                # before now are older and will not overwrite it.
+                disk = _disk_state(batch_id)
+                replace(temporary, path)
+                disk["seq"] += 1
+                disk.update(written=disk["seq"], base=0, gen=disk["gen"] + 1)
+                _journal_path(batch_id).unlink(missing_ok=True)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
         state["_snapshot_at"] = time.monotonic()
         state.pop("persistence_error", None)
     except OSError as exc:
@@ -837,17 +1034,102 @@ def _persist_batch(state: dict) -> None:
         raise
 
 
-def _persist_item(state: dict, item: dict) -> None:
-    """One record's change, durably and cheaply. Called with _lock held."""
+def _persist_item(state: dict, item: dict):
+    """One record's change, durably and cheaply. Called with _lock held.
+
+    Returns the whole-file snapshot due now, if any: the caller passes it to
+    `_write_snapshot` once the lock is released. Serialising and syncing a
+    large batch under the lock held every poll and every other record up.
+    """
     if time.monotonic() - state.get("_snapshot_at", 0.0) >= SNAPSHOT_SECONDS:
-        _persist_batch(state)
-        return
+        return _take_snapshot(state)
     line = {key: item[key] for key in _JOURNALED if key in item}
     try:
-        with open(_journal_path(state["batch_id"]), "a", encoding="utf-8") as stream:
-            stream.write(json.dumps(line, ensure_ascii=False, default=str) + "\n")
+        with _persist_lock:
+            with open(_journal_path(state["batch_id"]), "a", encoding="utf-8") as stream:
+                stream.write(json.dumps(line, ensure_ascii=False, default=str) + "\n")
     except OSError:
-        _persist_batch(state)
+        return _take_snapshot(state)
+    return None
+
+
+def _take_snapshot(state: dict):
+    """A copy of the batch to write outside the lock. Called with _lock held.
+
+    Items are copied one level deep: their fields are replaced, not changed
+    in place, while the copy is written. The batch's own running totals are
+    changed in place, so they are copied whole."""
+    state["_snapshot_at"] = time.monotonic()
+    data = {}
+    for key, value in state.items():
+        if key in _PRIVATE:
+            continue
+        if key == "items":
+            data[key] = [dict(item) for item in value or []]
+        elif key == "execution_snapshot":
+            data[key] = value                  # fixed for the batch's life
+        else:
+            data[key] = copy.deepcopy(value)
+    batch_id = state["batch_id"]
+    with _persist_lock:
+        disk = _disk_state(batch_id)
+        disk["seq"] += 1
+        try:
+            covered = disk["base"] + _journal_path(batch_id).stat().st_size
+        except OSError:
+            covered = disk["base"]
+        return {"state": state, "seq": disk["seq"], "gen": disk["gen"],
+                "covered": covered, "data": data}
+
+
+def _write_snapshot(snapshot) -> None:
+    """Write what `_persist_item` returned, without holding _lock. Raises
+    OSError, as `_persist_batch` does, once the failure is recorded."""
+    if not snapshot:
+        return
+    state = snapshot["state"]
+    batch_id = state["batch_id"]
+    path = BATCHES_DIR / f"{batch_id}.json"
+    try:
+        temporary = _write_temporary(path, snapshot["data"])
+        try:
+            with _persist_lock:
+                disk = _disk_state(batch_id)
+                if snapshot["seq"] > disk["written"]:
+                    replace(temporary, path)
+                    disk["written"] = snapshot["seq"]
+                    if snapshot["gen"] == disk["gen"]:
+                        _drop_journal(batch_id, disk, snapshot["covered"])
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+    except OSError as exc:
+        with _lock:
+            state["persistence_error"] = f"Could not save batch: {exc}"
+            state["_snapshot_at"] = 0.0        # the next record tries again
+        raise
+    with _lock:
+        state.pop("persistence_error", None)
+
+
+def _drop_journal(batch_id: str, disk: dict, covered: int) -> None:
+    """Remove the journal lines a snapshot now on disk includes; keep the
+    ones written after its copy was taken. Called with _persist_lock held."""
+    path = _journal_path(batch_id)
+    try:
+        with open(path, "rb") as stream:
+            stream.seek(max(0, covered - disk["base"]))
+            rest = stream.read()
+    except OSError:
+        return                                  # nothing journaled since
+    if not rest:
+        # Started afresh: offsets taken against this journal mean nothing now.
+        path.unlink(missing_ok=True)
+        disk.update(base=0, gen=disk["gen"] + 1)
+        return
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_bytes(rest)
+    replace(temporary, path)
+    disk["base"] = covered
 
 
 def _with_journal(batch_id: str, data: dict) -> dict:
@@ -893,50 +1175,90 @@ def apply_review_outcome(run_id: str, review: dict) -> None:
                     item["final_action"] = review["final_action"]
 
 
-def _node_names(state: dict) -> list[str]:
-    """Node names for progress aggregation: live runs' node lists first
-    (source nodes included), falling back to the graph document."""
+def _node_record(run: dict) -> dict:
+    """What node progress needs from a settled Run, kept on its batch item:
+    each node's status in the order it ran, and the usage of those that
+    reported any. Progress is then counted from the batch alone — reading
+    every settled Run back from disk on each poll, under the batch lock, made
+    a long batch slower to watch the further it got."""
+    nodes = run.get("nodes") or []
+    return {"node_status": {n.get("name"): n.get("status", "pending") for n in nodes},
+            "node_usage": {n.get("name"): n["token_usage"] for n in nodes if n.get("token_usage")}}
+
+
+def _saved_node_record(run_id: str) -> dict | None:
+    """The node record of a settled Run saved before items kept their own.
+    Read once per version of its file."""
+    from backend.features.persistence import file_view
+    record = file_view(runner.RUNS_DIR / f"{run_id}.json", "batch-node-record", _node_record)
+    if record is None:
+        run = runner.get_run(run_id)
+        record = _node_record(run) if run else None
+    return record
+
+
+def _item_nodes(items: list[dict], live: dict | None = None) -> list[dict | None]:
+    """Each item's node record: kept on a settled item; for a running one,
+    its live Run (`live`: run id -> run, already read). None when there is
+    none yet. Never called with _lock held."""
+    out = []
+    for item in items:
+        run_id = item.get("run_id")
+        status = item.get("status") or "pending"
+        if not run_id or status == "pending":
+            out.append(None)
+        elif status == "running":
+            run = (live or {}).get(run_id)
+            if live is None or run_id not in live:
+                run = runner.get_run(run_id)
+            out.append(_node_record(run) if run else None)
+        elif item.get("node_status") is not None:
+            out.append({"node_status": item["node_status"], "node_usage": item.get("node_usage") or {}})
+        else:
+            out.append(_saved_node_record(run_id))
+    return out
+
+
+def _node_names(state: dict, records: list) -> list[str]:
+    """Node names for progress aggregation: the runs' node lists first
+    (source nodes included), falling back to the workflow the batch ran."""
     names: list[str] = []
     seen = set()
-    for item in state.get("items", []):
-        run_id = item.get("run_id")
-        if not run_id:
-            continue
-        run = runner.get_run(run_id)
-        if not run:
-            continue
-        for node in run.get("nodes", []) or []:
-            if node.get("name") not in seen:
-                seen.add(node.get("name"))
-                names.append(node.get("name"))
+    for record in records:
+        for name in (record or {}).get("node_status") or {}:
+            if name not in seen:
+                seen.add(name)
+                names.append(name)
     if names:
         return names
-    from backend.api import graphs as graph_store  # lazy: graphs has no dependency on batch
-
-    graph = graph_store.load_graph(state.get("graph_id") or "") or {}
+    graph = (state.get("execution_snapshot") or {}).get("graph")
+    if not graph:
+        from backend.api import graphs as graph_store  # lazy: graphs has no dependency on batch
+        graph = graph_store.load_graph(state.get("graph_id") or "") or {}
     return [t.get("name") for t in graph.get("tasks", []) or []]
 
 
-def _node_progress(state: dict) -> dict:
+def _node_progress(state: dict, live: dict | None = None) -> dict:
     """Aggregate per-node status counts across the batch's item runs.
 
     {node_name: {completed, running, failed, pending}}; pending items (or
     items whose run state is unavailable) count all nodes as pending.
+    Never called with _lock held: `state` is a copy or a document read
+    from disk.
     """
+    items = state.get("items", [])
+    records = _item_nodes(items, live)
     progress = {
         name: {"completed": 0, "running": 0, "failed": 0, "pending": 0}
-        for name in _node_names(state)
+        for name in _node_names(state, records)
     }
-    for item in state.get("items", []):
-        run = runner.get_run(item["run_id"]) if item.get("run_id") else None
-        if run is None:
+    for record in records:
+        if record is None:
             for name in progress:
                 progress[name]["pending"] += 1
             continue
-        by_name = {n.get("name"): n.get("status", "pending")
-                   for n in run.get("nodes", []) or []}
-        usage = {n.get("name"): n.get("token_usage")
-                 for n in run.get("nodes", []) or [] if n.get("token_usage")}
+        by_name = record.get("node_status") or {}
+        usage = record.get("node_usage") or {}
         for name in progress:
             status = by_name.get(name, "pending")
             bucket = status if status in progress[name] else "pending"
@@ -1035,8 +1357,9 @@ def list_batches(graph_id: str | None = None, limit: int = 50) -> list[dict]:
             if digest is not None:
                 by_id[path.stem] = digest
     with _lock:
-        for batch_id, state in _batches.items():
-            by_id[batch_id] = _digest(_live(state))
+        snapshots = {batch_id: _copy(state, _DIGEST_FIELDS) for batch_id, state in _batches.items()}
+    for batch_id, snapshot in snapshots.items():
+        by_id[batch_id] = _digest(_live(snapshot))
     batches = list(by_id.values())
     if graph_id:
         batches = [b for b in batches if b.get("graph_id") == graph_id]
@@ -1046,6 +1369,9 @@ def list_batches(graph_id: str | None = None, limit: int = 50) -> list[dict]:
 
 def _read_batch(batch_id: str) -> dict | None:
     """A batch as persisted on disk, or None."""
+    from backend.features.persistence import is_safe_id
+    if not is_safe_id(batch_id):
+        return None
     path = BATCHES_DIR / f"{batch_id}.json"
     if not path.is_file():
         return None
@@ -1056,27 +1382,58 @@ def _read_batch(batch_id: str) -> dict | None:
         return None
 
 
-def _in_flight_usage(item: dict) -> dict | None:
+def _in_flight_usage(item: dict, run: dict | None = None, read: bool = True) -> dict | None:
     """What a running item's Run has reported so far.
 
     A finished item's usage is added to the batch in the same locked step
-    that marks it settled, so counting only `running` items (under the same
-    lock) never counts a Run twice.
+    that marks it settled, so counting only `running` items (as they were
+    in one copy taken under the lock) never counts a Run twice. `run` is
+    the Run when the caller has already read it; never read under _lock.
     """
     if item.get("status") != "running" or not item.get("run_id"):
         return None
-    run = runner.get_run(item["run_id"])
+    if run is None and read:
+        run = runner.get_run(item["run_id"])
     if not run or (run.get("created_at") or "") < (item.get("attempt_started_at") or ""):
         return None
     return run.get("token_usage")
 
 
-def _live(state: dict) -> dict:
-    """The batch as it stands: settled items' usage plus in-flight Runs'."""
+def _copy(state: dict, fields: tuple | None = None) -> dict:
+    """The batch as it stands, to read once the lock is released. Called with
+    _lock held. Items are copied one level deep (their fields are replaced,
+    not changed in place) — only `fields` of them when given; the running
+    usage total is changed in place, so it is copied whole."""
+    items = state.get("items") or []
+    out = {**state, "items": [dict(item) if fields is None else
+                              {k: item[k] for k in fields if k in item} for item in items]}
+    if "token_usage" in state:
+        out["token_usage"] = copy.deepcopy(state["token_usage"])
+    return out
+
+
+# What a listing reads of each item: its status and, while running, its Run.
+_DIGEST_FIELDS = ("status", "run_id", "attempt_started_at")
+
+
+def _running_runs(state: dict) -> dict:
+    """Run id -> Run for the items running in `state` (a copy). Outside _lock."""
+    runs = {}
+    for item in state.get("items") or []:
+        if item.get("status") == "running" and item.get("run_id"):
+            runs[item["run_id"]] = runner.get_run(item["run_id"])
+    return runs
+
+
+def _live(state: dict, runs: dict | None = None) -> dict:
+    """The batch as it stands: settled items' usage plus in-flight Runs'.
+    `state` is a copy taken under the lock (`_copy`); read outside it."""
     from backend.features.execution.token_usage import has_usage
+    if runs is None:
+        runs = _running_runs(state)
     items, in_flight = [], []
     for item in state.get("items") or []:
-        usage = _in_flight_usage(item)
+        usage = _in_flight_usage(item, runs.get(item.get("run_id")), read=False)
         if has_usage(usage):
             in_flight.append(usage)
             item = {**item, "token_usage": usage}
@@ -1087,12 +1444,39 @@ def _live(state: dict) -> dict:
     return {**state, "items": items, "token_usage": combined(state.get("token_usage"), *in_flight)}
 
 
-def get_batch(batch_id: str) -> dict | None:
+def get_batch(batch_id: str, inputs: bool = True) -> dict | None:
+    """The batch in full. Each item's whole record is read back from where
+    the batch archived it, unless `inputs=False` says the caller does not
+    need the records (a poll for progress, say)."""
+    batch = _get_batch(batch_id)
+    return with_inputs(batch) if inputs and batch is not None else batch
+
+
+def _get_batch(batch_id: str) -> dict | None:
     with _lock:
         state = _batches.get(batch_id)
-        if state is not None:
-            return {**_live(state), "node_progress": _node_progress(state)}
+        snapshot = _copy(state) if state is not None else None
+    if snapshot is not None:
+        # Every Run is read after the lock is released: a poll must not hold
+        # up the records settling, nor the gate reporting its stage.
+        runs = _running_runs(snapshot)
+        return {**_live(snapshot, runs), "node_progress": _node_progress(snapshot, runs)}
     state = _read_batch(batch_id)
     if state is None:
         return None
     return {**state, "node_progress": _node_progress(state)}
+
+
+# What the batch view polled by the page leaves out of each item: the record
+# it ran on. A batch of large records made every two-second poll carry all of
+# them. `get_batch` still has them for everything that reads a batch in full.
+_VIEW_OMITS = ("inputs", "input_at")
+
+
+def batch_view(batch_id: str) -> dict | None:
+    """`get_batch` for the page: the items without their records."""
+    batch = get_batch(batch_id, inputs=False)
+    if batch is None:
+        return None
+    return {**batch, "items": [{k: v for k, v in item.items() if k not in _VIEW_OMITS}
+                               for item in batch.get("items") or []]}

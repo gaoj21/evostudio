@@ -62,9 +62,11 @@ def start(graph, node, body, *, batch_id=None, session=None, session_started_at=
         graph['_llm_batch_size'] = native
     from backend.api.app import _gray_zone
     zone = _gray_zone(body.get('review_zone'))
-    workers = int(body.get('workers', 2))
-    if not 1 <= workers <= batch.MAX_WORKERS:
-        raise sources.SourceError('Invalid worker count.')
+    try:
+        # None: one model call per record of each Input batch, up to the cap.
+        workers = batch.requested_workers(body.get('workers'))
+    except (TypeError, ValueError) as exc:
+        raise sources.SourceError('Invalid worker count.') from exc
     period, date_field = period_settings(body)
     metric, label_key = body.get('metric'), body.get('label_key')
     # Kept with the batch so a Resume can continue reading the same way.

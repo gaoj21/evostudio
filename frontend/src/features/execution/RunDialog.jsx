@@ -507,7 +507,9 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
   const [file, setFile] = useState(null);
   const [error, setError] = useState(null);
   const [starting, setStarting] = useState(false);
-  const [workers, setWorkers] = useState(2);
+  // null: the server picks — one model call per record of each batch, up to
+  // its limit. A number fixes how many calls run at the same time.
+  const [workers, setWorkers] = useState(null);
   const [apiBatch, setApiBatch] = useState(false);
   const [apiBatchSize, setApiBatchSize] = useState(32);
   // Scoring is done by the workflow's saved evaluators; the batch-start metric is gone.
@@ -520,7 +522,7 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
   const effectiveBatchSize = loaderSize ?? Number(apiBatchSize);
   const [loaderPeriod,setLoaderPeriod]=useState('none');
   const [dateField,setDateField]=useState('');
-  const executionParams = {...(apiBatch ? {llm_batch_size: effectiveBatchSize} : {workers}), ...(loaderSize != null && loaderPeriod !== 'none' ? {period:loaderPeriod,date_field:dateField} : {})};
+  const executionParams = {...(apiBatch ? {llm_batch_size: effectiveBatchSize} : workers != null ? {workers} : {}), ...(loaderSize != null && loaderPeriod !== 'none' ? {period:loaderPeriod,date_field:dateField} : {})};
   const invalidApiBatch = apiBatch && (!Number.isInteger(effectiveBatchSize) || effectiveBatchSize < 1 || effectiveBatchSize > 1024);
   const [previewing, setPreviewing] = useState(false);
   const [previewError, setPreviewError] = useState(null);
@@ -761,11 +763,15 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
         <p className="muted small">Maximum model requests per SafeChain batch. Canvas DataLoader inputs use their Input batch size automatically.</p>
         {invalidApiBatch && <p role="alert">Enter a whole number from 1 to 1024.</p>}
       </div>}
-      {!apiBatch && <details className="input-disclosure"><summary>Parallel runs · {workers} workers</summary>
-      <div className="field">
-        <label htmlFor="batch-workers">Workers (records run at the same time)</label>
+      {!apiBatch && <div className="field">
+        <label htmlFor="batch-concurrency">Concurrent model calls</label>
         <div className="workers-row">
-          <NumberInput id="batch-workers" type="number" min="1" max="64" value={workers} onChange={(e) => setWorkers(Math.max(1, Math.min(64, Number(e.target.value) || 1)))} />
+          <select id="batch-concurrency" disabled={collecting || starting} value={workers == null ? 'auto' : 'fixed'}
+            onChange={(e) => setWorkers(e.target.value === 'auto' ? null : (preview?.workers || 8))}>
+            <option value="auto">Auto · one per record{preview?.workers ? `, ${preview.workers} at a time` : ''}</option>
+            <option value="fixed">Fixed number</option>
+          </select>
+          {workers != null && <NumberInput id="batch-workers" aria-label="Workers (model calls at the same time)" type="number" min="1" max="64" value={workers} onChange={(e) => setWorkers(Math.max(1, Math.min(64, Number(e.target.value) || 1)))} />}
           {preview?.samples > 0 && preview.samples !== workers && (
             <button type="button" className="link small" onClick={() => setWorkers(Math.min(64, preview.samples))}>
               one per trajectory ({preview.samples})
@@ -773,10 +779,9 @@ function BatchRunForm({ graphId, hasCanvasSource, onCancel, beforeRun, onBatchSt
           )}
         </div>
         <div className="muted small">
-          A trajectory's steps run one after another, so more workers than trajectories does nothing.
+          Each input batch runs node by node with this many model calls in flight. Auto uses one per record, up to the server's limit (32 unless configured); lower it if your provider rate-limits. A trajectory's steps run one after another, so more than one per trajectory does nothing.
         </div>
-      </div>
-      </details>}
+      </div>}
       <div className="modal-actions">
         <button type="button" onClick={onCancel} disabled={starting}>
           Cancel

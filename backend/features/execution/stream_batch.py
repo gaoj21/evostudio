@@ -39,8 +39,7 @@ def _release(pairs):
     # Full inputs stay in the per-item input files and per-run records; the
     # batch keeps only what identifies a record in a list.
     for item, record in pairs:
-        item['inputs'] = {k: v for k, v in record.items()
-                          if k == '_dataloader' or isinstance(v, (str, int, float, bool, type(None))) and len(str(v)) <= 160}
+        item['inputs'] = batch.brief_inputs(record)
         item['inputs_archived'] = True
         if item.get('run_id'):
             with runner._lock:

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { api } from '../../api.js';
+import { singleFlight } from '../../singleFlight.js';
 import { cancelOutcome, unattendedState } from './batchControl.js';
 
 import { BATCH_SETTLED, RUN_SETTLED } from './runStates.js';
@@ -103,7 +104,8 @@ export function useExecutionSession({ graphId, onError, onClearSelection }) {
   useEffect(() => {
     if (!runMode || !run?.run_id || isSettled(RUN_SETTLED, run.status)) return undefined;
     let stopped = false;
-    const tick = async () => {
+    // Skips a turn while the last request is unanswered.
+    const tick = singleFlight(async () => {
       try {
         const next = await api.getRun(run.run_id);
         if (stopped) return;
@@ -122,7 +124,7 @@ export function useExecutionSession({ graphId, onError, onClearSelection }) {
           : current));
         setDrawerOpen(true);
       }
-    };
+    });
     tick();
     const timer = setInterval(tick, 2000);
     return () => {
@@ -136,7 +138,9 @@ export function useExecutionSession({ graphId, onError, onClearSelection }) {
       return undefined;
     }
     let stopped = false;
-    const tick = async () => {
+    // A large batch can take longer than the interval to answer: never stack
+    // a second request on one still in flight.
+    const tick = singleFlight(async () => {
       try {
         const next = await api.getBatch(batch.batch_id);
         if (stopped) return;
@@ -158,7 +162,7 @@ export function useExecutionSession({ graphId, onError, onClearSelection }) {
         onError?.([`Batch ${batch.batch_id} is no longer on the server — `
           + 'it was lost before it finished.']);
       }
-    };
+    });
     tick();
     const timer = setInterval(tick, 2000);
     return () => {
@@ -170,7 +174,7 @@ export function useExecutionSession({ graphId, onError, onClearSelection }) {
   useEffect(() => {
     if (!graphId) return undefined;
     let stopped = false;
-    const look = async () => {
+    const look = singleFlight(async () => {
       try {
         const listed = await api.listBatches(graphId);
         if (!stopped) {
@@ -179,7 +183,7 @@ export function useExecutionSession({ graphId, onError, onClearSelection }) {
       } catch {
         // This badge is a warning rather than a source of truth. Retry later.
       }
-    };
+    });
     look();
     const timer = setInterval(look, 5000);
     return () => {

@@ -172,12 +172,190 @@ def _release_reader(memory) -> None:
         memory_store.close_memory(memory)
 
 
+class _EntryIndex:
+    """A store's entries as `memory_store.list_entries` returns them, parsed
+    once and looked up by subject.
+
+    Reading a store's entries means loading and parsing its whole corpus, and
+    a subject-tracked node did that on every write and every recall: per
+    record, a cost that grew with the store, and per batch, with its square.
+    An index is built from one read and then kept in step with the writes
+    made through the copy it belongs to. Entries come back in list_entries'
+    order (by timestamp, ties in the order read)."""
+
+    def __init__(self, entries):
+        self._lock = threading.Lock()
+        self._rows: dict = {}        # key -> (seq, entry, body)
+        self._subjects: dict = {}    # match field -> ({subject: {key}}, {key: subject}, task)
+        self._seq = 0
+        for entry in entries:
+            self._put(entry)
+
+    @staticmethod
+    def _subject(task, body):
+        return memory_policy.subject_of(task, body) if isinstance(body, dict) else None
+
+    def _put(self, entry):
+        self._seq += 1
+        key = entry.get("memory_id") or f"#{self._seq}"
+        old = self._rows.pop(key, None)
+        if old is not None:
+            self._unindex(key, old)
+        row = (self._seq, entry, memory_policy._unwrap(entry.get("content")))
+        self._rows[key] = row
+        for subjects, of_key, task in self._subjects.values():
+            self._index(subjects, of_key, task, key, row)
+
+    def _index(self, subjects, of_key, task, key, row):
+        subject = self._subject(task, row[2])
+        if subject is None:
+            return
+        try:
+            hash(subject)
+        except TypeError:                        # unhashable: found by the scan in about()
+            subject = _EntryIndex
+        subjects.setdefault(subject, set()).add(key)
+        of_key[key] = subject
+
+    def _unindex(self, key, row):
+        for subjects, of_key, _task in self._subjects.values():
+            subject = of_key.pop(key, None)
+            if subject is not None:
+                subjects.get(subject, set()).discard(key)
+
+    def copy(self) -> "_EntryIndex":
+        """An index of its own to write through, starting from this one."""
+        twin = _EntryIndex(())
+        with self._lock:
+            twin._rows, twin._seq = dict(self._rows), self._seq
+            twin._subjects = {field: ({s: set(keys) for s, keys in subjects.items()}, dict(of_key), task)
+                              for field, (subjects, of_key, task) in self._subjects.items()}
+        return twin
+
+    def add(self, entry) -> None:
+        with self._lock:
+            self._put(entry)
+
+    def remove(self, keys) -> None:
+        with self._lock:
+            for key in keys:
+                row = self._rows.pop(key, None)
+                if row is not None:
+                    self._unindex(key, row)
+
+    def entries(self) -> list[dict]:
+        with self._lock:
+            rows = list(self._rows.values())
+        return [entry for _seq, entry, _body in sorted(rows, key=self._order)]
+
+    @staticmethod
+    def _order(row):
+        return (str(row[1].get("timestamp") or ""), row[0])
+
+    def about(self, task: dict, subject) -> list[tuple[dict, object]]:
+        """(entry, parsed body) for each entry `task` would say is about
+        `subject` — the same entries, in the same order, a scan of
+        list_entries comparing memory_policy.subject_of would find."""
+        field = memory_policy.policy(task)["match"]
+        if not field:
+            return []
+        with self._lock:
+            if field not in self._subjects:
+                subjects, of_key = {}, {}
+                for key, row in self._rows.items():
+                    self._index(subjects, of_key, task, key, row)
+                self._subjects[field] = (subjects, of_key, task)
+            subjects = self._subjects[field][0]
+            try:
+                keys = set(subjects.get(subject, ()))
+            except TypeError:
+                keys = set()
+            keys |= {key for key in subjects.get(_EntryIndex, ())
+                     if self._subject(task, self._rows[key][2]) == subject}
+            rows = [self._rows[key] for key in keys if key in self._rows]
+        return [(entry, body) for _seq, entry, body in sorted(rows, key=self._order)]
+
+
+# What recall reads of each store as saved on disk, kept while the store is
+# unchanged there (its version, as _open_reader goes by). Recall reads what is
+# saved, never what records of the same moment have written but not saved:
+# those run side by side, and none of them is "before" another.
+_saved_indexes: "dict[str, tuple[object, _EntryIndex]]" = {}
+_SAVED_INDEXES_KEPT = 32
+
+
+def _saved_index(graph_id: str, node_name: str):
+    """The index of this store's saved entries, or None when the store keeps
+    no memory.db to go by (none yet, or another backend): read it directly."""
+    key = f"{graph_id}/{node_name}"
+    version = _store_version(graph_id, node_name)
+    if version is None:
+        with _ltm_locks_guard:
+            _saved_indexes.pop(key, None)
+        return None
+    with _ltm_locks_guard:
+        cached = _saved_indexes.get(key)
+        if cached is not None and cached[0] == version:
+            _saved_indexes[key] = _saved_indexes.pop(key)        # most recently used last
+            return cached[1]
+    index = _EntryIndex(memory_store.list_entries(graph_id, node_name))
+    if _store_version(graph_id, node_name) == version:           # not saved mid-read
+        with _ltm_locks_guard:
+            _saved_indexes.pop(key, None)
+            _saved_indexes[key] = (version, index)
+            while len(_saved_indexes) > _SAVED_INDEXES_KEPT:
+                _saved_indexes.pop(next(iter(_saved_indexes)))
+    return index
+
+
+class _LazyEntries:
+    """The entries of a store opened for writing, as an _EntryIndex kept in
+    step with every write made through that copy — so a record sees what the
+    records before it in the same open copy wrote, saved or not. Read on first
+    need, under the node's lock, while disk still holds what the copy loaded
+    (it is saved only when the last writer leaves, and then closed)."""
+
+    def __init__(self, graph_id: str, node_name: str):
+        self.graph_id, self.node_name = graph_id, node_name
+        self._index = None
+
+    def get(self) -> _EntryIndex:
+        if self._index is None:
+            saved = _saved_index(self.graph_id, self.node_name)
+            self._index = (saved.copy() if saved is not None else
+                           _EntryIndex(memory_store.list_entries(self.graph_id, self.node_name)))
+        return self._index
+
+    @property
+    def built(self):
+        return self._index
+
+
+class _History:
+    """Recall's `history`: a store's saved entries — all of them, or (the
+    lookup recall makes on every node run) only those about one subject."""
+
+    def __init__(self, graph_id: str):
+        self.graph_id = graph_id
+
+    def __call__(self, name: str) -> list[dict]:
+        index = _saved_index(self.graph_id, name)
+        return index.entries() if index is not None else memory_store.list_entries(self.graph_id, name)
+
+    def about(self, name: str, task: dict, subject) -> list[dict]:
+        index = _saved_index(self.graph_id, name)
+        if index is None:
+            return memory_store.list_entries(self.graph_id, name)
+        return [entry for entry, _body in index.about(task, subject)]
+
+
 class _SharedStore:
     """One node's store while records are writing to it: opened once,
     written by each, saved once by the last to leave."""
 
     def __init__(self):
         self.memory = None          # opened (under the node lock) by the first writer
+        self.entries = None         # its _EntryIndex, built by the first write that needs it
         self.dirty = False
         self.pending = 0            # writers between joining and leaving
         self.flushes = 0            # saves done so far
@@ -207,7 +385,8 @@ def _write_shared(graph_id: str, node_name: str, state: dict, write) -> None:
         with _ltm_turn(key, state):
             if shared.memory is None:
                 shared.memory = memory_store.open_memory(graph_id, node_name, create=True)
-            write(shared.memory)
+                shared.entries = _LazyEntries(graph_id, node_name)
+            write(shared.memory, shared.entries)
             shared.dirty = True
             target = shared.flushes + 1          # the save that will hold this entry
     finally:
@@ -228,7 +407,7 @@ def _write_shared(graph_id: str, node_name: str, state: dict, write) -> None:
                     failure = error
                 finally:
                     memory_store.close_memory(shared.memory)
-                    shared.memory, shared.dirty = None, False
+                    shared.memory, shared.entries, shared.dirty = None, None, False
                     with shared.cond:
                         shared.flushes += 1
                         if failure is not None:
@@ -641,7 +820,7 @@ async def execute_llm_node(agent, task: dict, inputs: dict, state: dict) -> dict
             try:
                 block = await memory_policy.recall_async(
                     state.get('_harness_memories', {}), task, inputs,
-                    history=lambda name: memory_store.list_entries(state.get('graph_id', 'graph'), name),
+                    history=_History(state.get('graph_id', 'graph')),
                     run_data=runtime_context(state), table=table_store,
                     graph_id=state.get('graph_id', 'graph'))
                 if state.get('session') and memory_policy.policy(task)['read_enabled']:
@@ -1005,7 +1184,10 @@ def _execute_run(run_id: str, graph_doc: dict, inputs: dict) -> None:
                 output_dir=graph_doc.get("output_dir") or "runs",
             )
         except Exception:
-            pass
+            # The run itself is saved; only its workspace copy is missing.
+            import logging
+            logging.getLogger(__name__).warning(
+                "Could not write workspace artifacts for run %s", run_id, exc_info=True)
         if persisted:
             # Only once it is on disk: get_run falls back to the file.
             _release(run_id, state)
@@ -1225,7 +1407,7 @@ def _recall_before_running(agent, task: dict, stores: dict, state: dict,
                 )
             block += await memory_policy.recall_async(
                 stores, task, inputs or {},
-                history=lambda agent: memory_store.list_entries(graph_id, agent),
+                history=_History(graph_id),
                 # Source-node outputs included, so a node dated by `as_of`
                 # can be held to it even though it never takes it as an input.
                 run_data=runtime_context(state),
@@ -1398,13 +1580,14 @@ def _save_ltm(graph_doc: dict, memories: dict, graph, wf, state: dict,
             # whole corpus, and one save per record made the end of every
             # batch chunk a queue of full rewrites.
             _write_shared(graph_id, node.name, state,
-                          lambda store: _write_entry(store, graph_id, node.name, task, payload, as_message))
+                          lambda store, entries: _write_entry(store, graph_id, node.name, task, payload,
+                                                              as_message, entries))
         except Exception:
             state["memory_error"] = traceback.format_exc()
 
 
 def _write_entry(memory, graph_id: str, node_name: str, task: dict,
-                 payload: dict, as_message) -> None:
+                 payload: dict, as_message, entries: "_LazyEntries | None" = None) -> None:
     """Store this run's selection under the subject it is about.
 
     A node that tracks a subject keeps one entry per subject — the subject's
@@ -1412,18 +1595,28 @@ def _write_entry(memory, graph_id: str, node_name: str, task: dict,
     into that entry, so "what has this company done over time" is a thing you
     can open, not something to be reassembled from scattered days.
 
+    `entries` is the index of what `memory` holds (the shared store's): the
+    subject's entries are looked up there, including ones written through
+    this copy and not saved yet, rather than by reading the whole store back
+    from disk on every write. Without it the store on disk is read.
+
     Must be called with the node's memory lock held: this is a
     read-modify-write of an entry other records of the same batch also touch.
     """
     subject = memory_policy.subject_of(task, payload)
     if subject is None:
-        memory.add([as_message(payload)])          # nothing to accumulate against
+        message = as_message(payload)
+        _note_added(entries, memory.add([message]), message)   # nothing to accumulate against
         return
 
     dated_by = memory_policy.policy(task)["at"]
+    if entries is not None:
+        found = entries.get().about(task, subject)
+    else:
+        found = [(entry, memory_policy._unwrap(entry.get("content")))
+                 for entry in memory_store.list_entries(graph_id, node_name)]
     mine, ids = [], []
-    for entry in memory_store.list_entries(graph_id, node_name):
-        body = memory_policy._unwrap(entry.get("content"))
+    for entry, body in found:
         if not isinstance(body, dict):
             continue
         if memory_policy.subject_of(task, body) != subject:
@@ -1434,7 +1627,8 @@ def _write_entry(memory, graph_id: str, node_name: str, task: dict,
 
     merged = memory_policy.merge_timeline(
         mine, memory_policy.as_timeline(task, payload), dated_by)
-    memory.add([as_message(merged)])
+    message = as_message(merged)
+    _note_added(entries, memory.add([message]), message)
     if ids:
         # After the merged entry is in, never before: a failure here leaves a
         # duplicate, which recall folds back together by date, where the other
@@ -1443,6 +1637,29 @@ def _write_entry(memory, graph_id: str, node_name: str, task: dict,
             memory.delete(ids)
         except Exception:
             pass
+        else:
+            if entries is not None and entries.built is not None:
+                entries.built.remove(ids)
+
+
+def _note_added(entries, memory_ids, message) -> None:
+    """Keep the write index in step with an entry just added, as
+    list_entries will read it back once saved. Before the index is built only
+    entries with no subject are added (the first write with one builds it),
+    and those are never looked up, so the index read from disk then misses
+    nothing it is asked for."""
+    if entries is None or entries.built is None or not memory_ids:
+        return
+    content = message.content
+    entries.built.add({
+        "memory_id": memory_ids[0],
+        "content": content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, default=str),
+        "timestamp": getattr(message, "timestamp", None),
+        "agent": getattr(message, "agent", None),
+        "wf_task": getattr(message, "wf_task", None),
+        "wf_goal": getattr(message, "wf_goal", None),
+        "msg_type": getattr(getattr(message, "msg_type", None), "value", getattr(message, "msg_type", None)),
+    })
 
 
 def _snapshot_nodes(state: dict, graph, wf, succeeded: bool) -> None:
@@ -1570,6 +1787,9 @@ def apply_review_outcome(run_id: str, outcome: dict) -> None:
 
 def _read_run(run_id: str) -> dict | None:
     """A run as persisted on disk, or None."""
+    from backend.features.persistence import is_safe_id
+    if not is_safe_id(run_id):
+        return None
     path = RUNS_DIR / f"{run_id}.json"
     if not path.is_file():
         return None
