@@ -561,7 +561,8 @@ def list_runs(graph_id: str | None = Query(default=None), summary: bool = Query(
     if summary is not True:
         return runner.list_runs(graph_id=graph_id)
     from backend.features.chat.result_chat import summary as summarize
-    return runner.list_run_views(graph_id, limit=20, view=lambda run: summarize(run), view_name="run-summary:*")
+    return runner.list_run_views(graph_id, limit=20, view=lambda run: summarize(run),
+                                  view_name="run-summary:*", persist=True)
 
 
 @app.get("/api/runs/{run_id}")

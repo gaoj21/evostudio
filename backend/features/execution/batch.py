@@ -9,7 +9,7 @@ and is persisted to studio-data/batches/{batch_id}.json on completion.
 import json
 import copy
 import os
-from backend.features.persistence import write_json, replace
+from backend.features.persistence import write_json, replace, remember_view
 import tempfile
 import threading
 import time
@@ -933,25 +933,34 @@ def mark_interrupted(before: float | None = None) -> int:
     thread. Items that had already finished keep their status and score, so an
     interrupted batch still shows what it managed to complete.
     """
+    from backend.features.persistence import cached_view, file_version
     if not BATCHES_DIR.is_dir():
         return 0
     marked = 0
     for path in BATCHES_DIR.glob("*.json"):
+        version = file_version(path)
+        if version is None:
+            continue
         # Only files the previous process left: one written since this
         # process started belongs to a live run.
-        if before is not None:
-            try:
-                if path.stat().st_mtime >= before:
-                    continue
-            except OSError:
-                continue
+        if before is not None and version[0] / 1e9 >= before:
+            continue
+        # A batch whose listing view (valid for the file as it is) says it
+        # settled is not opened: a batch file can be tens of MB, and on a
+        # synced folder every read can mean a download. The journal holds
+        # only its records, never the batch's own status.
+        digest = cached_view(path, "batch-digest", version)
+        if digest is not None and digest.get("status") not in ("running", "cancelling"):
+            continue
         try:
             with open(path, encoding="utf-8") as f:
-                data = _with_journal(path.stem, json.load(f))
+                raw = json.load(f)
         except (json.JSONDecodeError, OSError):
             continue
-        if data.get("status") not in ("running", "cancelling"):
+        if raw.get("status") not in ("running", "cancelling"):
+            remember_view(path, "batch-digest", _digest(raw), persist=True, version=version)
             continue
+        data = _with_journal(path.stem, raw)
         # A stop that was requested but never wound down is a stop: the
         # batch reads as cancelled, and can be resumed like any other.
         stopping = data["status"] == "cancelling"
@@ -968,6 +977,7 @@ def mark_interrupted(before: float | None = None) -> int:
             marked += 1
         except OSError:
             continue
+        remember_view(path, "batch-digest", _digest(data), persist=True)
     return marked
 
 
@@ -1033,6 +1043,9 @@ def _persist_batch(state: dict) -> None:
                 disk["seq"] += 1
                 disk.update(written=disk["seq"], base=0, gen=disk["gen"] + 1)
                 _journal_path(batch_id).unlink(missing_ok=True)
+                # Its listing view and status, for the next restart and the
+                # history list, without reading the file back.
+                remember_view(path, "batch-digest", _digest(data), persist=True)
         finally:
             Path(temporary).unlink(missing_ok=True)
         state["_snapshot_at"] = time.monotonic()
@@ -1360,8 +1373,9 @@ def list_batches(graph_id: str | None = None, limit: int = 50) -> list[dict]:
         for path in BATCHES_DIR.glob("*.json"):
             if path.stem in live:
                 continue            # its live state is below; its file keeps changing
-            # Parsed once per version of the file, not on every call.
-            digest = file_view(path, "batch-digest", _digest)
+            # Parsed once per version of the file, not on every call, nor
+            # again after a restart: a batch file can be tens of MB.
+            digest = file_view(path, "batch-digest", _digest, persist=True)
             if digest is not None:
                 by_id[path.stem] = digest
     with _lock:

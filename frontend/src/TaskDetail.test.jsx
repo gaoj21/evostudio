@@ -73,18 +73,29 @@ it('retries failed result loading within the detail page',async()=>{
  fireEvent.click(screen.getByText('Retry'));
  expect(await screen.findByText('Recovered result')).toBeInTheDocument();
 });
+// The server's paging, filtering and search over `all`, as the results endpoint does it.
+const serve=all=>async(graphId,page={})=>{
+ const q=(page.q||'').toLowerCase();
+ const matched=all.filter(r=>(!page.batch||(page.batch==='single'?!r.batch_id:r.batch_id===page.batch))&&(!q||JSON.stringify(r).toLowerCase().includes(q)));
+ const offset=page.offset||0,limit=page.limit||50;
+ const runs=matched.slice(offset,offset+limit);
+ return {runs,total:matched.length,has_more:offset+runs.length<matched.length};
+};
 it('browses multiple records, filters batches and exposes step outputs',async()=>{
- api.listResultRuns.mockResolvedValue([
+ api.listResultRuns.mockImplementation(serve([
   {run_id:'r1',status:'success',batch_id:'b1',nodes:[{name:'reader',kind:'source',output:{customer:'Alpha',long:'x'.repeat(200)}}]},
   {run_id:'r2',status:'success',batch_id:'b1',nodes:[{name:'reader',kind:'source',output:{customer:'Beta'}}]},
   {run_id:'r3',status:'failed',batch_id:null},
- ]);
+ ]));
+ api.listBatches.mockResolvedValue([{batch_id:'b1',status:'success',total:2}]);
  api.getRun.mockImplementation(async id=>({run_id:id,status:'success',result:`Output ${id}`,inputs:{input:'Source data'},nodes:[{name:'analyze',status:'completed',output:'Analysis details'}]}));
  render(<TaskDetail graphId="g"/>);
  fireEvent.click((await screen.findAllByText('View result →'))[0]);
  expect(await screen.findByText('Output r1')).toBeInTheDocument();
+ expect(screen.getByText('(3 / 3)')).toBeInTheDocument();
  fireEvent.change(screen.getByLabelText('Filter batch'),{target:{value:'b1'}});
- expect(screen.getByText('(2 / 3)')).toBeInTheDocument();
+ expect(await screen.findByText('(2 / 2)')).toBeInTheDocument();
+ expect(api.listResultRuns).toHaveBeenLastCalledWith('g',expect.objectContaining({batch:'b1',offset:0}));
  fireEvent.click(screen.getByRole('button',{name:/Beta/}));
  expect(await screen.findByText('Output r2')).toBeInTheDocument();
  expect(screen.queryByText('Output r1')).not.toBeInTheDocument();
@@ -92,7 +103,46 @@ it('browses multiple records, filters batches and exposes step outputs',async()=
  fireEvent.click(screen.getByText('analyze · completed'));
  expect(screen.getByText('Analysis details')).toBeVisible();
  fireEvent.change(screen.getByLabelText('Search run records'),{target:{value:'missing'}});
- expect(screen.getByText('No matching records.')).toBeInTheDocument();
+ expect(await screen.findByText('No matching records.')).toBeInTheDocument();
+ expect(api.listResultRuns).toHaveBeenLastCalledWith('g',expect.objectContaining({batch:'b1',q:'missing'}));
+});
+it('shows the task before its run history arrives',async()=>{
+ api.listResultRuns.mockImplementation(()=>new Promise(()=>{}));
+ api.listBatches.mockImplementation(()=>new Promise(()=>{}));
+ render(<TaskDetail graphId="g"/>);
+ expect(await screen.findByRole('heading',{name:'Summarize'})).toBeInTheDocument();
+ expect(screen.getByText('Summarize feedback')).toBeInTheDocument();
+ expect(screen.getByText('Loading runs…')).toBeInTheDocument();
+ expect(screen.getByText('Loading batch runs…')).toBeInTheDocument();
+ expect(screen.queryByText('Loading task…')).not.toBeInTheDocument();
+ expect(api.listResultRuns).toHaveBeenCalledWith('g',{limit:50});
+});
+it('shows a failed run history in its own section',async()=>{
+ api.listResultRuns.mockRejectedValue(new Error('History unavailable'));
+ render(<TaskDetail graphId="g"/>);
+ expect(await screen.findByRole('alert')).toHaveTextContent('History unavailable');
+ expect(screen.getByRole('heading',{name:'Summarize'})).toBeInTheDocument();
+ expect(screen.getByText('Customer comments')).toBeInTheDocument();
+});
+it('loads more runs and searches all of them on the server',async()=>{
+ const all=Array.from({length:120},(_,i)=>({run_id:`r${i}`,status:'success',inputs:{customer:i===110?'Zeta':`C${i}`}}));
+ api.listResultRuns.mockImplementation(serve(all));
+ api.getRun.mockImplementation(async id=>({run_id:id,status:'success',result:`Output ${id}`}));
+ render(<TaskDetail graphId="g"/>);
+ expect(await screen.findByText('Showing the newest 50 of 120 runs. Open one to browse and search them all.')).toBeInTheDocument();
+ fireEvent.click(screen.getAllByText('View result →')[0]);
+ expect(await screen.findByText('(50 / 120)')).toBeInTheDocument();
+ fireEvent.click(screen.getByRole('button',{name:'Load more'}));
+ expect(await screen.findByText('(100 / 120)')).toBeInTheDocument();
+ expect(api.listResultRuns).toHaveBeenLastCalledWith('g',expect.objectContaining({offset:50,limit:50}));
+ fireEvent.click(screen.getByRole('button',{name:'Load more'}));
+ expect(await screen.findByText('(120 / 120)')).toBeInTheDocument();
+ expect(screen.queryByRole('button',{name:'Load more'})).not.toBeInTheDocument();
+ // Not among the first page, found by the server all the same.
+ fireEvent.change(screen.getByLabelText('Search run records'),{target:{value:'zeta'}});
+ expect(await screen.findByText('(1 / 1)')).toBeInTheDocument();
+ expect(screen.getByRole('button',{name:/Zeta/})).toBeInTheDocument();
+ expect(api.listResultRuns).toHaveBeenLastCalledWith('g',expect.objectContaining({q:'zeta',offset:0}));
 });
 it('names runs by the trajectory fields the Input type declares',async()=>{
  api.getGraph.mockResolvedValue({id:'g',name:'T',tasks:[{name:'reader',kind:'source',source:{type:'project_feed'}}]});

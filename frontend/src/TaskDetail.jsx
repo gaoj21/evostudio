@@ -1,14 +1,16 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from './api.js';
 import { singleFlight } from './singleFlight.js';
-import RunResultPage from './features/execution/RunResultPage.jsx';
+import RunResultPage, { RUN_PAGE, asRunPage } from './features/execution/RunResultPage.jsx';
 
 export default function TaskDetail({ graphId, onBack, onEdit, onRun, onOpenBatch }) {
   const [graph,setGraph]=useState(null);
   const [plan,setPlan]=useState(null);
-  const [runs,setRuns]=useState([]);
-  const [batches,setBatches]=useState([]);
+  const [runs,setRuns]=useState(null);
+  const [batches,setBatches]=useState(null);
   const [error,setError]=useState('');
+  const [runsError,setRunsError]=useState('');
+  const [batchesError,setBatchesError]=useState('');
   const [planError,setPlanError]=useState('');
   const [revision,setRevision]=useState(0);
   const [selectedRun,setSelectedRun]=useState(null);
@@ -25,27 +27,30 @@ export default function TaskDetail({ graphId, onBack, onEdit, onRun, onOpenBatch
   },[selectedRun]);
   useEffect(()=>{
     let active=true;
-    setError('');setPlanError('');setGraph(null);setPlan(null);
-    Promise.all([api.getGraph(graphId),api.listResultRuns(graphId)]).then(([g,r])=>{
-      if(active){setGraph(g);setRuns(r);}
-    }).catch(e=>{if(active)setError(e.message);});
+    setError('');setPlanError('');setRunsError('');setGraph(null);setPlan(null);setRuns(null);
+    // Each part shows as soon as it arrives: the task itself never waits
+    // for its run history, and the history is only its newest page.
+    api.getGraph(graphId).then(g=>{if(active)setGraph(g);}).catch(e=>{if(active)setError(e.message);});
+    api.listResultRuns(graphId,{limit:RUN_PAGE}).then(r=>{if(active)setRuns(asRunPage(r));}).catch(e=>{if(active)setRunsError(e.message);});
     api.runPlan(graphId).then(p=>{if(active)setPlan(p);}).catch(e=>{
       if(active)setPlanError(typeof e.body?.detail==='string'?e.body.detail:'This task needs configuration before it can run.');
     });
     return ()=>{active=false;};
   },[graphId,revision]);
   useEffect(()=>{
-    if(!runs.some(r=>r.status==='running'))return;
+    if(!runs?.runs.some(r=>r.status==='running'))return;
     let active=true;
-    const poll=singleFlight(()=>api.listResultRuns(graphId).then(r=>{if(active)setRuns(r);}).catch(e=>{if(active)setError(e.message);}));
+    // Only the newest page: that is where running runs are.
+    const poll=singleFlight(()=>api.listResultRuns(graphId,{limit:RUN_PAGE}).then(r=>{if(active)setRuns(asRunPage(r));}).catch(e=>{if(active)setRunsError(e.message);}));
     const timer=setInterval(poll,3000);
     return ()=>{active=false;clearInterval(timer);};
   },[graphId,runs]);
   useEffect(()=>{
     let active=true;
+    setBatches(null);setBatchesError('');
     const load=()=>api.listBatches(graphId).then(result=>{
-      if(active)setBatches(result.batches || result);
-    }).catch(e=>{if(active)setError(e.message);});
+      if(active){setBatches(result.batches || result);setBatchesError('');}
+    }).catch(e=>{if(active)setBatchesError(e.message);});
     load();
     const timer=setInterval(singleFlight(load),3000);
     return ()=>{active=false;clearInterval(timer);};
@@ -69,7 +74,8 @@ export default function TaskDetail({ graphId, onBack, onEdit, onRun, onOpenBatch
   const nodes=graph?.tasks||[];
   const tools=[...new Set(nodes.flatMap(n=>n.tool_names||[]))];
   const skills=[...new Set(nodes.flatMap(n=>n.skill_names||[]))];
-  if(selectedRun)return <RunResultPage graphId={graphId} sourceNames={(graph?.tasks || []).filter(node => node.kind === "source").map(node => node.name)} sequence={sequence} run={selectedRun} runs={runs} onSelectRun={setSelectedRun} taskName={graph?.name} onBack={()=>setSelectedRun(null)}/>;
+  const runList=runs?.runs||[];
+  if(selectedRun)return <RunResultPage graphId={graphId} sourceNames={(graph?.tasks || []).filter(node => node.kind === "source").map(node => node.name)} sequence={sequence} run={selectedRun} runs={runList} total={runs?.total} hasMore={runs?.has_more} batches={batches||[]} onSelectRun={setSelectedRun} taskName={graph?.name} onBack={()=>setSelectedRun(null)}/>;
   return <main ref={overviewRef} className="task-detail project-main">
     <button onClick={onBack}>← Tasks</button>
     {error&&<div role="alert" className="platform-error">{error} <button onClick={()=>setRevision(v=>v+1)}>Retry</button></div>}
@@ -78,17 +84,17 @@ export default function TaskDetail({ graphId, onBack, onEdit, onRun, onOpenBatch
       <header className="project-heading"><div><div className="project-eyebrow">TASK OVERVIEW</div><h1>{graph.name}</h1><p>{graph.goal||'No goal specified yet. Define one in the workflow editor.'}</p></div><div className="form-actions"><button onClick={onEdit}>Edit workflow</button><button className="platform-primary" disabled={!plan} onClick={onRun}>Prepare run</button></div></header>
       {planError&&<div role="alert" className="platform-error">{planError} <button onClick={onEdit}>Configure task</button></div>}
       <div className="task-detail-grid">
-        <section className="project-task-card"><h2>Inputs</h2><p>Provided when you run this task.</p>{(plan?.inputs||[]).map(i=><div className="task-field" key={i.name}><strong>{i.description||i.name}</strong><small>{i.name} · {i.type} · {i.required?'Required':'Optional'}</small></div>)}{plan&&!plan.inputs?.length&&<p>No manual inputs required.</p>}</section>
+        <section className="project-task-card"><h2>Inputs</h2><p>Provided when you run this task.</p>{!plan&&!planError&&<p role="status" className="muted small">Loading inputs…</p>}{(plan?.inputs||[]).map(i=><div className="task-field" key={i.name}><strong>{i.description||i.name}</strong><small>{i.name} · {i.type} · {i.required?'Required':'Optional'}</small></div>)}{plan&&!plan.inputs?.length&&<p>No manual inputs required.</p>}</section>
         <section className="project-task-card"><h2>Execution</h2><div className="task-field"><strong>{nodes.length} workflow steps</strong><small>Model: platform configuration; review before running.</small></div><div className="task-field"><strong>Tools</strong><small>{tools.join(', ')||'None configured'}</small></div><div className="task-field"><strong>Skills</strong><small>{skills.join(', ')||'None configured'}</small></div><p>Memory behavior is configured per step in the editor.</p></section>
       </div>
       <section className="project-task-section" aria-label="Batch history"><div className="task-section-heading"><h2>Batch runs</h2></div>
-        {!batches.length ? <p className="muted small">No batch runs yet.</p> : <div className="task-run-list">{batches.map(b=><button key={b.batch_id} onClick={()=>onOpenBatch?.(b.batch_id)}>
+        {batchesError&&!batches ? <div role="alert" className="platform-error">{batchesError}</div> : !batches ? <p role="status" className="muted small">Loading batch runs…</p> : !batches.length ? <p className="muted small">No batch runs yet.</p> : <div className="task-run-list">{batches.map(b=><button key={b.batch_id} onClick={()=>onOpenBatch?.(b.batch_id)}>
           <span>{b.created_at ? new Date(b.created_at).toLocaleString() : b.batch_id}</span><strong>{b.status}</strong>
           <span>{b.input_total ?? b.total ?? 0} records{b.error ? ` · ${b.error}` : ''}</span>
           <span>{['interrupted','failed','cancelled'].includes(b.status) ? 'Open / Resume →' : 'Open batch →'}</span>
         </button>)}</div>}
       </section>
-      <section className="project-task-section"><div className="task-section-heading"><h2>Recent runs</h2><button onClick={()=>setRevision(v=>v+1)}>Refresh</button></div>{!runs.length?<div className="project-empty"><h3>No runs yet</h3><p>Prepare a run to review inputs and settings. Nothing runs until you confirm.</p></div>:<div className="task-run-list">{runs.map(r=><button data-run-id={r.run_id} key={r.run_id} onClick={()=>inspect(r)}><span>{r.created_at?new Date(r.created_at).toLocaleString():r.run_id}</span><strong>{r.status}</strong><span>View result →</span></button>)}</div>}</section>
+      <section className="project-task-section"><div className="task-section-heading"><h2>Recent runs</h2><button onClick={()=>setRevision(v=>v+1)}>Refresh</button></div>{runsError&&<div role="alert" className="platform-error">{runsError} <button onClick={()=>setRevision(v=>v+1)}>Retry</button></div>}{!runs?(!runsError&&<p role="status" className="muted small">Loading runs…</p>):!runList.length?<div className="project-empty"><h3>No runs yet</h3><p>Prepare a run to review inputs and settings. Nothing runs until you confirm.</p></div>:<><div className="task-run-list">{runList.map(r=><button data-run-id={r.run_id} key={r.run_id} onClick={()=>inspect(r)}><span>{r.created_at?new Date(r.created_at).toLocaleString():r.run_id}</span><strong>{r.status}</strong><span>View result →</span></button>)}</div>{runs.total>runList.length&&<p className="muted small">Showing the newest {runList.length} of {runs.total} runs. Open one to browse and search them all.</p>}</>}</section>
     </>}
   </main>;
 }

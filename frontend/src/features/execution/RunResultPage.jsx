@@ -24,7 +24,15 @@ export function runLabel(item, { sourceNames = [], sequence = null } = {}) {
   return parts.join(' · ') || item.run_id;
 }
 
-export default function RunResultPage({ graphId, sourceNames = [], sequence = null, run, runs = [], onSelectRun, taskName, onBack }) {
+// Runs are listed a page at a time; search and the batch filter run on the
+// server, over every run of the task rather than only the ones loaded.
+export const RUN_PAGE = 50;
+export const asRunPage = value => Array.isArray(value) ? { runs: value, total: value.length, has_more: false } : value;
+const SEARCH_DELAY = 300;
+const filterKey = (batch, query) => `${batch}\n${query.trim()}`;
+const pageParams = (batch, query, offset) => ({ limit: RUN_PAGE, offset, batch: batch === 'all' ? undefined : batch, q: query.trim() || undefined });
+
+export default function RunResultPage({ graphId, sourceNames = [], sequence = null, run, runs = [], total, hasMore = false, batches = [], onSelectRun, taskName, onBack }) {
   const layout = useLayoutMode();
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: `results-${layout}`, panelIds: RESULT_PANEL_IDS });
   const [result, setResult] = useState(null);
@@ -34,9 +42,50 @@ export default function RunResultPage({ graphId, sourceNames = [], sequence = nu
   const content = useRef(null);
   const [batch, setBatch] = useState('all');
   const [query, setQuery] = useState('');
-  const batches = [...new Set(runs.map(item => item.batch_id).filter(Boolean))];
+  // The listed runs and the filter they were fetched for; until a filter is
+  // applied or more are loaded, the task page's newest page (which it polls).
+  const [list, setList] = useState(() => ({ runs, total: total ?? runs.length, hasMore, key: filterKey('all', ''), own: false }));
+  const [listLoading, setListLoading] = useState(false);
+  const [listError, setListError] = useState('');
+  const applied = useRef({ batch: 'all', query: '' });
   const label = item => runLabel(item, { sourceNames, sequence });
-  const visibleRuns = runs.filter(item => (batch === 'all' || (batch === 'single' ? !item.batch_id : item.batch_id === batch)) && `${label(item)} ${item.run_id} ${item.status}`.toLowerCase().includes(query.toLowerCase()));
+
+  useEffect(() => {
+    setList(current => current.own ? current : { ...current, runs, total: total ?? runs.length, hasMore });
+  }, [runs, total, hasMore]);
+  useEffect(() => {
+    const key = filterKey(batch, query);
+    if (key === list.key) return undefined;
+    let active = true;
+    setListLoading(true);
+    const timer = setTimeout(() => {
+      applied.current = { batch, query };
+      api.listResultRuns(graphId, pageParams(batch, query, 0)).then(value => {
+        if (!active) return;
+        const page = asRunPage(value);
+        setList({ runs: page.runs, total: page.total, hasMore: page.has_more, key, own: key !== filterKey('all', '') });
+        setListError('');
+      }).catch(e => { if (active) setListError(e.message || 'Unable to load run records.'); })
+        .finally(() => { if (active) setListLoading(false); });
+    }, query.trim() ? SEARCH_DELAY : 0);
+    return () => { active = false; clearTimeout(timer); setListLoading(false); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graphId, batch, query]);
+  function loadMore() {
+    const { batch: shownBatch, query: shownQuery } = applied.current;
+    const key = list.key;
+    setListLoading(true);
+    api.listResultRuns(graphId, pageParams(shownBatch, shownQuery, list.runs.length)).then(value => {
+      const page = asRunPage(value);
+      setList(current => {
+        if (current.key !== key) return current;
+        const seen = new Set(current.runs.map(item => item.run_id));
+        return { runs: [...current.runs, ...page.runs.filter(item => !seen.has(item.run_id))], total: page.total, hasMore: page.has_more, key, own: true };
+      });
+      setListError('');
+    }).catch(e => setListError(e.message || 'Unable to load run records.'))
+      .finally(() => setListLoading(false));
+  }
 
 
   useEffect(() => { heading.current?.focus(); }, []);
@@ -71,17 +120,20 @@ export default function RunResultPage({ graphId, sourceNames = [], sequence = nu
     </nav>
     <div className="run-result-layout">
       <aside className="run-result-list" aria-label="Run records">
-        <h2>Run records <small>({visibleRuns.length} / {runs.length})</small></h2>
+        <h2>Run records <small>({list.runs.length} / {list.total})</small></h2>
         <input aria-label="Search run records" placeholder="Search records…" value={query} onChange={e => setQuery(e.target.value)} />
         <select aria-label="Filter batch" value={batch} onChange={e => setBatch(e.target.value)}>
           <option value="all">All runs</option><option value="single">Individual runs</option>
-          {batches.map(id => <option key={id} value={id}>Batch {id} ({runs.filter(item => item.batch_id === id).length})</option>)}
+          {batches.map(item => <option key={item.batch_id} value={item.batch_id}>Batch {item.created_at ? new Date(item.created_at).toLocaleString() : item.batch_id} ({item.input_total ?? item.total ?? 0})</option>)}
         </select>
         <div className="run-result-records">
-          {visibleRuns.map(item => <button key={item.run_id} aria-current={item.run_id === run.run_id ? 'true' : undefined} onClick={() => onSelectRun?.(item)}>
+          {list.runs.map(item => <button key={item.run_id} aria-current={item.run_id === run.run_id ? 'true' : undefined} onClick={() => onSelectRun?.(item)}>
             <strong>{label(item)}</strong><span>{item.status} · {item.created_at ? new Date(item.created_at).toLocaleString() : item.run_id}</span>
           </button>)}
-          {!visibleRuns.length && <p>No matching records.</p>}
+          {listError && <p role="alert">{listError}</p>}
+          {!list.runs.length && !listLoading && !listError && <p>No matching records.</p>}
+          {list.hasMore && <button className="run-result-more" disabled={listLoading} onClick={loadMore}>{listLoading ? 'Loading…' : 'Load more'}</button>}
+          {listLoading && !list.hasMore && <p role="status">Loading…</p>}
         </div>
       </aside>
       <Group className="result-workspace" orientation={layout === 'phone' ? 'vertical' : 'horizontal'} defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged}>

@@ -132,17 +132,50 @@ def summary(run, sources=None):
                       for n in run.get('nodes') or []]}
 
 
+def _search_text(row):
+    """What a search over listed runs looks at: ids, status and the short
+    fields a run is labelled by."""
+    parts = [row.get('run_id'), row.get('status')]
+    records = [row.get('inputs'), row.get('input_summary')] + [n.get('output') for n in row.get('nodes') or []]
+    for record in records:
+        if isinstance(record, dict):
+            parts.extend(record.values())
+    return ' '.join(str(p) for p in parts if p is not None and p != '').lower()
+
+
+def _given(value, default):
+    """A query parameter's value; its default when called directly, where
+    FastAPI's Query marker is what arrives."""
+    from pydantic.fields import FieldInfo
+    return default if value is None or isinstance(value, FieldInfo) else value
+
+
 @router.get('/graphs/{graph_id}/results')
-def list_results(graph_id: str, summary_only: bool = Query(default=False, alias='summary')):
+def list_results(graph_id: str, summary_only: bool = Query(default=False, alias='summary'),
+                 page: bool = Query(default=False), limit: int = Query(default=50, ge=1, le=500),
+                 offset: int = Query(default=0, ge=0), batch: str | None = Query(default=None),
+                 q: str | None = Query(default=None)):
+    """Saved results. `summary=1`: every run as a list shows it. With
+    `page=1` as well: one page of them, {runs, total, has_more}, newest first,
+    narrowed by `batch` (a batch id, or "single" for runs outside a batch)
+    and `q` (text in a run's id, status or the short fields it is labelled by)."""
     if summary_only is not True:            # a direct call passes the Query default
         return records(graph_id)
     from backend.api import graphs
     graph = graphs.load_graph(graph_id) or {}
     sources = {t.get('name') for t in graph.get('tasks') or [] if t.get('kind') == 'source'} if graph else None
-    # Each run's summary is kept until its file changes; the Input nodes it
-    # keeps are part of the cache key.
+    # Each run's summary is kept until its file changes, across restarts; the
+    # Input nodes it keeps are part of the cache key.
     name = 'run-summary:' + ','.join(sorted(sources)) if sources is not None else 'run-summary:*'
-    return runner.list_run_views(graph_id, limit=None, view=lambda run: summary(run, sources), view_name=name)
+    view = lambda run: summary(run, sources)
+    if page is not True:
+        return runner.list_run_views(graph_id, limit=None, view=view, view_name=name, persist=True)
+    limit, offset = _given(limit, 50), _given(offset, 0)
+    text = str(_given(q, '') or '').strip().lower()
+    keep = (lambda row: text in _search_text(row)) if text else None
+    runs, total = runner.page_run_views(graph_id, view, name, offset=offset, limit=limit,
+                                        batch_id=_given(batch, None) or None, keep=keep, persist=True)
+    return {'runs': runs, 'total': total, 'has_more': offset + len(runs) < total}
 
 
 @router.post('/graphs/{graph_id}/results/chat')

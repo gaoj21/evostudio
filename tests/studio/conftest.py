@@ -93,6 +93,8 @@ _DATA_PATHS = [
     ("workspace", "WORKSPACE_DIR"), ("watcher", "WATCH_DIR"),
     ("table_store", "TABLES_DIR"), ("memory_reset", "BACKUPS"),
     ("evaluator_tools", "DRAFTS_DIR"),
+    # A dotted name is a module outside backend.api.
+    ("backend.features.persistence", "VIEW_CACHE"),
 ]
 
 
@@ -111,7 +113,8 @@ def _never_touch_real_data(tmp_path, monkeypatch):
     optional = {"evolve_api"}
     for module_name, attr in _DATA_PATHS:
         try:
-            module = importlib.import_module(f"backend.api.{module_name}")
+            module = importlib.import_module(
+                module_name if "." in module_name else f"backend.api.{module_name}")
         except ImportError:
             if module_name in optional:
                 continue

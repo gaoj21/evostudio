@@ -1700,24 +1700,31 @@ def mark_interrupted(before: float | None = None) -> int:
     paid for. What matters is that the run stops claiming to be running, so it
     reads as "interrupted by a restart" instead of hanging forever.
     """
+    from backend.features.persistence import cached_view, file_version, remember_view
     if not RUNS_DIR.is_dir():
         return 0
     marked = 0
     for path in RUNS_DIR.glob("*.json"):
+        version = file_version(path)
+        if version is None:
+            continue
         # Only files the previous process left: one written since this
         # process started belongs to a live run.
-        if before is not None:
-            try:
-                if path.stat().st_mtime >= before:
-                    continue
-            except OSError:
-                continue
+        if before is not None and version[0] / 1e9 >= before:
+            continue
+        # A run known (from its cached view, still valid for the file as it
+        # is) to have settled is not opened: on a synced folder every read
+        # can mean a download.
+        meta = cached_view(path, "run-meta", version)
+        if meta is not None and "status" in meta and meta["status"] not in ("running", "pending"):
+            continue
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
         except (json.JSONDecodeError, OSError):
             continue
         if data.get("status") not in ("running", "pending"):
+            remember_view(path, "run-meta", _run_meta(data), persist=True, version=version)
             continue
         data["status"] = "failed"
         data["error"] = (
@@ -1729,6 +1736,7 @@ def mark_interrupted(before: float | None = None) -> int:
             marked += 1
         except OSError:
             continue
+        remember_view(path, "run-meta", _run_meta(data), persist=True)
     return marked
 
 
@@ -1736,12 +1744,17 @@ def _persist_run(state: dict) -> bool:
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     data = _public(state)
     data.pop("persistence_error", None)
+    path = RUNS_DIR / f"{state['run_id']}.json"
     try:
-        write_json(RUNS_DIR / f"{state['run_id']}.json", data)
+        write_json(path, data)
         state.pop("persistence_error", None)
-        return True
     except OSError:
         return False
+    # What listings sort and filter runs by, and its status for the next
+    # restart, recorded now rather than by parsing the whole file back.
+    from backend.features.persistence import remember_view
+    remember_view(path, "run-meta", _run_meta(data), persist=True)
+    return True
 
 
 def retry_persistence(run_id):
@@ -1834,18 +1847,22 @@ def list_runs(graph_id: str | None = None, limit: int | None = 20) -> list[dict]
 
 
 def _run_meta(run: dict) -> dict:
-    return {"graph_id": run.get("graph_id"), "created_at": run.get("created_at", "")}
+    """What listings sort and filter runs by, and what a restart checks:
+    kept per version of the run's file, so a changed status is never stale."""
+    return {"graph_id": run.get("graph_id"), "created_at": run.get("created_at", ""),
+            "batch_id": run.get("batch_id"), "status": run.get("status")}
 
 
-def list_run_views(graph_id: str | None = None, limit: int | None = 20, view=None,
-                   view_name: str | None = None) -> list:
-    """Recent runs, newest first, each as `view(run)` — the whole run when
-    `view` is None. A named view is cached per version of each run's file."""
+def _run_index(graph_id: str | None) -> tuple[list, dict]:
+    """The runs of `graph_id` (all when None), newest first, as
+    (run_id, meta, path) — path None for a run still in memory — and those
+    in-memory runs by id. Decided on a small view of each file, kept on disk
+    across restarts; no file is read in full."""
     from backend.features.persistence import file_view
     found: dict[str, tuple] = {}
     if RUNS_DIR.is_dir():
         for path in RUNS_DIR.glob("*.json"):
-            meta = file_view(path, "run-meta", _run_meta)
+            meta = file_view(path, "run-meta", _run_meta, persist=True)
             if meta is not None:
                 found[path.stem] = (meta, path)
     with _lock:
@@ -1854,20 +1871,62 @@ def list_run_views(graph_id: str | None = None, limit: int | None = 20, view=Non
         found[run_id] = (_run_meta(run), None)
     chosen = [(run_id, meta, path) for run_id, (meta, path) in found.items()
               if not graph_id or meta.get("graph_id") == graph_id]
-    chosen.sort(key=lambda row: row[1].get("created_at") or "", reverse=True)
+    # Run id breaks ties, so pages of the same listing never overlap.
+    chosen.sort(key=lambda row: (row[1].get("created_at") or "", row[0]), reverse=True)
+    return chosen, live
+
+
+def _run_view(run_id: str, path, live: dict, view, view_name: str | None, persist: bool):
+    """One run of an index row as `view(run)`, the whole run when None."""
+    from backend.features.persistence import file_view
+    if path is None:
+        run = live[run_id]
+        return view(run) if view else run
+    if view is not None and view_name:
+        return file_view(path, view_name, view, persist=persist)
+    run = _read_run(run_id)
+    if run is None:
+        return None
+    return view(run) if view else run
+
+
+def list_run_views(graph_id: str | None = None, limit: int | None = 20, view=None,
+                   view_name: str | None = None, persist: bool = False) -> list:
+    """Recent runs, newest first, each as `view(run)` — the whole run when
+    `view` is None. A named view is cached per version of each run's file
+    (`persist`: on disk too, so a restart does not recompute it)."""
+    chosen, live = _run_index(graph_id)
     if limit is not None:
         chosen = chosen[:limit]
     out = []
     for run_id, _meta, path in chosen:
-        if path is None:
-            run = live[run_id]
-            out.append(view(run) if view else run)
-        elif view is not None and view_name:
-            value = file_view(path, view_name, view)
-            if value is not None:
-                out.append(value)
-        else:
-            run = _read_run(run_id)
-            if run is not None:
-                out.append(view(run) if view else run)
+        value = _run_view(run_id, path, live, view, view_name, persist)
+        if value is not None:
+            out.append(value)
     return out
+
+
+def page_run_views(graph_id: str | None, view, view_name: str, offset: int = 0,
+                   limit: int = 50, batch_id: str | None = None, keep=None,
+                   persist: bool = False) -> tuple[list, int]:
+    """One page of `list_run_views` and how many runs match in all.
+
+    `batch_id`: only that batch's runs; "single" for runs outside any batch.
+    `keep(value)`: only runs whose view it accepts — every matching run's
+    view is then needed, the cached ones are cheap. Without it only the
+    page's views are made."""
+    chosen, live = _run_index(graph_id)
+    if batch_id == "single":
+        chosen = [row for row in chosen if not row[1].get("batch_id")]
+    elif batch_id:
+        chosen = [row for row in chosen if row[1].get("batch_id") == batch_id]
+    if keep is None:
+        values = [_run_view(run_id, path, live, view, view_name, persist)
+                  for run_id, _meta, path in chosen[offset:offset + limit]]
+        return [v for v in values if v is not None], len(chosen)
+    matched = []
+    for run_id, _meta, path in chosen:
+        value = _run_view(run_id, path, live, view, view_name, persist)
+        if value is not None and keep(value):
+            matched.append(value)
+    return matched[offset:offset + limit], len(matched)
