@@ -4,7 +4,11 @@ Run from the repository root:  uvicorn backend.api.app:app --port 8000
 or:                            python -m backend.api.app
 """
 
+import faulthandler
 import json
+import sys
+import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -106,6 +110,9 @@ PALETTE = {
     ]
 }
 
+STARTUP_REPORT_SECONDS = 30
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     """Reconcile state a previous process left behind.
@@ -115,15 +122,40 @@ async def _lifespan(_app: FastAPI):
     resumed — the work was LLM calls in flight, and repeating them would bill
     the user twice — so the point is to stop them from hanging forever and say
     what happened instead.
+
+    It reads every run and batch file, which on a large or synced data folder
+    can take minutes, so it runs beside the server instead of holding up its
+    start. Files written after this moment belong to this process and are
+    left alone.
     """
-    interrupted = runner.mark_interrupted() + batch_store.mark_interrupted()
-    if interrupted:
-        print(f"[studio] marked {interrupted} run(s)/batch(es) interrupted by a restart")
-    # Schedules are the one thing that *is* resumed: "every day" that stops at
-    # the next restart is not a schedule.
-    resumed = scheduler.restore()
-    if resumed:
-        print(f"[studio] resumed schedules for: {', '.join(resumed)}")
+    started = time.time()
+    done = threading.Event()
+
+    def reconcile():
+        try:
+            interrupted = (runner.mark_interrupted(before=started)
+                           + batch_store.mark_interrupted(before=started))
+            if interrupted:
+                print(f"[studio] marked {interrupted} run(s)/batch(es) interrupted by a restart")
+            # Schedules are the one thing that *is* resumed: "every day" that
+            # stops at the next restart is not a schedule.
+            resumed = scheduler.restore()
+            if resumed:
+                print(f"[studio] resumed schedules for: {', '.join(resumed)}")
+        except Exception as exc:  # never take the server down over cleanup
+            print(f"[studio] startup cleanup failed: {type(exc).__name__}: {exc}")
+        finally:
+            done.set()
+
+    def watchdog():
+        # A cleanup this slow is stuck on something: show where.
+        if not done.wait(STARTUP_REPORT_SECONDS):
+            print(f"[studio] startup cleanup still running after {STARTUP_REPORT_SECONDS}s; "
+                  "thread stacks follow", file=sys.stderr, flush=True)
+            faulthandler.dump_traceback(all_threads=True)
+
+    threading.Thread(target=reconcile, name="studio-startup-cleanup", daemon=True).start()
+    threading.Thread(target=watchdog, name="studio-startup-watchdog", daemon=True).start()
     yield
 
 

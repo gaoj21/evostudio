@@ -1692,7 +1692,7 @@ def _snapshot_nodes(state: dict, graph, wf, succeeded: bool) -> None:
     state["nodes"] = state.get("_source_nodes", []) + nodes
 
 
-def mark_interrupted() -> int:
+def mark_interrupted(before: float | None = None) -> int:
     """Flag persisted runs left mid-flight by a previous process.
 
     Execution cannot be resumed — the work was a thread making LLM calls, and
@@ -1704,6 +1704,14 @@ def mark_interrupted() -> int:
         return 0
     marked = 0
     for path in RUNS_DIR.glob("*.json"):
+        # Only files the previous process left: one written since this
+        # process started belongs to a live run.
+        if before is not None:
+            try:
+                if path.stat().st_mtime >= before:
+                    continue
+            except OSError:
+                continue
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)

@@ -926,7 +926,7 @@ def _score_item(state: dict, item: dict, prediction) -> None:
         item["score_detail"] = extra or None
 
 
-def mark_interrupted() -> int:
+def mark_interrupted(before: float | None = None) -> int:
     """Flag persisted batches left mid-flight by a previous process.
 
     Like runs, a batch cannot be resumed: each item was a run in a worker
@@ -937,6 +937,14 @@ def mark_interrupted() -> int:
         return 0
     marked = 0
     for path in BATCHES_DIR.glob("*.json"):
+        # Only files the previous process left: one written since this
+        # process started belongs to a live run.
+        if before is not None:
+            try:
+                if path.stat().st_mtime >= before:
+                    continue
+            except OSError:
+                continue
         try:
             with open(path, encoding="utf-8") as f:
                 data = _with_journal(path.stem, json.load(f))

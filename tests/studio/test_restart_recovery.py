@@ -116,3 +116,53 @@ class TestBatchesSurviveTheProcess:
 
         assert batch_store.mark_interrupted() == 0
         assert json.loads((batches / "done.json").read_text())["summary"] == {"mean": 1.0}
+
+
+class TestStartupDoesNotWaitForCleanup:
+    """Reconciling reads every run and batch file; on a large or synced data
+    folder that took long enough that the server sat at "Waiting for
+    application startup". It now runs beside the server."""
+
+    def test_only_files_from_before_startup_are_marked(self, dirs):
+        import os
+        import time
+        from backend.api import batch as batch_store
+        from backend.api import runner
+        runs, batches = dirs
+        write(runs / "old.json", run_id="old", status="running")
+        write(runs / "live.json", run_id="live", status="running")
+        write(batches / "old.json", batch_id="old", status="running", items=[])
+        write(batches / "live.json", batch_id="live", status="running", items=[])
+        started = time.time()
+        for path in (runs / "old.json", batches / "old.json"):
+            os.utime(path, (started - 60, started - 60))
+        for path in (runs / "live.json", batches / "live.json"):
+            os.utime(path, (started + 1, started + 1))
+
+        assert runner.mark_interrupted(before=started) == 1
+        assert batch_store.mark_interrupted(before=started) == 1
+        assert json.loads((runs / "live.json").read_text())["status"] == "running"
+        assert json.loads((batches / "live.json").read_text())["status"] == "running"
+        assert json.loads((runs / "old.json").read_text())["status"] == "failed"
+
+    def test_the_server_starts_while_cleanup_is_still_running(self, dirs, monkeypatch):
+        import threading
+        from fastapi.testclient import TestClient
+        from backend.api import app as app_module
+        from backend.api import batch as batch_store
+        from backend.api import runner
+        from backend.api import scheduler
+        release, finished = threading.Event(), threading.Event()
+
+        def slow(before=None):
+            release.wait(10)
+            return 0
+
+        monkeypatch.setattr(runner, "mark_interrupted", slow)
+        monkeypatch.setattr(batch_store, "mark_interrupted", lambda before=None: 0)
+        monkeypatch.setattr(scheduler, "restore", lambda: finished.set() or [])
+        with TestClient(app_module.app) as client:
+            assert client.get("/api/graphs").status_code == 200
+            assert not finished.is_set()
+            release.set()
+            assert finished.wait(5)
