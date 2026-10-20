@@ -45,7 +45,7 @@ def verify(spec):
                                   capture_output=True, text=True, timeout=180)
             if proc.returncode:
                 return {**report, 'status':'failed', 'error':'Dependency installation failed', 'details':(proc.stdout + proc.stderr)[-2000:]}
-            marker.write_text('ok')
+            marker.write_text('ok', encoding='utf-8')
     for example in examples:
         # Calls the same subprocess execution path used by workflow tools.
         result = custom_tools.run_custom_tool(example['tool'], example['args'])
@@ -77,5 +77,5 @@ def verify_saved(name):
         if current != spec:
             raise custom_tools.CustomToolError('Tool changed during verification; verify the current version again.')
         current['verification'] = result
-        custom_tools._path(name).write_text(json.dumps(current, ensure_ascii=False, indent=2))
+        custom_tools._path(name).write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding='utf-8')
     return result

@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from backend.api.studio_config import DATA_DIR
+from backend.features.persistence import is_safe_id, replace, safe_id
 
 GRAPHS_DIR = DATA_DIR / "graphs"
 
@@ -44,11 +45,11 @@ def _slugify(name: str) -> str:
 
 
 def _graph_path(graph_id: str) -> Path:
-    return GRAPHS_DIR / f"{graph_id}.json"
+    return GRAPHS_DIR / f"{safe_id(graph_id, 'graph id')}.json"
 
 
 def graph_exists(graph_id: str) -> bool:
-    return _graph_path(graph_id).is_file()
+    return is_safe_id(graph_id) and _graph_path(graph_id).is_file()
 
 
 def create_graph(name: str, goal: str) -> dict:
@@ -244,12 +245,14 @@ def _save(graph: dict) -> None:
             json.dump(graph, stream, indent=2, ensure_ascii=False)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, target)
+        replace(temporary, target)
     finally:
         temporary.unlink(missing_ok=True)
 
 
 def load_graph(graph_id: str) -> dict | None:
+    if not is_safe_id(graph_id):
+        return None
     path = _graph_path(graph_id)
     if not path.is_file():
         return None
@@ -280,6 +283,8 @@ def list_graphs() -> list[dict]:
 
 
 def delete_graph(graph_id: str) -> bool:
+    if not is_safe_id(graph_id):
+        return False
     with _lock:
         path = _graph_path(graph_id)
         if not path.is_file():

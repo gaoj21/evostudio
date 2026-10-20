@@ -79,7 +79,7 @@ def main():
     kind, directory = sys.argv[1:]
     directory = Path(directory).resolve()
     _exit_with_parent(directory)
-    payload = json.loads((directory / 'input.json').read_text())
+    payload = json.loads((directory / 'input.json').read_text(encoding='utf-8'))
     if kind in USER_CODE_KINDS:
         # Relative paths in user code resolve against the data resource's
         # files (resource["root"]), or a private scratch folder when there is
@@ -102,10 +102,10 @@ def main():
             from backend.features.data.source_apis import collect_records
             config = payload['source']
             def emit(record):
-                with (directory / 'records.jsonl').open('a') as stream:
+                with (directory / 'records.jsonl').open('a', encoding='utf-8') as stream:
                     stream.write(json.dumps(record, ensure_ascii=False) + '\n')
             def progress(done, total):
-                (directory / 'stage.txt').write_text(json.dumps({'completed': done, 'total': total}))
+                (directory / 'stage.txt').write_text(json.dumps({'completed': done, 'total': total}), encoding='utf-8')
             if config['type'] == 'dataloader':
                 # A DataLoader over an API source: its reader collects the
                 # range (collect_records), then its preprocessing applies.
@@ -124,17 +124,17 @@ def main():
             import time
             def emit(rows):
                 temporary = directory / 'chunk.tmp'
-                temporary.write_text(json.dumps(rows, ensure_ascii=False, allow_nan=False))
+                temporary.write_text(json.dumps(rows, ensure_ascii=False, allow_nan=False), encoding='utf-8')
                 temporary.replace(directory / 'chunk.json')
                 while (directory / 'chunk.json').exists(): time.sleep(.05)
             def on_info(info):
                 temporary = directory / 'info.tmp'
-                temporary.write_text(json.dumps(info))
+                temporary.write_text(json.dumps(info), encoding='utf-8')
                 temporary.replace(directory / 'info.json')
             def stage(message):
                 # What a timeout names as the last thing the Dataset did.
                 temporary = directory / 'stage.tmp'
-                temporary.write_text(message)
+                temporary.write_text(message, encoding='utf-8')
                 temporary.replace(directory / 'stage.txt')
             stage('Importing PyTorch and Dataset runtime')
             from backend.features.data.torch_loader import execute_python
@@ -145,7 +145,7 @@ def main():
         elif kind == 'dataset':
             def stage(message):
                 temporary = directory / 'stage.tmp'
-                temporary.write_text(message)
+                temporary.write_text(message, encoding='utf-8')
                 temporary.replace(directory / 'stage.txt')
             stage('Importing PyTorch and Dataset runtime')
             from backend.features.data.torch_loader import execute_python
@@ -155,14 +155,14 @@ def main():
             value = verify(payload['spec'])
         elif kind == 'generate':
             from backend.api.chat_api import _workflow_from_goal
-            value = _workflow_from_goal(payload['goal'], on_stage=lambda text: (directory / 'stage.txt').write_text(text))
+            value = _workflow_from_goal(payload['goal'], on_stage=lambda text: (directory / 'stage.txt').write_text(text, encoding='utf-8'))
         else:
             raise ValueError('Unknown assistant worker')
         result = {'value': value}
     except Exception as exc:
         # Errors raised by the user's own code already say where and why.
         result = {'error': str(exc) if getattr(exc, 'user_code', False) else f'{type(exc).__name__}: {exc}'}
-    (directory / 'result.json').write_text(json.dumps(result, ensure_ascii=False, default=str))
+    (directory / 'result.json').write_text(json.dumps(result, ensure_ascii=False, default=str), encoding='utf-8')
 
 
 if __name__ == '__main__':

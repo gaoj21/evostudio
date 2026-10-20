@@ -19,6 +19,7 @@ from pathlib import Path
 
 from backend.api import runner
 from backend.api.studio_config import data_path
+from backend.features.persistence import is_safe_id, replace
 
 SCHEDULES_DIR = data_path("schedules")
 
@@ -42,6 +43,8 @@ class _Paused(Exception):
 
 
 def _path(graph_id: str) -> Path:
+    if not is_safe_id(graph_id):
+        raise ScheduleError(f"Invalid workflow id: {graph_id!r}")
     return SCHEDULES_DIR / f"{graph_id}.json"
 
 
@@ -135,6 +138,8 @@ def next_fire(schedule: dict, after: datetime) -> datetime:
 
 
 def load(graph_id: str) -> dict | None:
+    if not is_safe_id(graph_id):
+        return None
     path = _path(graph_id)
     if not path.is_file():
         return None
@@ -154,7 +159,7 @@ def _save(graph_id: str, schedule: dict) -> dict:
             json.dump(schedule, stream, indent=2, ensure_ascii=False, default=str)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, target)
+        replace(temporary, target)
     finally:
         temporary.unlink(missing_ok=True)
     return schedule
@@ -273,6 +278,8 @@ def resume(graph_id, recovery_policy):
 
 def clear(graph_id: str) -> bool:
     """Remove a workflow's schedule entirely."""
+    if not is_safe_id(graph_id):
+        return False
     with _state_lock:
         stop(graph_id)
         path = _path(graph_id)

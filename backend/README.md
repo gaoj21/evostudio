@@ -22,6 +22,15 @@ under `frontend/` and proxies `/api` to port 8000.
 Mutable state defaults to `studio-data/`. Set
 `EAX_STUDIO_DATA_DIR` to keep runtime data outside the checkout.
 
+On Windows, keep the data directory out of folders that OneDrive (or
+Dropbox, Google Drive) syncs, such as `Documents` or `Desktop` when folder
+backup is on, e.g. `set EAX_STUDIO_DATA_DIR=C:\EvoStudioData`. Studio keeps
+memory and tables in SQLite files and replaces JSON state in place; a sync
+client holding those files open causes `database is locked` and
+`PermissionError` failures, and syncing a live SQLite file can corrupt it.
+Studio retries a blocked replace briefly, but cannot work around a file the
+sync client keeps locked.
+
 ## Feature boundary
 
 Stable core:

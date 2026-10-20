@@ -23,6 +23,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
+from backend.features.http_util import content_disposition
 
 from . import custom_tools
 from . import graphs as graph_store
@@ -680,5 +681,5 @@ def export_graph(graph_id: str):
     return Response(
         content=payload,
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": content_disposition(filename)},
     )

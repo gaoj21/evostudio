@@ -26,6 +26,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from backend.api.studio_config import data_path
+from backend.features.persistence import is_safe_id
 
 REVIEWS_DIR = data_path("reviews")
 RUNS_DIR = data_path("runs")
@@ -173,6 +174,8 @@ def _save(review: dict) -> None:
 
 
 def get_review(review_id: str) -> dict | None:
+    if not is_safe_id(review_id):
+        return None
     path = REVIEWS_DIR / f"{review_id}.json"
     if not path.is_file():
         return None

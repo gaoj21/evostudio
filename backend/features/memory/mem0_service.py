@@ -55,7 +55,7 @@ def scope(graph):
 def spaces(graph):
     result = []
     for path in (ROOT / 'spaces').glob('*.json'):
-        item = json.loads(path.read_text())
+        item = json.loads(path.read_text(encoding='utf-8'))
         if item['scope'] == scope(graph):
             result.append(item)
     return sorted(result, key=lambda item: item['name'])
@@ -67,7 +67,7 @@ def get_space(graph, space_id):
     path = ROOT / 'spaces' / (space_id + '.json')
     if not path.is_file():
         raise ValueError('Mem0 space not found.')
-    item = json.loads(path.read_text())
+    item = json.loads(path.read_text(encoding='utf-8'))
     if item['scope'] != scope(graph):
         raise ValueError('Mem0 space belongs to a different project or task.')
     return item
@@ -80,7 +80,7 @@ def create_space(graph, name):
         folder = ROOT / 'spaces'
         folder.mkdir(parents=True, exist_ok=True)
         temp = folder / (item['id'] + '.tmp')
-        temp.write_text(json.dumps(item, ensure_ascii=False))
+        temp.write_text(json.dumps(item, ensure_ascii=False), encoding='utf-8')
         temp.replace(folder / (item['id'] + '.json'))
         return item
 

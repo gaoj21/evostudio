@@ -9,6 +9,7 @@ from backend.api import graphs as graph_store
 from backend.api import workspace
 from fastapi import APIRouter, Body, HTTPException, Query, UploadFile
 from fastapi.responses import Response
+from backend.features.http_util import content_disposition
 
 router = APIRouter(prefix="/api")
 
@@ -76,7 +77,7 @@ def workspace_download(graph_id: str, path: str = Query(default="")):
         raise HTTPException(status_code=404 if e.not_found else 400, detail=str(e))
     return Response(
         content=blob, media_type=media,
-        headers={"content-disposition": f'attachment; filename="{name}"'},
+        headers={"content-disposition": content_disposition(name)},
     )
 
 

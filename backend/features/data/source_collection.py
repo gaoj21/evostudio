@@ -9,6 +9,7 @@ from fastapi import APIRouter, Body, HTTPException
 from backend.api import graphs, sources, chat_control, batch, preprocess, evaluation, tools_registry
 from backend.api.studio_config import data_path
 from backend.features.data import input_composition as composition
+from backend.features.persistence import replace as replace_file
 
 router = APIRouter()
 _lock = threading.RLock()
@@ -49,8 +50,8 @@ def matches(job, node, graph):
 def save(job):
     path = directory() / (job['id'] + '.json')
     temporary = path.with_suffix('.tmp')
-    temporary.write_text(json.dumps(job, ensure_ascii=False))
-    temporary.replace(path)
+    temporary.write_text(json.dumps(job, ensure_ascii=False), encoding='utf-8')
+    replace_file(temporary, path)
 
 def read(graph_id, collection_id):
     if not isinstance(collection_id, str) or len(collection_id) != 32 or any(c not in '0123456789abcdef' for c in collection_id):
@@ -61,7 +62,7 @@ def read(graph_id, collection_id):
             path = directory() / (collection_id + '.json')
             if not path.exists():
                 raise sources.SourceError('Collected data not found; collect the source again.')
-            job = json.loads(path.read_text())
+            job = json.loads(path.read_text(encoding='utf-8'))
             if job['status'] == 'collecting':
                 job.update(status='failed', error='Collection was interrupted by a service restart. Collect again.')
         if job['graph_id'] != graph_id:
@@ -290,10 +291,10 @@ def collect(graph_id: str, body: dict = Body(default={})):
             raise sources.SourceError('Choose collect-all, streaming, or preprocess-all then batch mode.')
         try:
             batch_size = shared_size if shared_size is not None else int(body.get('batch_size', 10))
-            workers = int(body.get('workers', 2))
+            workers = batch.requested_workers(body.get('workers'))
         except (ValueError, TypeError) as exc:
-            raise sources.SourceError('Batch size and workers must be whole numbers.') from exc
-        if not 1 <= batch_size <= (1024 if shared_size is not None else 1000) or not 1 <= workers <= batch.MAX_WORKERS:
+            raise sources.SourceError('Batch size must be 1–1000; workers must be 1–64.') from exc
+        if not 1 <= batch_size <= (1024 if shared_size is not None else 1000):
             raise sources.SourceError('Batch size must be 1–1000; workers must be 1–64.')
         metric, label_key = body.get('metric') or None, body.get('label_key') or None
         if mode in ('stream', 'prepare'):

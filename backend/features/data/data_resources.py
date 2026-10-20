@@ -31,7 +31,7 @@ def load(resource_id):
     path = path_for(resource_id) / 'manifest.json'
     if not path.is_file():
         raise SourceError('Data resource not found. Select or upload a resource.')
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding='utf-8'))
 
 
 def safe_name(name):
@@ -63,7 +63,7 @@ def create_from_records(records, name, graph_id='', origin=None):
                 'graph_id': str(graph_id or ''), 'records': len(records),
                 'version': hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest(),
                 **({'origin': origin} if origin else {})}
-        (temporary / 'manifest.json').write_text(json.dumps(item, ensure_ascii=False))
+        (temporary / 'manifest.json').write_text(json.dumps(item, ensure_ascii=False), encoding='utf-8')
         temporary.rename(path_for(resource_id))
         return public(item)
     finally:
@@ -77,7 +77,7 @@ def public(item):
 
 @router.get('')
 def listing():
-    return {'resources': [public(json.loads(p.read_text())) for p in sorted(directory().glob('*/manifest.json')) if not p.parent.name.startswith('.')]}
+    return {'resources': [public(json.loads(p.read_text(encoding='utf-8'))) for p in sorted(directory().glob('*/manifest.json')) if not p.parent.name.startswith('.')]}
 
 
 
@@ -117,7 +117,7 @@ async def upload(request: Request):
         item = {'id': resource_id, 'name': str(form.get('name') or files[0].filename.split('/')[0])[:120],
                 'files': entries, 'size_bytes': total, 'graph_id': str(form.get('graph_id') or ''),
                 'version': hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest()}
-        (temporary / 'manifest.json').write_text(json.dumps(item))
+        (temporary / 'manifest.json').write_text(json.dumps(item), encoding='utf-8')
         temporary.rename(path_for(resource_id))
         return public(item)
     except SourceError as exc:
@@ -136,7 +136,7 @@ def remove(resource_id: str):
         load(resource_id)
         used = []
         for path in graphs.GRAPHS_DIR.glob('*.json'):
-            graph = json.loads(path.read_text())
+            graph = json.loads(path.read_text(encoding='utf-8'))
             from backend.features.evaluation.evaluator_tools import label_resource_ids
             if resource_id in label_resource_ids(graph) or any(
                     (t.get('source') or {}).get('resource_id') == resource_id for t in graph.get('tasks', [])):
@@ -163,7 +163,7 @@ def attach_workspace(resource_id: str, body: dict = Body(...)):
             graph_ids.add(graph_id)
             item['workspace_graph_ids'] = sorted(graph_ids)
             temporary = path_for(resource_id) / ('.manifest-' + uuid.uuid4().hex)
-            temporary.write_text(json.dumps(item))
+            temporary.write_text(json.dumps(item), encoding='utf-8')
             temporary.replace(path_for(resource_id) / 'manifest.json')
         return public(item)
     except SourceError as exc:

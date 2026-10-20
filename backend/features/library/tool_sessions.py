@@ -14,13 +14,14 @@ import hashlib
 import json
 import os
 import queue
-import signal
 import subprocess
 import sys
 import tempfile
 import threading
 from contextvars import ContextVar
 from pathlib import Path
+
+from backend.features import proc
 
 WORKER = str(Path(__file__).with_name('tool_worker.py'))
 
@@ -44,8 +45,9 @@ class ToolProcess:
         self.stderr = tempfile.TemporaryFile()
         self.process = subprocess.Popen(
             [sys.executable, WORKER], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=self.stderr, start_new_session=True, text=True, encoding='utf-8',
-            env={**os.environ, 'STUDIO_WORKER_PARENT': str(os.getpid())})
+            stderr=self.stderr, text=True, encoding='utf-8',
+            env={'PYTHONUTF8': '1', **os.environ, 'STUDIO_WORKER_PARENT': str(os.getpid())},
+            **proc.popen_group_kwargs())
         self.replies = queue.Queue()
         self.lock = threading.Lock()
         threading.Thread(target=self._read, daemon=True).start()
@@ -104,7 +106,7 @@ class ToolProcess:
         in flight is the thing being stopped.
         """
         with contextlib.suppress(OSError):
-            os.killpg(self.process.pid, signal.SIGKILL)
+            proc.kill_tree(self.process)
         with contextlib.suppress(OSError):
             self.stderr.close()
 
@@ -116,12 +118,12 @@ class ToolProcess:
                 self.process.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 with contextlib.suppress(OSError):
-                    os.killpg(self.process.pid, signal.SIGKILL)
+                    proc.kill_tree(self.process)
                 self.process.wait()
         else:
             # Whatever the tool itself started goes too.
             with contextlib.suppress(OSError):
-                os.killpg(self.process.pid, signal.SIGKILL)
+                proc.kill_tree(self.process)
         with contextlib.suppress(OSError):
             self.stderr.close()
 

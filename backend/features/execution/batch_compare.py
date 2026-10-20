@@ -33,9 +33,11 @@ def _full_inputs(item: dict):
     if item.get("input_file"):
         from .batch import BATCHES_DIR
         try:
-            return json.loads((BATCHES_DIR / item["input_file"]).read_text())
+            return json.loads((BATCHES_DIR / item["input_file"]).read_text(encoding='utf-8'))
         except (OSError, ValueError):
             pass
+    # A batch's inputs file is read back by get_batch, which the batches
+    # compared here come from.
     return item.get("inputs") or {}
 
 

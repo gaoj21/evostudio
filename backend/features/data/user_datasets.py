@@ -13,6 +13,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 from backend.api.studio_config import data_path
 from backend.api.sources import SourceError
+from backend.features.persistence import replace as replace_file
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 # Zero means no application-level cap; deployments may opt into limits.
@@ -46,7 +47,7 @@ def save(item):
     temporary = path.with_suffix(".tmp")
     with _lock:
         temporary.write_text(json.dumps(item, ensure_ascii=False, allow_nan=False), encoding="utf-8")
-        temporary.replace(path)
+        replace_file(temporary, path)
 
 
 def field_types(item):

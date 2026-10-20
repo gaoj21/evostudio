@@ -1,13 +1,12 @@
 """Pull one PyTorch batch at a time across a process boundary, with backpressure."""
 import json
-import os
 from pathlib import Path
-import signal
 import subprocess
 import sys
 import tempfile
 import time
 from backend.api.sources import SourceError
+from backend.features import proc
 from . import data_resources, dataloaders
 
 
@@ -35,12 +34,12 @@ def read(config, cancelled=lambda: False, on_info=None):
              'batch_size':config.get('read_batch_size',100),'offset':config.get('offset',0),'record_limit':config.get('n',0)}
     from backend.features.chat import chat_worker, chat_control
     with tempfile.TemporaryDirectory(prefix='dataset-stream-') as directory:
-        root=Path(directory);(root/'input.json').write_text(json.dumps(payload, ensure_ascii=False))
+        root=Path(directory);(root/'input.json').write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
         with (root/'stderr.log').open('wb') as log:
             # The worker exits by itself if this process disappears (restart,
             # crash): it would otherwise wait for its next batch forever.
-            process=subprocess.Popen([sys.executable,chat_worker.__file__,'dataset_stream',directory],stdout=subprocess.DEVNULL,stderr=log,start_new_session=True,
-                                     env=chat_control.worker_env())
+            process=subprocess.Popen([sys.executable,chat_worker.__file__,'dataset_stream',directory],stdout=subprocess.DEVNULL,stderr=log,
+                                     env=chat_control.worker_env(),**proc.popen_group_kwargs())
         # The DataLoader's own "time allowed per batch", as in a full read.
         allowed=dataloaders.batch_timeout(config)
         initialization=dataloaders.preview_timeout(config)
@@ -49,7 +48,7 @@ def read(config, cancelled=lambda: False, on_info=None):
 
         def stage():
             try:
-                return (root/'stage.txt').read_text()[:500]
+                return (root/'stage.txt').read_text(encoding='utf-8')[:500]
             except OSError:
                 return ''
         try:
@@ -60,10 +59,10 @@ def read(config, cancelled=lambda: False, on_info=None):
                     info_read = True
                     # Initialization is over: the first batch gets its own time.
                     deadline=time.monotonic()+allowed
-                    if on_info is not None: on_info(json.loads(info.read_text()))
+                    if on_info is not None: on_info(json.loads(info.read_text(encoding='utf-8')))
                 chunk=root/'chunk.json'
                 if chunk.exists():
-                    rows=dataloaders._object_rows(json.loads(chunk.read_text()))
+                    rows=dataloaders._object_rows(json.loads(chunk.read_text(encoding='utf-8')))
                     yield rows
                     chunk.unlink(missing_ok=True)
                     deadline=time.monotonic()+allowed
@@ -72,7 +71,7 @@ def read(config, cancelled=lambda: False, on_info=None):
                     result=root/'result.json'
                     if not result.exists():
                         raise SourceError(chat_control.exit_diagnosis('Dataset', process.returncode, root/'stderr.log'))
-                    outcome=json.loads(result.read_text())
+                    outcome=json.loads(result.read_text(encoding='utf-8'))
                     if 'error' in outcome: raise SourceError(outcome['error'])
                     return
                 if time.monotonic()>deadline:
@@ -83,4 +82,4 @@ def read(config, cancelled=lambda: False, on_info=None):
                 time.sleep(.05)
         finally:
             if process.poll() is None:
-                os.killpg(process.pid,signal.SIGKILL);process.wait()
+                proc.kill_tree(process);process.wait()

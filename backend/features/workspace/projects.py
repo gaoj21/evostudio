@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from backend.api.studio_config import DATA_DIR
 from backend.api import graphs
+from backend.features.persistence import replace as replace_file
 
 PROJECTS_DIR = DATA_DIR / 'projects'
 router = APIRouter(prefix='/api/projects', tags=['projects'])
@@ -43,7 +44,7 @@ def _path(project_id):
 
 
 def get_project(project_id):
-    try: return json.loads(_path(project_id).read_text())
+    try: return json.loads(_path(project_id).read_text(encoding='utf-8'))
     except FileNotFoundError: raise HTTPException(404, 'Project not found')
 
 
@@ -51,7 +52,7 @@ def get_project(project_id):
 def list_projects():
     result=[]
     for p in PROJECTS_DIR.glob('*.json'):
-        try: result.append(json.loads(p.read_text()))
+        try: result.append(json.loads(p.read_text(encoding='utf-8')))
         except (OSError, ValueError): continue
     return sorted(result, key=lambda x:x['updated_at'], reverse=True)
 
@@ -63,7 +64,7 @@ def create_project(body: ProjectInput):
                  'updated_at':datetime.now(timezone.utc).isoformat()}
         PROJECTS_DIR.mkdir(parents=True,exist_ok=True)
         p=_path(project['id']);temp=p.with_suffix('.tmp')
-        temp.write_text(json.dumps(project,ensure_ascii=False,indent=2));temp.replace(p)
+        temp.write_text(json.dumps(project,ensure_ascii=False,indent=2), encoding='utf-8');replace_file(temp, p)
     return project
 
 
@@ -117,8 +118,8 @@ def update_project(project_id: str, body: ProjectInput):
         project = {**get_project(project_id), **body.model_dump(), 'updated_at': datetime.now(timezone.utc).isoformat()}
         path = _path(project_id)
         temp = path.with_suffix('.tmp')
-        temp.write_text(json.dumps(project, ensure_ascii=False, indent=2))
-        temp.replace(path)
+        temp.write_text(json.dumps(project, ensure_ascii=False, indent=2), encoding='utf-8')
+        replace_file(temp, path)
     return project
 
 

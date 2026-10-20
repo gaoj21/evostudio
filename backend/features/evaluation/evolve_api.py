@@ -23,6 +23,7 @@ from backend.api import sources
 from backend.api.graphs import strip_task, topo_sort_tasks
 from backend.api.studio_config import data_path
 from backend.features.execution import token_usage
+from backend.features.persistence import is_safe_id
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -444,7 +445,7 @@ def _run_task(task_id: str, graph_doc: dict, metric: str, params: dict, task_dir
                 state['dataset'] = {**(state.get('dataset') or {}), 'n_records': len(records)}
                 _persist(state)
             else:
-                records = [json.loads(line) for line in (task_dir / 'dataset.jsonl').read_text().splitlines() if line.strip()]
+                records = [json.loads(line) for line in (task_dir / 'dataset.jsonl').read_text(encoding="utf-8").splitlines() if line.strip()]
             state['execution_graph'] = graph_doc
             if params.get('mode') == 'evaluate':
                 params = {**params, 'replay_path': str(task_dir / canvas_evolution.REPLAY_FILE)}
@@ -453,7 +454,7 @@ def _run_task(task_id: str, graph_doc: dict, metric: str, params: dict, task_dir
             return
         if (params.get("source") or {}).get("type") in ("saved_batch", "saved_run"):
             from backend.api import saved_result_evolution as saved
-            records = [json.loads(line) for line in (task_dir / "dataset.jsonl").read_text().splitlines() if line.strip()]
+            records = [json.loads(line) for line in (task_dir / "dataset.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
             _stage(state, "scoring saved results")
             if params.get('evaluator'):
                 from backend.features.evaluation.canvas_evolution import score_saved
@@ -673,7 +674,7 @@ def _live(state: dict) -> dict:
     if snapshot.get("current_batch"):
         # A candidate replay: the batch it runs as, usage settled so far.
         from backend.api import batch
-        running = batch.get_batch(snapshot["current_batch"]) or {}
+        running = batch.get_batch(snapshot["current_batch"], inputs=False) or {}
     else:
         from backend.api import runner
         running = runner.get_run(snapshot["current_run"]) or {}
@@ -682,6 +683,8 @@ def _live(state: dict) -> dict:
 
 
 def get_task(task_id: str) -> dict | None:
+    if not is_safe_id(task_id):
+        return None
     with _lock:
         state = _tasks.get(task_id)
         if state is not None:

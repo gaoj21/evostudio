@@ -1,8 +1,29 @@
 """Replace JSON state only after the complete new document reaches disk."""
 import json
 import os
+import re
 import tempfile
-from pathlib import Path
+import time
+from pathlib import Path, PurePath
+
+# On Windows a file another process has open without FILE_SHARE_DELETE (a
+# OneDrive / Dropbox sync client, an antivirus scan, the search indexer)
+# cannot be replaced for a moment: os.replace raises PermissionError. It
+# clears by itself, so the replace is tried again a few times before failing.
+REPLACE_ATTEMPTS = 5
+REPLACE_DELAY = 0.05
+
+
+def replace(source, destination):
+    """os.replace, retried briefly while something else holds the file."""
+    for attempt in range(REPLACE_ATTEMPTS):
+        try:
+            os.replace(source, destination)
+            return
+        except PermissionError:
+            if attempt == REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(REPLACE_DELAY * (attempt + 1))
 
 
 def write_json(path, value, indent=2):
@@ -14,9 +35,57 @@ def write_json(path, value, indent=2):
             json.dump(value, stream, indent=indent, ensure_ascii=False, default=str)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        replace(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Paths built from what a request carries.
+# ---------------------------------------------------------------------------
+
+def contains(root, path, allow_root=False):
+    """Whether `path` is inside `root`, both already absolute and resolved.
+
+    Compares path components, not strings: `str(path).startswith(str(root) +
+    "/")` is wrong on Windows (backslashes, case-insensitive names) and lets
+    `/data/ws-evil` pass for `/data/ws`. Works on PureWindowsPath as well.
+    """
+    # PurePath(x) would recast a PureWindowsPath to this platform's flavour.
+    root = root if isinstance(root, PurePath) else PurePath(root)
+    path = path if isinstance(path, PurePath) else PurePath(path)
+    if not path.is_relative_to(root):
+        return False
+    return allow_root or path != root
+
+
+def is_within(path, root, allow_root=False):
+    """Whether `path` stays inside `root` once both are resolved (`..`,
+    symlinks)."""
+    return contains(Path(root).resolve(), Path(path).resolve(), allow_root)
+
+
+class InvalidId(ValueError):
+    """An id that cannot name one file or folder."""
+
+
+_ID_PATTERN = re.compile(r'[A-Za-z0-9_][A-Za-z0-9._-]{0,199}')
+
+
+def is_safe_id(value):
+    """Whether `value` (a graph, batch, run, task id) can name one file or
+    folder under a data directory: letters, digits, `.`, `_`, `-`, no `..`,
+    no separator (`/` or `\\`), not empty, not ending in `.` (which Windows
+    drops)."""
+    return (isinstance(value, str) and _ID_PATTERN.fullmatch(value) is not None
+            and '..' not in value and not value.endswith('.'))
+
+
+def safe_id(value, kind='id'):
+    """`value`, or InvalidId when it is not `is_safe_id`."""
+    if not is_safe_id(value):
+        raise InvalidId(f'Invalid {kind}: {value!r}')
+    return value
 
 
 # ---------------------------------------------------------------------------

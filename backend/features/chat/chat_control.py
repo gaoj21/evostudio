@@ -10,6 +10,7 @@ import sys
 import tempfile
 import threading
 import time
+from backend.features import proc
 
 
 class Cancelled(BaseException):
@@ -92,8 +93,10 @@ def worker_env():
 OPENMP_ENV = {'OMP_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1', 'OPENBLAS_NUM_THREADS': '1',
               'KMP_DUPLICATE_LIB_OK': 'TRUE'}
 # Defaults (an exported value wins): no tokenizer thread pools racing a
-# forked process, and no macOS Objective-C abort when a library forks.
-WORKER_DEFAULTS = {'TOKENIZERS_PARALLELISM': 'false', 'OBJC_DISABLE_INITIALIZE_FORK_SAFETY': 'YES'}
+# forked process, no macOS Objective-C abort when a library forks, and UTF-8
+# for user code's open() / print() on Windows, whose default is the ANSI code page.
+WORKER_DEFAULTS = {'TOKENIZERS_PARALLELISM': 'false', 'OBJC_DISABLE_INITIALIZE_FORK_SAFETY': 'YES',
+                   'PYTHONUTF8': '1'}
 STRIPPED_ENV = {'PYTHONPATH', 'PYTHONHOME', 'PYTHONSTARTUP', 'PYTHONEXECUTABLE', 'LD_PRELOAD'}
 
 
@@ -138,11 +141,11 @@ def worker(kind, payload, on_stage=None, on_record=None, timeout=None):
     control = current.get()
     with tempfile.TemporaryDirectory(prefix='assistant-worker-') as directory:
         root = Path(directory)
-        (root / 'input.json').write_text(json.dumps(payload, ensure_ascii=False))
+        (root / 'input.json').write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
         with (root / 'stderr.log').open('wb') as stderr:
             process = subprocess.Popen([sys.executable, str(Path(__file__).with_name('chat_worker.py')), kind, directory],
-                                       stdout=subprocess.DEVNULL, stderr=stderr, start_new_session=True,
-                                       env=worker_env())
+                                       stdout=subprocess.DEVNULL, stderr=stderr, env=worker_env(),
+                                       **proc.popen_group_kwargs())
         started = time.monotonic()
         last_stage = None
         offset = 0
@@ -151,7 +154,7 @@ def worker(kind, payload, on_stage=None, on_record=None, timeout=None):
             path = root / 'records.jsonl'
             if not on_record or not path.exists():
                 return
-            with path.open() as stream:
+            with path.open(encoding='utf-8') as stream:
                 stream.seek(offset)
                 while True:
                     line = stream.readline()
@@ -163,14 +166,14 @@ def worker(kind, payload, on_stage=None, on_record=None, timeout=None):
             while process.poll() is None:
                 if timeout is not None and time.monotonic() - started > timeout:
                     stage_path = root / 'stage.txt'
-                    stage = stage_path.read_text()[:500] if kind == 'dataset' and stage_path.exists() else None
+                    stage = stage_path.read_text(encoding='utf-8')[:500] if kind == 'dataset' and stage_path.exists() else None
                     detail = f'. Last stage: {stage}. Check initialization/preprocessing or increase Sample time limit in Input.' if stage else ''
                     raise TimeoutError(f'{kind} worker exceeded {timeout} seconds{detail}')
                 drain()
                 if control:
                     control.check()
                 if on_stage and (root / 'stage.txt').exists():
-                    stage = (root / 'stage.txt').read_text()
+                    stage = (root / 'stage.txt').read_text(encoding='utf-8')
                     if stage and stage != last_stage:
                         on_stage(stage)
                         last_stage = stage
@@ -182,11 +185,11 @@ def worker(kind, payload, on_stage=None, on_record=None, timeout=None):
             drain()
             if not (root / 'result.json').exists():
                 raise RuntimeError(exit_diagnosis(kind, process.returncode, root / 'stderr.log'))
-            result = json.loads((root / 'result.json').read_text())
+            result = json.loads((root / 'result.json').read_text(encoding='utf-8'))
             if 'error' in result:
                 raise RuntimeError(result['error'])
             return result['value']
         finally:
             if process.poll() is None:
-                os.killpg(process.pid, signal.SIGKILL)
+                proc.kill_tree(process)
                 process.wait()

@@ -13,6 +13,7 @@ from statistics import mean
 from fastapi import APIRouter, Body, HTTPException
 from backend.api.sources import SourceError
 from backend.api.studio_config import DATA_DIR
+from backend.features.persistence import replace as replace_file
 
 router = APIRouter(prefix='/api', tags=['Evaluators'])
 
@@ -434,7 +435,7 @@ def put_draft(graph_id, code, config=None, name=None):
     temporary = path.with_name(path.name + '.tmp')
     with temporary.open('w', encoding='utf-8') as stream:
         json.dump(draft, stream, ensure_ascii=False, indent=2)
-    temporary.replace(path)
+    replace_file(temporary, path)
     return draft
 
 

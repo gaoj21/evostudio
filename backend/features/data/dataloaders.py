@@ -45,6 +45,7 @@ def api_backed(config):
     return (config or {}).get('loader') == 'source' and is_api_source((config or {}).get('source_config'))
 from fastapi import APIRouter, Body, HTTPException
 from backend.api.sources import SourceError
+from backend.features.persistence import replace as replace_file
 from . import data_resources
 
 router = APIRouter(prefix='/api/dataloaders', tags=['DataLoader'])
@@ -323,12 +324,12 @@ def _prepare_cached(config):
     with _cache_lock_for(key):
         check_cancel()
         if path.exists():
-            rows, meta = json.loads(path.read_text())
+            rows, meta = json.loads(path.read_text(encoding='utf-8'))
             return rows, meta
         rows, meta = _prepare(config)
         temporary = root / (key + '.' + uuid.uuid4().hex + '.tmp')
-        temporary.write_text(json.dumps([rows,meta],ensure_ascii=False,allow_nan=False))
-        temporary.replace(path)
+        temporary.write_text(json.dumps([rows,meta],ensure_ascii=False,allow_nan=False), encoding='utf-8')
+        replace_file(temporary, path)
         _prune_cache(root, path)
         return rows, meta
 
