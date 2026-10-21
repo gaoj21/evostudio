@@ -207,7 +207,7 @@ a successful smoke call alone is not correctness verification. Verification cove
 
 ### Chat Agents
 
-Chat Agents (listed under canvas_agents, with their provider, tools, skills and connected memories) are independent conversations placed on the canvas, not workflow nodes: no edges, not part of runs. Address one by its name or its chat:<id>. A Chat Agent's memory connections are its "memories" list; connect it only to a memory this canvas has (list_memories shows them: shared memories, which it can read and write, and workflow memories, which it can only read).
+Chat Agents (listed under canvas_agents, with their provider, tools, skills and connected memories) are independent conversations placed on the canvas, not workflow nodes: no edges, not part of runs. Address one by its name or its chat:<id>. To add one, use create_agent -- never add_node, which adds a workflow step -- and only say an Agent was added, changed or connected once the operation for it is in your operations list. A Chat Agent's memory connections are its "memories" list; connect it only to a memory this canvas has (list_memories shows them: shared memories, which it can read and write, and workflow memories, which it can only read).
 
 - {"op": "create_agent", "name": "Researcher", "instructions": "...", "provider": null, "max_steps": 20, "timeout": 300, "tools": ["web_search"], "skill_names": ["style_guide"], "memories": [{"memory": "<memory name or id>", "read": true, "write": false}], "x": 400, "y": 250} -- add a Chat Agent to the canvas. Only name is needed; omit the rest for the defaults (platform provider, max_steps 1-100 default 20, timeout 10-1800 s default 300, every available tool, no skills, no memory, placed beside the other Agents). "tools" lists tool or toolkit names from the catalog (null = all available tools, [] = none); "skill_names" lists skills from the catalog; a memory may also be given as just its name. Later operations in this turn can address the new Agent by its name.
 - {"op": "update_agent", "name": "<Chat Agent name or chat:id>", "patch": {"name": "...", "instructions": "...", "provider": "...", "max_steps": 20, "timeout": 300, "tools": [...], "skill_names": [...], "memories": [...], "x": 0, "y": 0}} -- change only the supplied settings. A list in the patch REPLACES the whole list; to add or remove one item use the operations below.
@@ -545,6 +545,45 @@ CANVAS_OPS = ("add_node", "update_node", "delete_node", "rename_node", "add_edge
               "configure_workflow", "set_output_dir")
 
 
+# Names a model reaches for instead of the documented ones. Mapped rather than
+# ignored: an ignored "add_chat_agent" let the reply say an Agent was added
+# while nothing happened.
+_OP_ALIASES = {
+    "add_agent": "create_agent", "add_chat_agent": "create_agent", "create_chat_agent": "create_agent",
+    "new_agent": "create_agent", "new_chat_agent": "create_agent",
+    "remove_agent": "delete_agent", "remove_chat_agent": "delete_agent", "delete_chat_agent": "delete_agent",
+    "edit_agent": "update_agent", "modify_agent": "update_agent", "update_chat_agent": "update_agent",
+    "connect_memory": "connect_agent_memory", "attach_memory": "connect_agent_memory",
+    "link_memory": "connect_agent_memory", "disconnect_memory": "disconnect_agent_memory",
+    "detach_memory": "disconnect_agent_memory",
+}
+_AGENT_KINDS = {"agent", "chat", "chat_agent", "chatagent", "chat-agent"}
+
+
+def _known_ops() -> list[str]:
+    return sorted(set(re.findall(r'"op":\s*"(\w+)"', SYSTEM_PROMPT)) | set(agent_ops.AGENT_OPS)
+                  | {"inspect_agent", "list_agents"})
+
+
+def _normalise_op(raw: dict, notes: list) -> dict:
+    """The documented operation a model meant, when it used another name."""
+    op = raw.get("op")
+    task = raw.get("task") if isinstance(raw.get("task"), dict) else None
+    kind = str((task or raw).get("kind") or "").strip().lower()
+    if op == "add_node" and kind in _AGENT_KINDS:
+        # A Chat Agent is not a workflow node; "add a node of kind agent" is
+        # how a model asks for one.
+        fields = {k: v for k, v in (task or raw).items() if k not in ("op", "kind", "task")}
+        if "instructions" not in fields and fields.get("prompt"):
+            fields["instructions"] = fields.pop("prompt")
+        notes.append("Read add_node of kind 'agent' as create_agent.")
+        return {"op": "create_agent", **fields}
+    if op in _OP_ALIASES:
+        notes.append(f"Read {op!r} as {_OP_ALIASES[op]!r}.")
+        return {**raw, "op": _OP_ALIASES[op]}
+    return raw
+
+
 def apply_operations(graph: dict, operations: list, graph_id: str | None = None,
                      agents: list | None = None) -> dict:
     """Apply the model's operations to a copy of the graph.
@@ -598,6 +637,7 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None,
         if not isinstance(raw, dict):
             notes.append(f"Ignored a non-object operation: {raw!r}")
             continue
+        raw = _normalise_op(raw, notes)
         op = raw.get("op")
         tasks = graph.setdefault("tasks", [])
         edges = graph.setdefault("edges", [])
@@ -931,7 +971,11 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None,
                                'session': raw.get('session'), 'record': raw.get('record')}
 
             else:
+                # Answered back, not just noted: the model gets another step
+                # to use a real operation instead of ending on a claim.
                 notes.append(f"Ignored unknown operation {op!r}")
+                observe("operation_error", {"operation": op, "error": f"Unknown operation {op!r}.",
+                                            "valid_operations": _known_ops()})
             if applied is not None:
                 canvas_operations.append(copy.deepcopy(applied))
         except custom_tools.CustomToolError as e:
@@ -999,7 +1043,7 @@ def _validate(graph: dict) -> list[str]:
 _EDIT_WORDS = re.compile(
     r"\b(delete|remove|drop|add|insert|create|rename|connect|disconnect|link|wire|"
     r"update|change|modify|replace|set|move|attach|detach)\b"
-    r"|删|移除|去掉|去除|添加|增加|新增|加上|创建|新建|改|重命名|连接|连上|断开|更新|替换|设置|移动",
+    r"|删|移除|去掉|去除|添加|增加|新增|加|创建|新建|建|改|重命名|连接|连|接|断开|更新|替换|设置|移动|放",
     re.I)
 
 
@@ -1137,8 +1181,10 @@ def chat(graph_id: str, body: dict = Body(...)):
         saved = saved or result["saved"]
         pending_run = result["pending_run"] or pending_run
         panel = result.get("panel") or panel
+        changed = bool(result["agent_actions"] or result["canvas_operations"] or result["saved"]
+                       or result["tools_created"] or result["skills_created"] or result["pending_run"])
         return {"observations": result["observations"], "stop": bool(pending_run),
-                "canvas": _canvas_summary(updated, agents)}
+                "canvas": _canvas_summary(updated, agents), "changed": changed}
 
     original_agents = copy.deepcopy(agents)
     expects_edit = looks_like_edit(message)
@@ -1184,7 +1230,9 @@ def chat(graph_id: str, body: dict = Body(...)):
             pass  # keep the first attempt's errors for the user to see
 
     applied = not errors and json.dumps(updated, sort_keys=True) != json.dumps(graph, sort_keys=True)
-    if expects_edit and not applied and not errors and not agent_actions and not saved and not pending_run:
+    from backend.features.chat.chat_engine import claims_change
+    if ((expects_edit or claims_change(reply)) and not applied and not errors and not agent_actions
+            and not saved and not pending_run):
         notes.append("No changes were applied to the canvas.")
     return {
         "reply": reply or ("Done." if all_operations else ""),

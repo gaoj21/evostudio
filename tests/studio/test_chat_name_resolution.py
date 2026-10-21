@@ -251,3 +251,57 @@ def test_replay_applies_resolved_edits_to_the_current_canvas(monkeypatch):
     assert "canvas_agents" not in result["graph"]
     gone = chat_api.replay("g", {"graph": result["graph"], "operations": [{"op": "delete_node", "name": "risk_detector"}]})
     assert gone["applied"] is False and gone["notes"]
+
+
+def test_a_request_with_a_bare_verb_still_counts_as_an_edit(endpoint):
+    """"加一个 chat agent" and "接到 memory 上" have no 添加/增加/连接; the
+    reply "已添加" then stood with nothing behind it."""
+    chat, calls = endpoint
+    result = chat("加一个 chat agent", script_=[
+        "已添加一个 Chat Agent。",
+        {"reply": "已添加。", "operations": [{"op": "create_agent", "name": "Chat Agent"}]}])
+    assert [a["action"] for a in result["agent_actions"]] == ["create"]
+    assert "nothing was changed" in calls[1][-1]["content"]
+
+
+def test_a_claim_after_a_read_step_is_reminded(endpoint):
+    """The request read as a question to the edit check, the model looked
+    first, then claimed the change; only the claim gives it away."""
+    chat, calls = endpoint
+    result = chat("could you get me a research agent?", script_=[
+        {"reply": "", "operations": [{"op": "list_agents"}]},
+        "I have added a Research agent.",
+        {"reply": "Added.", "operations": [{"op": "create_agent", "name": "Research"}]}])
+    assert [a["settings"]["name"] for a in result["agent_actions"]] == ["Research"]
+    assert "nothing was changed" in calls[2][-1]["content"]
+
+
+def test_a_claim_that_stays_unbacked_says_nothing_was_applied(endpoint):
+    chat, _ = endpoint
+    result = chat("could you get me a research agent?", script_=[
+        "The Research agent has been created.", "It has been created."])
+    assert result["agent_actions"] == []
+    assert "No changes were applied to the canvas." in result["notes"]
+
+
+@pytest.mark.parametrize("operation", [
+    {"op": "add_chat_agent", "name": "Research"},
+    {"op": "add_agent", "name": "Research"},
+    {"op": "add_node", "task": {"name": "Research", "kind": "agent", "prompt": "Dig."}},
+])
+def test_names_a_model_reaches_for_create_the_agent(endpoint, operation):
+    chat, _ = endpoint
+    result = chat("加一个 research agent", script_=[{"reply": "已添加。", "operations": [operation]}])
+    (action,) = result["agent_actions"]
+    assert action["action"] == "create" and action["settings"]["name"] == "Research"
+    assert not any(t.get("name") == "Research" for t in result["graph"]["tasks"])
+
+
+def test_an_unknown_operation_is_answered_with_the_valid_ones(endpoint):
+    chat, calls = endpoint
+    result = chat("加一个 research agent", script_=[
+        {"reply": "", "operations": [{"op": "spawn_helper", "name": "Research"}]},
+        {"reply": "已添加。", "operations": [{"op": "create_agent", "name": "Research"}]}])
+    observation = calls[1][-1]["content"]
+    assert "Unknown operation 'spawn_helper'" in observation and "create_agent" in observation
+    assert [a["action"] for a in result["agent_actions"]] == ["create"]

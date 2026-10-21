@@ -1,6 +1,19 @@
 """Shared conversation/tool loop; pages supply context and operation adapters."""
 import json
+import re
 from backend.api import model_json, chat_control
+
+# A reply saying a change was made. Checked against what the turn actually
+# did: "已添加" with nothing behind it is reminded, whatever the request said.
+_CLAIM = re.compile(
+    r"已(经)?(成功)?(添加|增加|新增|加上|加入|创建|新建|建好|接上|接入|连接|连上|删除|删掉|移除|更新|修改|改好|重命名|设置|配置)"
+    r"|\b(i(?:'ve| have)?|has been|have been|was|were)\s+(?:now\s+)?"
+    r"(added|created|connected|attached|deleted|removed|updated|renamed|configured)\b",
+    re.I)
+
+
+def claims_change(reply) -> bool:
+    return bool(_CLAIM.search(str(reply or "")))
 
 
 class ChatEngine:
@@ -14,6 +27,8 @@ class ChatEngine:
         self.messages.append({'role': 'user', 'content': message})
         self.last_answer = None
         self.turns = []
+        # Did any step of this turn change something (canvas, Agents, files)?
+        self.changed = False
 
     def ask(self):
         chat_control.check()
@@ -57,7 +72,9 @@ class ChatEngine:
             self.last_answer = answer
             operations = answer.get('operations') or []
             if not operations:
-                if answer.get('reply') and expects_edit and not reminded and not self.turns:
+                unbacked = (expects_edit and not self.turns) or (
+                    claims_change(answer.get('reply')) and not self.changed)
+                if answer.get('reply') and unbacked and not reminded:
                     reminded = True
                     self.messages += [
                         {'role': 'assistant', 'content': json.dumps(answer, ensure_ascii=False)},
@@ -77,6 +94,7 @@ class ChatEngine:
             chat_control.check()
             result = execute(operations)
             chat_control.check()
+            self.changed = self.changed or bool(result.get('changed'))
             observations = result.get('observations') or []
             if result.get('stop') or not observations:
                 return answer
