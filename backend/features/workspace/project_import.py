@@ -316,8 +316,10 @@ def _merge_code_into_graph(graph: dict, code: dict) -> tuple[dict, list[str]]:
     not carry canvas positions or source nodes (whose feeds became inputs on
     export), so those are taken from graph.json and kept.
     """
+    from backend.features.agents.chat_agents import is_chat_agent
     by_name = {t.get("name"): t for t in graph.get("tasks") or []}
-    source_nodes = [t for t in graph.get("tasks") or [] if is_source_task(t)]
+    # Chat Agents are not in workflow.py either (they do not run): kept too.
+    source_nodes = [t for t in graph.get("tasks") or [] if is_source_task(t) or is_chat_agent(t)]
     notes: list[str] = []
 
     merged: list[dict] = list(source_nodes)
@@ -348,7 +350,8 @@ def _merge_code_into_graph(graph: dict, code: dict) -> tuple[dict, list[str]]:
             notes.append(f"'{name}' updated from workflow.py ({', '.join(changed)})")
 
     dropped = [n for n in by_name
-               if n not in code_names and not is_source_task(by_name[n])]
+               if n not in code_names and not is_source_task(by_name[n])
+               and not is_chat_agent(by_name[n])]
     for name in dropped:
         notes.append(f"'{name}' is not in workflow.py — removed")
 

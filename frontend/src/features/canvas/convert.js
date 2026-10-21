@@ -38,7 +38,26 @@ const DEFAULT_TASK = {
   skill_names: [],
 };
 
+// A Chat Agent node's settings, as saved (backend chat_agents.py). It does
+// not run: no inputs, outputs or edges, and it is chatted with on its own.
+const CHAT_AGENT_FIELDS = ['agent_id', 'description', 'instructions', 'provider', 'max_steps', 'timeout',
+  'toolkits', 'tools', 'skill_names', 'memories'];
+
 export function taskToNode(task, extra = {}) {
+  if (task.kind === 'chat_agent') {
+    return {
+      id: task.name,
+      type: 'chatAgent',
+      position: { x: Number(task.x) || 0, y: Number(task.y) || 0 },
+      data: {
+        kind: 'chat_agent',
+        ...Object.fromEntries(CHAT_AGENT_FIELDS.filter(k => task[k] !== undefined).map(k => [k, task[k]])),
+        description: task.description || '',
+        memories: task.memories || [],
+        ...extra,
+      },
+    };
+  }
   if (task.kind === 'source') {
     return {
       id: task.name,
@@ -98,7 +117,7 @@ export function taskToNode(task, extra = {}) {
 }
 
 export function graphToFlow(graph) {
-  const nodes = (graph.tasks || []).map((t) => taskToNode({ ...DEFAULT_TASK, ...t }));
+  const nodes = (graph.tasks || []).map((t) => taskToNode(t.kind === 'chat_agent' ? t : { ...DEFAULT_TASK, ...t }));
   const edges = (graph.edges || []).map((e) => edgeToFlow(e));
   return { nodes, edges };
 }
@@ -161,7 +180,17 @@ export function flowToGraph(graphMeta, nodes, edges) {
     memory_resources: graphMeta.memory_resources || [],
     memory_positions: graphMeta.memory_positions || {},
     tasks: nodes.map((n) =>
-      n.data.kind === 'source'
+      n.data.kind === 'chat_agent'
+        ? {
+            name: n.id,
+            kind: 'chat_agent',
+            ...Object.fromEntries(CHAT_AGENT_FIELDS.filter(k => n.data[k] !== undefined).map(k => [k, n.data[k]])),
+            description: n.data.description || '',
+            memories: n.data.memories || [],
+            x: Math.round(n.position.x),
+            y: Math.round(n.position.y),
+          }
+      : n.data.kind === 'source'
         ? {
             name: n.id,
             kind: 'source',

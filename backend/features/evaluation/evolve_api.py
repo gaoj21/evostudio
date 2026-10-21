@@ -476,7 +476,7 @@ def _run_task(task_id: str, graph_doc: dict, metric: str, params: dict, task_dir
 
         llm = runner_mod._make_llm(usage_key=token_usage.usage_key(state))
         ordered = topo_sort_tasks(graph_doc.get("tasks", []) or [], graph_doc.get("edges", []) or [])
-        ordered = [t for t in ordered if t.get("kind") not in ("source", "tool")]  # source/tool nodes are not optimizable
+        ordered = [t for t in ordered if t.get("kind") not in ("source", "tool", "chat_agent")]  # source/tool nodes are not optimizable
         input_keys = [w["name"] for w in graph_store.compute_workflow_inputs(ordered)]
 
         # canvas prompt -> optimizable MiproPromptTemplate instruction, for
@@ -881,7 +881,7 @@ async def start_evolve_task(graph_id: str, request: Request):
                     # Proposals from saved traces are never validated: Evolve
                     # replays the canvas Input, with a held-out part.
                     raise sources.SourceError("Saved results can only be evaluated. Evolve from the canvas Input: it replays the workflow and validates on held-out data.")
-                available = [t["name"] for t in ordered if t.get("kind") not in ("source", "tool")]
+                available = [t["name"] for t in ordered if t.get("kind") not in ("source", "tool", "chat_agent")]
                 chosen = [] if mode == "evaluate" else body.get("nodes", available)
                 if not isinstance(chosen, list) or any(n not in available for n in chosen):
                     raise sources.SourceError("Choose valid nodes to improve.")
@@ -907,7 +907,7 @@ async def start_evolve_task(graph_id: str, request: Request):
             raise sources.SourceError("An optimization needs at least 2 records: one to learn from, one to judge by.")
         # every record's inputs must cover the graph's required workflow inputs
         sources.map_to_workflow_inputs([r["inputs"] for r in records], workflow_inputs)
-        llm_nodes = [t.get("name") for t in ordered if t.get("kind") not in ("source", "tool")]
+        llm_nodes = [t.get("name") for t in ordered if t.get("kind") not in ("source", "tool", "chat_agent")]
         params = {**resolve_params(params, len(records), llm_nodes), "source": source}
     except sources.SourceError as e:
         raise HTTPException(status_code=422, detail=str(e))

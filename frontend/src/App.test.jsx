@@ -11,12 +11,6 @@ const api = vi.hoisted(() => ({
   listTools: vi.fn(async () => ({ tools: [] })),
   listSkills: vi.fn(async () => ({ skills: [] })),
   chatMemoryResources: vi.fn(),
-  canvasAgents: vi.fn(),
-  restoreCanvasAgents: vi.fn(async (_id, agents) => ({agents})),
-  restoreCanvasAgent: vi.fn(),
-  createCanvasAgent: vi.fn(),
-  updateCanvasAgent: vi.fn(),
-  removeCanvasAgent: vi.fn(),
   agentSessions: vi.fn(),
   createAgentSession: vi.fn(),
   deleteAgentSession: vi.fn(),
@@ -139,6 +133,12 @@ vi.mock('./components/TopBar.jsx', () => ({
   ),
 }));
 
+// A Chat Agent node as the server stores it (kind "chat_agent").
+const CHAT = (name = 'chat', extra = {}) => ({ name, kind: 'chat_agent', agent_id: 'agent1', description: '',
+  instructions: 'Help', provider: null, max_steps: 20, timeout: 300, toolkits: null, tools: null, skill_names: [],
+  memories: [], x: 0, y: 0, ...extra });
+const chatNode = (id = 'chat') => state.canvas.nodes.find(n => n.id === id && n.type === 'chatAgent');
+
 const GRAPH = {
   id: 'old-id',
   name: 'Original workflow',
@@ -152,7 +152,6 @@ const GRAPH = {
 beforeEach(() => {
   vi.clearAllMocks();
   api.chatMemoryResources.mockResolvedValue({ resources: [] });
-  api.canvasAgents.mockResolvedValue({ agents: [] });
   api.agentSessions.mockResolvedValue({ sessions: [] });
   state.layout = 'desktop';
   api.mem0Spaces.mockResolvedValue({ spaces: [] });
@@ -410,45 +409,83 @@ it('returns from agent settings to the originating memory and then workflow', as
   expect(screen.queryByRole('button', { name: /Back to/ })).not.toBeInTheDocument();
 });
 
-it('creates an independent Chat Agent, sends a message, and returns through harness settings', async () => {
+it('adds a Chat Agent node, asks to save before chatting, then chats with the saved node', async () => {
   const { user } = await loadedApp();
-  const agent = { id: 'agent1', name: 'Chat Agent 1', engine: 'deepagents', instructions: 'Help', provider: null, max_steps: 20, timeout: 300, toolkits: null, memories: [], x: 400, y: 250 };
-  api.createCanvasAgent.mockResolvedValue(agent);
   api.createAgentSession.mockResolvedValue({ id: 'session1', created_at: 1, messages: [], events: [], status: 'idle' });
   api.sendAgentMessage.mockResolvedValue({ id: 'session1', created_at: 1, messages: [{ role: 'user', content: 'Investigate this' }], events: [], status: 'running' });
   await user.click(screen.getByRole('button', { name: '+ Add Chat Agent' }));
-  expect(await screen.findByRole('heading', { name: 'Chat Agent 1' })).toBeVisible();
-  expect(state.canvas.nodes.some(n => n.id === 'chat:agent1')).toBe(true);
-  act(() => state.canvas.onNodesChange([{ id: 'chat:agent1', type: 'dimensions', dimensions: { width: 200, height: 80 } }]));
-  expect(state.canvas.nodes.find(n => n.id === 'chat:agent1').measured).toEqual({ width: 200, height: 80 });
-  const stableNodes = state.canvas.nodes;
-  act(() => state.canvas.onNodesChange([{ id: 'chat:agent1', type: 'dimensions', dimensions: { width: 200, height: 80 } }]));
-  expect(state.canvas.nodes).toBe(stableNodes);
+  expect(await screen.findByRole('heading', { name: 'chat_agent_1' })).toBeVisible();
+  const node = chatNode('chat_agent_1');
+  expect(node.data).toMatchObject({ kind: 'chat_agent', max_steps: 20, memories: [] });
+  expect(node.data.agent_id).toMatch(/^[0-9a-f]{32}$/);
+  expect(screen.getByTestId('dirty')).toHaveTextContent('dirty');
+  // Not saved yet: the conversation would have no settings to run with.
+  expect(screen.getByText('This Chat Agent is not saved yet. Save the workflow to chat with it.')).toBeInTheDocument();
+  await user.type(screen.getByLabelText('Message Chat Agent'), 'Investigate this');
+  expect(screen.getByRole('button', { name: 'Send', exact: true })).toBeDisabled();
+  api.saveGraph.mockImplementation(async (_id, body) => ({ ...GRAPH, ...body }));
+  await user.click(screen.getByRole('button', { name: 'Save workflow' }));
+  await waitFor(() => expect(api.saveGraph).toHaveBeenCalled());
+  const saved = api.saveGraph.mock.calls[0][1].tasks;
+  expect(saved.at(-1)).toMatchObject({ name: 'chat_agent_1', kind: 'chat_agent', agent_id: node.data.agent_id, max_steps: 20 });
+  expect(saved.at(-1).inputs).toBeUndefined();
+  await waitFor(() => expect(screen.queryByText(/not saved yet/)).not.toBeInTheDocument());
   await user.click(screen.getByRole('button', { name: 'Harness settings →' }));
   expect(screen.getByLabelText('Maximum model steps')).toHaveValue(20);
   await user.click(screen.getByRole('button', { name: '← Back to chat' }));
-  await user.type(screen.getByLabelText('Message Chat Agent'), 'Investigate this');
   await user.click(screen.getByRole('button', { name: 'Send', exact: true }));
-  await waitFor(() => expect(api.sendAgentMessage).toHaveBeenCalledWith('old-id', 'agent1', 'session1', 'Investigate this'));
+  await waitFor(() => expect(api.sendAgentMessage).toHaveBeenCalledWith('old-id', node.data.agent_id, 'session1', 'Investigate this'));
   await user.click(screen.getByRole('button', { name: '← Back to workflow' }));
   expect(screen.getByRole('button', { name: 'Rename on canvas' })).toBeVisible();
   expect(api.runGraph).not.toHaveBeenCalled();
-  expect(api.saveGraph).not.toHaveBeenCalled();
+});
+
+it('edits a Chat Agent like any node: dirty, undoable, saved with the workflow', async () => {
+  api.getGraph.mockResolvedValue({ ...GRAPH, tasks: [CHAT()] });
+  render(<App initialGraphId="old-id" />);
+  await waitFor(() => expect(chatNode()).toBeDefined());
+  act(() => state.canvas.onNodeClick(null, { id: 'chat' }));
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'Harness settings →' }));
+  fireEvent.change(screen.getByLabelText('Instructions'), { target: { value: 'Be brief.' } });
+  expect(chatNode().data.instructions).toBe('Be brief.');
+  expect(screen.getByTestId('dirty')).toHaveTextContent('dirty');
+  expect(screen.getByText('Unsaved settings: messages use the saved settings until you save the workflow.')).toBeInTheDocument();
+  fireEvent.keyDown(window, { key: 'z', ctrlKey: true });
+  await waitFor(() => expect(chatNode().data.instructions).toBe('Help'));
+  expect(screen.getByTestId('dirty')).toHaveTextContent('clean');
+  fireEvent.keyDown(window, { key: 'z', ctrlKey: true, shiftKey: true });
+  await waitFor(() => expect(chatNode().data.instructions).toBe('Be brief.'));
+  // A rename is a node rename; the conversation stays with agent_id.
+  act(() => state.canvas.onNodeClick(null, { id: 'chat' }));
+  await user.click(await screen.findByRole('button', { name: 'Harness settings →' }));
+  const name = screen.getByLabelText('Name');
+  await user.clear(name);
+  await user.type(name, 'Researcher{Enter}');
+  await waitFor(() => expect(chatNode('researcher')?.data.agent_id).toBe('agent1'));
+  api.saveGraph.mockImplementation(async (_id, body) => ({ ...GRAPH, ...body }));
+  await user.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(api.saveGraph).toHaveBeenCalled());
+  expect(api.saveGraph.mock.calls[0][1].tasks).toEqual([expect.objectContaining({ name: 'researcher', kind: 'chat_agent', agent_id: 'agent1', instructions: 'Be brief.' })]);
 });
 
 it('connects and disconnects Chat Agent memory without creating workflow dependencies', async () => {
   const space = 'f'.repeat(32);
-  const agent = { id: 'agent1', name: 'Chat Agent 1', engine: 'deepagents', instructions: '', max_steps: 20, timeout: 300, memories: [], x: 400, y: 250 };
-  api.canvasAgents.mockResolvedValue({ agents: [agent] });
-  api.getGraph.mockResolvedValue({ ...GRAPH, memory_resources: [{ space_id: space, name: 'Knowledge' }] });
-  api.updateCanvasAgent.mockImplementation(async (_g, id, body) => ({ id, ...body }));
+  api.getGraph.mockResolvedValue({ ...GRAPH, tasks: [CHAT()], memory_resources: [{ space_id: space, name: 'Knowledge' }] });
   render(<App initialGraphId="old-id" />);
-  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:agent1')).toBe(true));
-  act(() => state.canvas.onConnect({ source: `mem:space:${space}`, target: 'chat:agent1' }));
+  await waitFor(() => expect(chatNode()).toBeDefined());
+  act(() => state.canvas.onConnect({ source: `mem:space:${space}`, target: 'chat' }));
   await waitFor(() => expect(state.canvas.edges.some(e => e.id.startsWith('chat-read:'))).toBe(true));
+  expect(chatNode().data.memories).toEqual([expect.objectContaining({ space_id: space, read: true, write: false })]);
+  expect(screen.getByTestId('dirty')).toHaveTextContent('dirty');
   const edge = state.canvas.edges.find(e => e.id.startsWith('chat-read:'));
   act(() => state.canvas.onEdgesChange([{ type: 'remove', id: edge.id }]));
   await waitFor(() => expect(state.canvas.edges.some(e => e.id.startsWith('chat-read:'))).toBe(false));
+  expect(chatNode().data.memories).toEqual([]);
+  // A Chat Agent never gets a data edge.
+  api.getGraph.mockResolvedValue({ ...GRAPH, tasks: [CHAT()] });
+  act(() => state.canvas.onConnect({ source: 'chat', target: 'other' }));
+  expect(state.canvas.edges.some(e => e.source === 'chat' || e.target === 'chat')).toBe(false);
   expect(api.saveGraph).not.toHaveBeenCalled();
 });
 
@@ -496,29 +533,28 @@ it('removes a legacy Memory node and all its connections without deleting its Ag
   expect(state.canvas.edges.some(e => e.source === 'mem:investigate' || e.target === 'mem:investigate')).toBe(false);
 });
 
-it('removes a Chat node through the archive API', async () => {
-  api.canvasAgents.mockResolvedValue({ agents: [{ id: 'chat1', name: 'Chat', memories: [], x: 0, y: 0 }] });
-  api.removeCanvasAgent.mockResolvedValue({ removed: true });
+it('deletes a Chat Agent node like any node, and undo brings it back', async () => {
+  api.getGraph.mockResolvedValue({ ...GRAPH, tasks: [CHAT()] });
   render(<App initialGraphId="old-id" />);
-  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:chat1')).toBe(true));
-  await act(async () => state.canvas.nodes.find(n => n.id === 'chat:chat1').data.onDelete('chat:chat1'));
-  expect(api.removeCanvasAgent).toHaveBeenCalledWith('old-id', 'chat1');
-  expect(state.canvas.nodes.some(n => n.id === 'chat:chat1')).toBe(false);
+  await waitFor(() => expect(chatNode()).toBeDefined());
+  await act(async () => chatNode().data.onDelete('chat'));
+  expect(chatNode()).toBeUndefined();
+  expect(screen.getByTestId('dirty')).toHaveTextContent('dirty');
+  fireEvent.keyDown(window, { key: 'z', ctrlKey: true });
+  await waitFor(() => expect(chatNode()?.data.agent_id).toBe('agent1'));
+  expect(screen.getByTestId('dirty')).toHaveTextContent('clean');
 });
 
 
 it('connects named legacy Memory to Chat, updates inspector immediately, and removes access on disconnect', async () => {
-  const agent = { id: 'agent1', name: 'Chat', instructions: '', max_steps: 20, timeout: 300, memories: [], x: 0, y: 0 };
-  api.canvasAgents.mockResolvedValue({ agents: [agent] });
   api.chatMemoryResources.mockResolvedValue({ resources: [{ id: 'mem:investigate', name: 'investigate memory', kind: 'table', writable: false, write_reason: 'Owned by workflow' }] });
-  api.getGraph.mockResolvedValue({ ...GRAPH, tasks: [{ name: 'investigate', use_long_term_memory: true, memory: { match: 'company' }, inputs: [], outputs: [] }] });
-  api.updateCanvasAgent.mockImplementation(async (_g, id, body) => ({ id, ...body }));
+  api.getGraph.mockResolvedValue({ ...GRAPH, tasks: [{ name: 'investigate', use_long_term_memory: true, memory: { match: 'company' }, inputs: [], outputs: [] }, CHAT()] });
   render(<App initialGraphId="old-id" />);
-  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:agent1')).toBe(true));
-  act(() => state.canvas.onConnect({ source: 'mem:investigate', target: 'chat:agent1' }));
+  await waitFor(() => expect(chatNode()).toBeDefined());
+  act(() => state.canvas.onConnect({ source: 'mem:investigate', target: 'chat' }));
   await waitFor(() => expect(state.canvas.edges.some(e => e.id.startsWith('chat-read:'))).toBe(true));
-  expect(state.canvas.nodes.find(n => n.id === 'mem:investigate').data.readers).toContain('chat:agent1');
-  act(() => state.canvas.onNodeClick(null, { id: 'chat:agent1' }));
+  expect(state.canvas.nodes.find(n => n.id === 'mem:investigate').data.readers).toContain('chat');
+  act(() => state.canvas.onNodeClick(null, { id: 'chat' }));
   const user = userEvent.setup();
   await user.click(await screen.findByRole('button', { name: 'Harness settings →' }));
   expect(await screen.findByLabelText('investigate memory read')).toBeChecked();
@@ -528,30 +564,26 @@ it('connects named legacy Memory to Chat, updates inspector immediately, and rem
   expect(screen.getByLabelText('investigate memory read')).not.toBeChecked();
 });
 
-it('does not lose read access when read and write connections are saved together', async () => {
+it('does not lose read access when read and write connections are made together', async () => {
   const space = 'e'.repeat(32);
-  api.canvasAgents.mockResolvedValue({ agents: [{ id: 'agent1', name: 'Chat', memories: [], x: 0, y: 0 }] });
-  api.getGraph.mockResolvedValue({ ...GRAPH, memory_resources: [{ space_id: space, name: 'Findings' }] });
-  api.updateCanvasAgent.mockImplementation(async (_g, id, body) => ({ id, ...body }));
+  api.getGraph.mockResolvedValue({ ...GRAPH, tasks: [CHAT()], memory_resources: [{ space_id: space, name: 'Findings' }] });
   render(<App initialGraphId="old-id" />);
-  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:agent1')).toBe(true));
+  await waitFor(() => expect(chatNode()).toBeDefined());
   act(() => {
-    state.canvas.onConnect({ source: `mem:space:${space}`, target: 'chat:agent1' });
-    state.canvas.onConnect({ source: 'chat:agent1', target: `mem:space:${space}` });
+    state.canvas.onConnect({ source: `mem:space:${space}`, target: 'chat' });
+    state.canvas.onConnect({ source: 'chat', target: `mem:space:${space}` });
   });
   await waitFor(() => expect(state.canvas.edges.filter(e => e.data?.chatAgent)).toHaveLength(2));
-  expect(api.updateCanvasAgent.mock.calls.at(-1)[2].memories).toEqual([expect.objectContaining({ space_id: space, read: true, write: true })]);
+  expect(chatNode().data.memories).toEqual([expect.objectContaining({ space_id: space, read: true, write: true })]);
 });
 
 for (const side of ['left', 'right', 'bottom', 'top']) {
   it(`retains Chat Memory ${side} handles and supports selecting and deleting the edge`, async () => {
-    api.canvasAgents.mockResolvedValue({ agents: [{ id: 'agent1', name: 'Chat', memories: [], x: 0, y: 0 }] });
-    api.getGraph.mockResolvedValue({ ...GRAPH, tasks: [{ name: 'investigate', use_long_term_memory: true, memory: { match: 'company' }, inputs: [], outputs: [] }] });
-    api.updateCanvasAgent.mockImplementation(async (_g, id, body) => ({ id, ...body }));
+    api.getGraph.mockResolvedValue({ ...GRAPH, tasks: [{ name: 'investigate', use_long_term_memory: true, memory: { match: 'company' }, inputs: [], outputs: [] }, CHAT()] });
     render(<App initialGraphId="old-id" />);
-    await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:agent1')).toBe(true));
+    await waitFor(() => expect(chatNode()).toBeDefined());
     const handle = side === 'top' ? 's-out' : `s-out-${side}`;
-    act(() => state.canvas.onConnect({ source: 'mem:investigate', target: 'chat:agent1', sourceHandle: handle, targetHandle: 't-in' }));
+    act(() => state.canvas.onConnect({ source: 'mem:investigate', target: 'chat', sourceHandle: handle, targetHandle: 't-in' }));
     await waitFor(() => expect(state.canvas.edges.find(e => e.data?.chatAgent)?.sourceHandle).toBe(handle));
     const id = state.canvas.edges.find(e => e.data?.chatAgent).id;
     expect(state.canvas.edges.find(e => e.id === id).targetHandle).toBe('t-in');
@@ -559,19 +591,18 @@ for (const side of ['left', 'right', 'bottom', 'top']) {
     expect(state.canvas.edges.find(e => e.id === id).selected).toBe(true);
     act(() => state.canvas.onEdgesChange([{ id, type: 'remove' }]));
     await waitFor(() => expect(state.canvas.edges.some(e => e.id === id)).toBe(false));
-    expect(api.updateCanvasAgent.mock.calls.at(-1)[2].memories).toEqual([]);
+    expect(chatNode().data.memories).toEqual([]);
   });
 }
 
 it('continues a failed Chat session without creating a new conversation', async () => {
-  const agent = { id: 'agent1', name: 'Chat', memories: [], x: 0, y: 0 };
   const session = { id: 'existing', created_at: 1, status: 'failed', messages: [{ role: 'user', content: 'Earlier question' }], events: [], error: 'Model connection failed' };
-  api.canvasAgents.mockResolvedValue({ agents: [agent] });
+  api.getGraph.mockResolvedValue({ ...GRAPH, tasks: [CHAT()] });
   api.agentSessions.mockResolvedValue({ sessions: [session] });
   api.sendAgentMessage.mockResolvedValue({ ...session, status: 'running', error: null });
   render(<App initialGraphId="old-id" />);
-  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:agent1')).toBe(true));
-  act(() => state.canvas.onNodeClick(null, { id: 'chat:agent1' }));
+  await waitFor(() => expect(chatNode()).toBeDefined());
+  act(() => state.canvas.onNodeClick(null, { id: 'chat' }));
   await screen.findByText('Earlier question');
   const user = userEvent.setup();
   await user.type(screen.getByLabelText('Message Chat Agent'), 'Continue');
@@ -581,32 +612,29 @@ it('continues a failed Chat session without creating a new conversation', async 
 });
 
 it('deletes the selected Chat conversation and ignores stale polling results', async () => {
- const session = { id: 'old-session', created_at: 1, status: 'idle', messages: [{ role: 'user', content: 'Old question' }], events: [] };
- api.canvasAgents.mockResolvedValue({ agents: [{ id: 'agent1', name: 'Chat', memories: [], x: 0, y: 0 }] });
- api.agentSessions.mockResolvedValue({ sessions: [session] });
- api.deleteAgentSession.mockResolvedValue({ removed: true });
- render(<App initialGraphId="old-id" />);
- await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:agent1')).toBe(true));
- act(() => state.canvas.onNodeClick(null, { id: 'chat:agent1' }));
- await screen.findByText('Old question');
- const user = userEvent.setup();
- await user.click(screen.getByText('Delete conversation'));
- expect(api.deleteAgentSession).not.toHaveBeenCalled();
- await user.click(screen.getByText('Confirm delete'));
- await waitFor(() => expect(screen.queryByText('Old question')).not.toBeInTheDocument());
- expect(api.deleteAgentSession).toHaveBeenCalledWith('old-id', 'agent1', 'old-session');
+  const session = { id: 'old-session', created_at: 1, status: 'idle', messages: [{ role: 'user', content: 'Old question' }], events: [] };
+  api.getGraph.mockResolvedValue({ ...GRAPH, tasks: [CHAT()] });
+  api.agentSessions.mockResolvedValue({ sessions: [session] });
+  api.deleteAgentSession.mockResolvedValue({ removed: true });
+  render(<App initialGraphId="old-id" />);
+  await waitFor(() => expect(chatNode()).toBeDefined());
+  act(() => state.canvas.onNodeClick(null, { id: 'chat' }));
+  await screen.findByText('Old question');
+  const user = userEvent.setup();
+  await user.click(screen.getByText('Delete conversation'));
+  expect(api.deleteAgentSession).not.toHaveBeenCalled();
+  await user.click(screen.getByText('Confirm delete'));
+  await waitFor(() => expect(screen.queryByText('Old question')).not.toBeInTheDocument());
+  expect(api.deleteAgentSession).toHaveBeenCalledWith('old-id', 'agent1', 'old-session');
 });
-it('initializes Memory and late Chat ports without waiting for measurement events', async () => {
-  let resolveAgents;
-  api.canvasAgents.mockImplementation(() => new Promise(resolve => { resolveAgents = resolve; }));
-  api.getGraph.mockResolvedValue({ ...GRAPH, tasks: [{ name: 'investigate', use_long_term_memory: true, memory: { match: 'company' }, inputs: [], outputs: [] }] });
+it('initializes Memory and Chat ports without waiting for measurement events', async () => {
+  api.getGraph.mockResolvedValue({ ...GRAPH, tasks: [{ name: 'investigate', use_long_term_memory: true, memory: { match: 'company' }, inputs: [], outputs: [] },
+    CHAT('late', { x: 400, y: 200, memories: [{ memory_id: 'mem:investigate', read: true, read_source_handle: 's-out-bottom', read_target_handle: 't-in' }] })] });
   render(<App initialGraphId="old-id" />);
   await waitFor(() => expect(state.canvas.nodes.find(n => n.id === 'mem:investigate')?.handles).toHaveLength(8));
-  await act(async () => resolveAgents({ agents: [{ id: 'late', name: 'Late chat', x: 400, y: 200, memories: [{ memory_id: 'mem:investigate', read: true, read_source_handle: 's-out-bottom', read_target_handle: 't-in' }] }] }));
   const memory = state.canvas.nodes.find(n => n.id === 'mem:investigate');
-  const chat = state.canvas.nodes.find(n => n.id === 'chat:late');
   expect(memory.measured).toBeUndefined();
-  expect(chat.handles.find(h => h.id === 't-in')).toBeDefined();
+  expect(chatNode('late')).toBeDefined();
   expect(memory.handles.find(h => h.id === 's-out-bottom')).toBeDefined();
   expect(state.canvas.edges.find(e => e.id.startsWith('chat-read:'))).toMatchObject({ sourceHandle: 's-out-bottom', targetHandle: 't-in' });
   expect(api.saveGraph).not.toHaveBeenCalled();
@@ -644,17 +672,17 @@ it('undoes a graph setting immediately and redoes it without waiting for debounc
   await waitFor(() => expect(screen.getByTestId('dirty')).toHaveTextContent('dirty'));
 });
 
-it('undo restores an archived Chat node through the server without losing sessions', async () => {
-  const agent = {id:'a'.repeat(32),name:'Research',memories:[],x:0,y:0};
-  api.canvasAgents.mockResolvedValue({agents:[agent]});
-  api.removeCanvasAgent.mockResolvedValue({removed:true});
+it('removing a memory unbinds its Chat Agents on the canvas, undoably', async () => {
+  const space = 'd'.repeat(32);
+  api.getGraph.mockResolvedValue({ ...GRAPH, tasks: [CHAT('chat', { memories: [{ space_id: space, read: true, write: true }] })],
+    memory_resources: [{ space_id: space, name: 'Findings' }] });
   render(<App initialGraphId="old-id" />);
-  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === `chat:${agent.id}`)).toBe(true));
-  await act(async () => state.canvas.nodes.find(n => n.id === `chat:${agent.id}`).data.onDelete(`chat:${agent.id}`));
-  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === `chat:${agent.id}`)).toBe(false));
-  fireEvent.keyDown(window, {key:'z',ctrlKey:true});
-  await waitFor(() => expect(api.restoreCanvasAgents).toHaveBeenCalledWith('old-id',[agent]));
-  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === `chat:${agent.id}`)).toBe(true));
+  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === `mem:space:${space}`)).toBe(true));
+  await act(async () => state.canvas.nodes.find(n => n.id === `mem:space:${space}`).data.onDelete(`mem:space:${space}`));
+  expect(chatNode().data.memories).toEqual([]);
+  expect(state.canvas.nodes.some(n => n.id === `mem:space:${space}`)).toBe(false);
+  fireEvent.keyDown(window, { key: 'z', ctrlKey: true });
+  await waitFor(() => expect(chatNode().data.memories).toHaveLength(1));
 });
 
 
@@ -663,13 +691,11 @@ it('renaming a memory owner keeps readers, positions and chat agents pointed at 
     { name: 'writer', use_long_term_memory: true, memory: {}, inputs: [], outputs: [] },
     { name: 'reader', use_long_term_memory: true, memory: { read_from: ['reader', 'writer'], write_enabled: false,
       canvas_connections: { 'mem:writer:read': { sourceHandle: 's-out', targetHandle: 'b-in' } } }, inputs: [], outputs: [] },
+    CHAT('ag1', { memories: [{ memory_id: 'mem:writer', read: true, write: false }] }),
   ] });
-  const agent = { id: 'ag1', name: 'Chat', x: 0, y: 0, memories: [{ memory_id: 'mem:writer', read: true, write: false }] };
-  api.canvasAgents.mockResolvedValue({ agents: [agent] });
-  api.updateCanvasAgent.mockImplementation(async (_g, id, settings) => ({ id, ...settings }));
   render(<App initialGraphId="old-id" />);
   await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'reader')).toBe(true));
-  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:ag1')).toBe(true));
+  await waitFor(() => expect(chatNode('ag1')).toBeDefined());
   act(() => state.canvas.onNodeClick(null, { id: 'writer' }));
   const user = userEvent.setup();
   await user.click(await screen.findByRole('button', { name: 'Rename node' }));
@@ -679,8 +705,8 @@ it('renaming a memory owner keeps readers, positions and chat agents pointed at 
   expect(Object.keys(reader.data.memory.canvas_connections)).toEqual(['mem:writer:read']);
   expect(state.canvas.edges.some(e => e.data?.memory === 'read' && e.data.agent === 'reader' && e.data.from === 'renamed_writer')).toBe(true);
   expect(state.canvas.nodes.find(n => n.id === 'mem:writer').position).toEqual({ x: 5, y: 6 });
-  expect(state.canvas.edges.some(e => e.source === 'mem:writer' && e.target === 'chat:ag1')).toBe(true);
-  expect(api.updateCanvasAgent).not.toHaveBeenCalled();
+  expect(state.canvas.edges.some(e => e.source === 'mem:writer' && e.target === 'ag1')).toBe(true);
+  expect(chatNode('ag1').data.memories).toEqual([{ memory_id: 'mem:writer', read: true, write: false }]);
 });
 
 it('keeps settings edited while a save is in flight', async () => {
@@ -746,24 +772,19 @@ it('saves after an in-flight rename, under the new identity', async () => {
 });
 
 it('keeps an open Chat Agent and its unsaved settings across a workflow rename', async () => {
-  const agent = { id: 'agent1', name: 'Helper', instructions: 'Help', provider: null, max_steps: 20, timeout: 300, toolkits: null, memories: [], x: 0, y: 0 };
-  api.canvasAgents.mockResolvedValue({ agents: [agent] });
+  api.getGraph.mockResolvedValue({ ...GRAPH, tasks: [CHAT('helper')] });
   api.renameGraph.mockResolvedValue({ ...GRAPH, id: 'fresh-name', name: 'Fresh name' });
-  const { user } = await loadedApp();
-  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:agent1')).toBe(true));
-  act(() => state.canvas.onNodeClick(null, { id: 'chat:agent1' }));
+  render(<App initialGraphId="old-id" />);
+  const user = userEvent.setup();
+  await waitFor(() => expect(chatNode('helper')).toBeDefined());
+  act(() => state.canvas.onNodeClick(null, { id: 'helper' }));
   await user.click(await screen.findByRole('button', { name: 'Harness settings →' }));
   await user.type(screen.getByLabelText('Instructions'), ' more');
-  // The Agents are read again under the new id; until they arrive the open
-  // one must stay on screen.
-  let reread;
-  api.canvasAgents.mockReturnValueOnce(new Promise((resolve) => { reread = resolve; }));
   await user.click(screen.getByRole('button', { name: 'Rename workflow' }));
-  await waitFor(() => expect(api.canvasAgents).toHaveBeenCalledWith('fresh-name'));
+  await waitFor(() => expect(api.renameGraph).toHaveBeenCalledWith('old-id', 'Fresh name'));
   expect(screen.getByLabelText('Instructions')).toHaveValue('Help more');
-  await act(async () => { reread({ agents: [agent] }); });
-  expect(screen.getByLabelText('Instructions')).toHaveValue('Help more');
-  expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+  expect(screen.getByTestId('dirty')).toHaveTextContent('dirty');
+  expect(screen.getByText(/Unsaved settings/)).toBeInTheDocument();
 });
 
 it('asks before leaving a node or saving over unconfirmed Inspector code', async () => {
@@ -854,32 +875,23 @@ describe('unconfirmed Dataset code while the Inspector is away', () => {
   });
 });
 
-it('undoes the Chat Agent changes an assistant turn made', async () => {
-  const helper = { id: 'a1', name: 'Helper', instructions: 'Help.', memories: [], x: 0, y: 0 };
-  const writer = { id: 'a2', name: 'Writer', instructions: 'Write.', memories: [], x: 40, y: 0 };
-  api.canvasAgents.mockResolvedValue({ agents: [helper, writer] });
-  api.updateCanvasAgent.mockImplementation(async (_g, id, body) => ({ id, ...body }));
-  api.removeCanvasAgent.mockResolvedValue({ removed: true });
-  api.restoreCanvasAgent.mockResolvedValue(helper);
+it('applies and undoes the Chat Agent changes an assistant turn made, as canvas edits', async () => {
+  api.getGraph.mockResolvedValue({ ...GRAPH, tasks: [CHAT('helper'), CHAT('writer', { agent_id: 'agent2', x: 40 })] });
   const user = userEvent.setup();
   render(<App initialGraphId="old-id" />);
-  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:a2')).toBe(true));
-  await user.click(screen.getByRole('button', { name: 'Ask Chat' }));
-
-  let outcome;
-  await act(async () => { outcome = await state.chat.onAgentActions([
-    { action: 'remove', id: 'a1' }, { action: 'update', id: 'a2', patch: { name: 'Editor', instructions: 'Edit.' } }]); });
-  expect(outcome.failed).toEqual([]);
-  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:a1')).toBe(false));
-  expect(state.canvas.nodes.find(n => n.id === 'chat:a2').data.title).toBe('Editor');
-
-  let failed;
-  await act(async () => { failed = await state.chat.onUndoAgentActions(outcome.undo); });
-  expect(failed).toEqual([]);
-  expect(api.restoreCanvasAgent).toHaveBeenCalledWith('old-id', 'a1');
-  expect(api.updateCanvasAgent).toHaveBeenLastCalledWith('old-id', 'a2', expect.objectContaining({ name: 'Writer', instructions: 'Write.' }));
-  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:a1')).toBe(true));
-  expect(state.canvas.nodes.find(n => n.id === 'chat:a2').data.title).toBe('Writer');
+  await waitFor(() => expect(chatNode('writer')).toBeDefined());
+  await user.click(screen.getByRole('button', { name: 'Chat', exact: true }));
+  // The assistant sees the Chat Agents as the nodes they are.
+  expect(state.chat.getGraph().tasks.map(t => [t.name, t.kind, t.agent_id])).toEqual([
+    ['helper', 'chat_agent', 'agent1'], ['writer', 'chat_agent', 'agent2']]);
+  expect(state.chat.onAgentActions).toBeUndefined();
+  const before = state.chat.getGraph();
+  act(() => state.chat.onApply({ ...before, tasks: [{ ...before.tasks[1], name: 'editor', instructions: 'Edit.' }] }));
+  await waitFor(() => expect(chatNode('helper')).toBeUndefined());
+  expect(chatNode('editor').data).toMatchObject({ agent_id: 'agent2', instructions: 'Edit.' });
+  act(() => state.chat.onApply(before));        // the chat's Undo: the canvas as it was
+  await waitFor(() => expect(chatNode('helper')?.data.agent_id).toBe('agent1'));
+  expect(chatNode('writer').data.instructions).toBe('Help');
 });
 
 
@@ -914,20 +926,15 @@ describe('memory reset asks first', () => {
   });
 });
 
-it('says a removed Chat Agent can be brought back, and Undo does it', async () => {
-  const agent = { id: 'b'.repeat(32), name: 'Research', memories: [], x: 0, y: 0 };
-  api.canvasAgents.mockResolvedValue({ agents: [agent] });
-  api.removeCanvasAgent.mockResolvedValue({ removed: true });
-  api.restoreCanvasAgent.mockResolvedValue(agent);
-  const user = userEvent.setup();
+it('a deleted Chat Agent comes back with the global undo, its agent_id unchanged', async () => {
+  api.getGraph.mockResolvedValue({ ...GRAPH, tasks: [CHAT('research', { agent_id: 'b'.repeat(32) })] });
   render(<App initialGraphId="old-id" />);
-  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === `chat:${agent.id}`)).toBe(true));
-  await act(async () => state.canvas.nodes.find(n => n.id === `chat:${agent.id}`).data.onDelete(`chat:${agent.id}`));
-  expect(screen.getByText(/Chat Agent 'Research' removed\. Undo with (⌘Z|Ctrl\+Z)/)).toBeInTheDocument();
-  await user.click(screen.getByRole('button', { name: 'Undo' }));
-  await waitFor(() => expect(api.restoreCanvasAgent).toHaveBeenCalledWith('old-id', agent.id));
-  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === `chat:${agent.id}`)).toBe(true));
-  expect(screen.queryByText(/Chat Agent 'Research' removed/)).toBeNull();
+  await waitFor(() => expect(chatNode('research')).toBeDefined());
+  act(() => state.canvas.onNodeClick(null, { id: 'research' }));
+  await act(async () => state.canvas.onNodesChange([{ id: 'research', type: 'remove' }]));
+  expect(screen.queryByText(/Chat Agent 'research' removed/)).toBeNull();
+  fireEvent.keyDown(window, { key: 'z', ctrlKey: true });
+  await waitFor(() => expect(chatNode('research')?.data.agent_id).toBe('b'.repeat(32)));
 });
 
 it('says what deleting a workflow does to its history: archived, not kept in place', async () => {
@@ -942,54 +949,35 @@ it('says what deleting a workflow does to its history: archived, not kept in pla
   expect(api.deleteGraph).not.toHaveBeenCalled();
 });
 
-it('creates a Chat Agent the assistant asked for, connects its memory, and undoes both', async () => {
+it('shows a Chat Agent the assistant created and connected, drawn from its memories', async () => {
   const space = 'f'.repeat(32);
   const id = 'b'.repeat(32);
-  api.canvasAgents.mockResolvedValue({ agents: [{ id: 'a1', name: 'Helper', instructions: 'Help.', memories: [], tools: null, x: 0, y: 0 }] });
-  api.getGraph.mockResolvedValue({ ...GRAPH, memory_resources: [{ space_id: space, name: 'Findings' }] });
-  api.createCanvasAgent.mockImplementation(async (_g, body) => ({ memories: [], ...body }));
-  api.updateCanvasAgent.mockImplementation(async (_g, agentId, body) => ({ id: agentId, ...body }));
-  api.removeCanvasAgent.mockResolvedValue({ removed: true });
+  api.getGraph.mockResolvedValue({ ...GRAPH, tasks: [CHAT('helper')], memory_resources: [{ space_id: space, name: 'Findings' }] });
   const user = userEvent.setup();
   render(<App initialGraphId="old-id" />);
-  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:a1')).toBe(true));
+  await waitFor(() => expect(chatNode('helper')).toBeDefined());
   await user.click(screen.getByRole('button', { name: 'Chat', exact: true }));
-  // The assistant sees each Agent's settings, memories included.
-  expect(state.chat.getGraph().canvas_agents[0]).toEqual(expect.objectContaining({ id: 'a1', memories: [], tools: null }));
-
-  let outcome;
-  await act(async () => { outcome = await state.chat.onAgentActions([
-    { action: 'create', id, name: 'Scout', settings: { name: 'Scout', instructions: 'Scout.' } },
-    { action: 'update', id, patch: { memories: [{ space_id: space, read: true, write: false }] } }]); });
-  expect(outcome.failed).toEqual([]);
-  expect(api.createCanvasAgent).toHaveBeenCalledWith('old-id', { x: 440, y: 250, name: 'Scout', instructions: 'Scout.', id });
-  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === `chat:${id}`)).toBe(true));
-  await waitFor(() => expect(state.canvas.edges.some(e => e.id === `chat-read:${id}:mem:space:${space}`)).toBe(true));
-  expect(outcome.undo).toEqual([{ action: 'create', id, name: 'Scout' },
-    { action: 'update', id, name: 'Scout', previous: { memories: [] } }]);
-
-  let failed;
-  await act(async () => { failed = await state.chat.onUndoAgentActions(outcome.undo); });
-  expect(failed).toEqual([]);
-  expect(api.updateCanvasAgent).toHaveBeenLastCalledWith('old-id', id, expect.objectContaining({ memories: [] }));
-  expect(api.removeCanvasAgent).toHaveBeenCalledWith('old-id', id);
-  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === `chat:${id}`)).toBe(false));
+  const before = state.chat.getGraph();
+  act(() => state.chat.onApply({ ...before, tasks: [...before.tasks,
+    CHAT('scout', { agent_id: id, instructions: 'Scout.', x: 440, y: 250, memories: [{ space_id: space, read: true, write: false }] })] }));
+  await waitFor(() => expect(chatNode('scout')).toBeDefined());
+  await waitFor(() => expect(state.canvas.edges.some(e => e.id === `chat-read:scout:mem:space:${space}`)).toBe(true));
+  expect(screen.getByTestId('dirty')).toHaveTextContent('dirty');
+  act(() => state.chat.onApply(before));
+  await waitFor(() => expect(chatNode('scout')).toBeUndefined());
+  expect(state.canvas.edges.some(e => e.data?.chatAgent === 'scout')).toBe(false);
 });
 
-it('connects a memory to an existing Chat Agent and reverts it on undo', async () => {
+it('connects a memory to an existing Chat Agent and reverts it with the global undo', async () => {
   const space = 'f'.repeat(32);
-  const helper = { id: 'a1', name: 'Helper', instructions: 'Help.', memories: [], x: 0, y: 0 };
-  api.canvasAgents.mockResolvedValue({ agents: [helper] });
-  api.getGraph.mockResolvedValue({ ...GRAPH, memory_resources: [{ space_id: space, name: 'Findings' }] });
-  api.updateCanvasAgent.mockImplementation(async (_g, agentId, body) => ({ id: agentId, ...body }));
-  const user = userEvent.setup();
+  api.getGraph.mockResolvedValue({ ...GRAPH, tasks: [CHAT('helper')], memory_resources: [{ space_id: space, name: 'Findings' }] });
   render(<App initialGraphId="old-id" />);
-  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:a1')).toBe(true));
-  await user.click(screen.getByRole('button', { name: 'Chat', exact: true }));
-  let outcome;
-  await act(async () => { outcome = await state.chat.onAgentActions([
-    { action: 'update', id: 'a1', patch: { memories: [{ space_id: space, read: true, write: true }] } }]); });
-  await waitFor(() => expect(state.canvas.edges.filter(e => e.data?.chatAgent === 'a1')).toHaveLength(2));
-  await act(async () => { await state.chat.onUndoAgentActions(outcome.undo); });
-  await waitFor(() => expect(state.canvas.edges.filter(e => e.data?.chatAgent === 'a1')).toHaveLength(0));
+  await waitFor(() => expect(chatNode('helper')).toBeDefined());
+  act(() => {
+    state.canvas.onConnect({ source: `mem:space:${space}`, target: 'helper' });
+    state.canvas.onConnect({ source: 'helper', target: `mem:space:${space}` });
+  });
+  await waitFor(() => expect(state.canvas.edges.filter(e => e.data?.chatAgent === 'helper')).toHaveLength(2));
+  fireEvent.keyDown(window, { key: 'z', ctrlKey: true });
+  await waitFor(() => expect(state.canvas.edges.filter(e => e.data?.chatAgent === 'helper')).toHaveLength(0));
 });

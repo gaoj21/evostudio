@@ -69,6 +69,7 @@ def test_project_deletion_requires_empty_and_unassignment_preserves_task(client)
 
 
 def test_task_delete_rejects_active_work_then_clears_triggers(client, monkeypatch):
+    import threading
     from backend.api import graphs, runner, batch, harness_api, scheduler, watcher
     graph = graphs.create_graph('Delete test', '')
     monkeypatch.setattr(runner, 'list_runs', lambda **kw: [{'status': 'running'}])
@@ -76,7 +77,14 @@ def test_task_delete_rejects_active_work_then_clears_triggers(client, monkeypatc
     assert graphs.load_graph(graph['id']) is not None
     monkeypatch.setattr(runner, 'list_runs', lambda **kw: [])
     monkeypatch.setattr(batch, 'list_batches', lambda **kw: [])
-    monkeypatch.setattr(harness_api, 'list_agents', lambda g: {'agents': []})
+    agent = 'e1' * 16
+    graphs.save_graph(graph['id'], {**graphs.load_graph(graph['id']), 'tasks': [
+        {'name': 'helper', 'kind': 'chat_agent', 'agent_id': agent}]})
+    session = harness_api.create_session(graph['id'], agent)
+    monkeypatch.setitem(harness_api._running, session['id'], threading.Event())
+    busy = client.delete('/api/graphs/' + graph['id'])
+    assert busy.status_code == 409 and 'conversations' in busy.json()['detail']
+    monkeypatch.delitem(harness_api._running, session['id'])
     stopped = []
     monkeypatch.setattr(scheduler, 'clear', lambda g: stopped.append(('schedule', g)))
     monkeypatch.setattr(watcher, 'stop_graph_watch', lambda g: stopped.append(('watch', g)))
@@ -107,8 +115,10 @@ def test_copy_task_has_independent_identity_and_preserves_definition(client, mon
     p = client.post('/api/projects', json={'name':'Research'}).json()
     task = client.post(f'/api/projects/{p["id"]}/tasks', json={'name':'Original','goal':'Summarize'}).json()
     task['tasks'][0]['x'] = 123
+    agent = 'f2' * 16
+    task['tasks'].append({'name': 'helper', 'kind': 'chat_agent', 'agent_id': agent, 'instructions': 'Help.'})
     task = graphs.save_graph(task['id'], task)
-    monkeypatch.setattr(harness_api, 'list_agents', lambda _: {'agents':[]})
+    session = harness_api.create_session(task['id'], agent)
     result = client.post(f'/api/projects/{p["id"]}/tasks/{task["id"]}/copy')
     assert result.status_code == 201, result.text
     copied = result.json()
@@ -122,6 +132,10 @@ def test_copy_task_has_independent_identity_and_preserves_definition(client, mon
     assert graphs.load_graph(task['id'])['tasks'][0]['prompt'] != 'Changed'
     again = client.post(f'/api/projects/{p["id"]}/tasks/{task["id"]}/copy').json()
     assert again['id'] != copied['id']
+    # The Chat Agent came along as a node; its conversations did not.
+    assert harness_api.list_sessions(copied['id'], agent)['sessions'] == []
+    harness_api.create_session(copied['id'], agent)
+    assert [s['id'] for s in harness_api.list_sessions(task['id'], agent)['sessions']] == [session['id']]
 
 
 def test_assigning_legacy_task_preserves_chat_owner(client):
@@ -156,10 +170,16 @@ def bound_task(client, tmp_path, monkeypatch):
     task = graphs.save_graph(task['id'], {**task, 'tasks': [node],
                                           'memory_resources': [{'space_id': space['id'], 'name': 'Team notes', 'x': 0, 'y': 0}],
                                           'memory_positions': {'mem:space:' + space['id']: {'x': 1, 'y': 2}}})
-    agent = client.post(f'/api/graphs/{task["id"]}/agents', json={
-        'name': 'Helper', 'memories': [{'space_id': space['id'], 'read': True, 'write': True}]})
-    assert agent.status_code == 201, agent.text
-    return client, task, agent.json(), space, home, away
+    agent = {'name': 'helper', 'kind': 'chat_agent', 'agent_id': 'b7' * 16,
+             'memories': [{'space_id': space['id'], 'read': True, 'write': True}]}
+    task = graphs.save_graph(task['id'], {**task, 'tasks': [*task['tasks'], agent]})
+    return client, task, agent, space, home, away
+
+
+def _agents(graph_id):
+    """The workflow's Chat Agent nodes, as saved."""
+    from backend.api import graphs
+    return [t for t in graphs.load_graph(graph_id)['tasks'] if t.get('kind') == 'chat_agent']
 
 
 def test_moving_a_task_away_from_its_shared_memory_asks_first(bound_task):
@@ -170,10 +190,10 @@ def test_moving_a_task_away_from_its_shared_memory_asks_first(bound_task):
     detail = refused.json()['detail']
     assert 'Away' in detail['message']
     assert sorted((b['kind'], b['name'], b['space']) for b in detail['bindings']) == [
-        ('agent', 'Helper', 'Team notes'), ('canvas', 'Team notes', 'Team notes'), ('node', 'execute', 'Team notes')]
+        ('agent', 'helper', 'Team notes'), ('canvas', 'Team notes', 'Team notes'), ('node', 'execute', 'Team notes')]
     # Nothing moved and nothing was unbound.
     assert graphs.load_graph(task['id'])['project_id'] == home['id']
-    assert client.get(f'/api/graphs/{task["id"]}/agents').json()['agents'][0]['memories']
+    assert _agents(task['id'])[0]['memories']
 
 
 def test_detaching_moves_the_task_and_removes_its_bindings(bound_task):
@@ -188,11 +208,7 @@ def test_detaching_moves_the_task_and_removes_its_bindings(bound_task):
     assert saved['memory_resources'] == [] and saved['memory_positions'] == {}
     node = saved['tasks'][0]
     assert node['use_long_term_memory'] is False and 'space_id' not in node['memory']
-    agents = client.get(f'/api/graphs/{task["id"]}/agents').json()['agents']
-    assert agents[0]['memories'] == []
-    # The Agent saves normally in its new project.
-    updated = client.put(f'/api/graphs/{task["id"]}/agents/{agent["id"]}', json={'name': 'Helper 2', 'memories': []})
-    assert updated.status_code == 200, updated.text
+    assert _agents(task['id'])[0]['memories'] == []
 
 
 def test_a_move_within_the_same_scope_or_without_shared_memory_needs_no_detach(bound_task):
@@ -203,20 +219,26 @@ def test_a_move_within_the_same_scope_or_without_shared_memory_needs_no_detach(b
     assert moved.status_code == 200 and moved.json()['detached'] == []
 
 
-def test_a_stale_binding_is_named_on_save_and_can_be_removed(bound_task):
+def test_a_stale_binding_is_named_when_chatting_and_can_be_removed(bound_task, monkeypatch):
     from backend.api import graphs
     client, task, agent, space, home, away = bound_task
+    from backend.api import harness_api
     # Moved before moves checked shared memory: the binding is out of reach.
     graphs.save_graph(task['id'], {**graphs.load_graph(task['id']), 'project_id': away['id']})
-    listed = client.get(f'/api/graphs/{task["id"]}/agents').json()['agents']
-    assert listed[0]['memories'][0]['space_id'] == space['id']
-    kept = client.put(f'/api/graphs/{task["id"]}/agents/{agent["id"]}', json={
-        'name': 'Renamed', 'memories': agent['memories']})
+    assert _agents(task['id'])[0]['memories'][0]['space_id'] == space['id']
+    monkeypatch.setattr(harness_api._pool, 'submit', lambda *a: None)
+    monkeypatch.setattr(harness_api.harness, 'make_model', lambda provider: object())
+    monkeypatch.setattr(harness_api, '_running', {})
+    root = f'/api/graphs/{task["id"]}/agents/{agent["agent_id"]}/sessions'
+    turn = f'{root}/{client.post(root).json()["id"]}/messages'
+    kept = client.post(turn, json={'message': 'hi'})
     assert kept.status_code == 422
     message = kept.json()['detail']
     assert "'Team notes'" in message and space['id'] in message and 'Remove it under Connected memories' in message
-    removed = client.put(f'/api/graphs/{task["id"]}/agents/{agent["id"]}', json={'name': 'Renamed', 'memories': []})
-    assert removed.status_code == 200
+    saved = graphs.load_graph(task['id'])
+    graphs.save_graph(task['id'], {**saved, 'tasks': [
+        {**t, 'memories': []} if t.get('kind') == 'chat_agent' else t for t in saved['tasks']]})
+    assert client.post(turn, json={'message': 'hi'}).status_code == 202
     # A later move does not report what was already out of reach.
     moved = client.put(f'/api/projects/{home["id"]}/tasks/{task["id"]}')
     assert moved.status_code == 200
@@ -231,7 +253,7 @@ def test_copying_into_another_project_asks_before_dropping_shared_memory(bound_t
     detail = refused.json()['detail']
     assert 'Away' in detail['message']
     assert sorted((b['kind'], b['name']) for b in detail['bindings']) == [
-        ('agent', 'Helper'), ('canvas', 'Team notes'), ('node', 'execute')]
+        ('agent', 'helper'), ('canvas', 'Team notes'), ('node', 'execute')]
     assert {g['id'] for g in graphs.list_graphs()} == before
     copied = client.post(f'/api/projects/{away["id"]}/tasks/{task["id"]}/copy', params={'detach': 'true'})
     assert copied.status_code == 201, copied.text
@@ -239,10 +261,9 @@ def test_copying_into_another_project_asks_before_dropping_shared_memory(bound_t
     assert body['project_id'] == away['id'] and {b['kind'] for b in body['detached']} == {'agent', 'canvas', 'node'}
     saved = graphs.load_graph(body['id'])
     assert saved['memory_resources'] == [] and saved['tasks'][0]['use_long_term_memory'] is False
-    agents = client.get(f'/api/graphs/{body["id"]}/agents').json()['agents']
-    assert [(a['name'], a['memories']) for a in agents] == [('Helper', [])]
+    assert [(a['name'], a['memories']) for a in _agents(body['id'])] == [('helper', [])]
     # The original keeps everything.
-    assert client.get(f'/api/graphs/{task["id"]}/agents').json()['agents'][0]['memories']
+    assert _agents(task['id'])[0]['memories']
     assert graphs.load_graph(task['id'])['memory_resources']
 
 
@@ -258,14 +279,13 @@ def test_copying_out_of_a_project_or_within_it(bound_task):
     assert same.status_code == 201, same.text
     assert same.json()['detached'] == []
     assert graphs.load_graph(same.json()['id'])['memory_resources'][0]['space_id'] == space['id']
-    agents = client.get(f'/api/graphs/{same.json()["id"]}/agents').json()['agents']
-    assert agents[0]['memories'][0]['space_id'] == space['id']
+    assert _agents(same.json()['id'])[0]['memories'][0]['space_id'] == space['id']
     # An unassigned task's private memory cannot follow its copy into a project.
     private = graphs.create_graph('Private', '')
     from backend.api import mem0_service
     own = mem0_service.create_space(private, 'Mine')
-    private = graphs.save_graph(private['id'], {**private, 'memory_resources': [{'space_id': own['id'], 'name': 'Mine', 'x': 0, 'y': 0}]})
-    assert client.post(f'/api/graphs/{private["id"]}/agents', json={'name': 'Solo', 'memories': [{'space_id': own['id']}]}).status_code == 201
+    private = graphs.save_graph(private['id'], {**private, 'memory_resources': [{'space_id': own['id'], 'name': 'Mine', 'x': 0, 'y': 0}],
+                                                'tasks': [{'name': 'solo', 'kind': 'chat_agent', 'memories': [{'space_id': own['id']}]}]})
     assert client.post(f'/api/projects/{home["id"]}/tasks/{private["id"]}/copy').status_code == 409
     into = client.post(f'/api/projects/{home["id"]}/tasks/{private["id"]}/copy', params={'detach': 'true'})
     assert into.status_code == 201, into.text

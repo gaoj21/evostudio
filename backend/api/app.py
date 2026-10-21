@@ -142,6 +142,11 @@ async def _lifespan(_app: FastAPI):
             resumed = scheduler.restore()
             if resumed:
                 print(f"[studio] resumed schedules for: {', '.join(resumed)}")
+            # Chat Agents an earlier version kept beside the graph become
+            # nodes of it (opening a workflow does the same for that one).
+            migrated = harness_api.migrate_all()
+            if migrated:
+                print(f"[studio] moved {migrated} Chat Agent(s) onto their workflows' canvases")
         except Exception as exc:  # never take the server down over cleanup
             print(f"[studio] startup cleanup failed: {type(exc).__name__}: {exc}")
         finally:
@@ -299,6 +304,13 @@ def create_graph(body: dict = Body(...)):
 
 @app.get("/api/graphs/{graph_id}")
 def get_graph(graph_id: str):
+    if graph_store.graph_exists(graph_id):
+        # Chat Agents kept outside the graph by an earlier version become
+        # its nodes before the canvas first shows it (startup does the rest).
+        try:
+            harness_api.migrate_agents(graph_id)
+        except Exception as exc:  # noqa: BLE001 - the workflow still opens
+            print(f"[studio] Chat Agents of {graph_id} not migrated: {type(exc).__name__}: {exc}")
     graph = graph_store.load_graph(graph_id)
     if graph is None:
         raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found")
@@ -358,9 +370,8 @@ def delete_graph(graph_id: str):
     active = ('running', 'stopping', 'pending', 'queued')
     if any(r.get('status') in active for r in runner.list_runs(graph_id=graph_id)) or any(r.get('status') in active for r in batch_store.list_batches(graph_id=graph_id)):
         raise HTTPException(409, 'Stop active runs before deleting this task.')
-    for agent in harness_api.list_agents(graph_id)['agents']:
-        if any(s['status'] in ('running', 'stopping') for s in harness_api.list_sessions(graph_id, agent['id'])['sessions']):
-            raise HTTPException(409, 'Stop active conversations before deleting this task.')
+    if harness_api.active_sessions(graph):
+        raise HTTPException(409, 'Stop active conversations before deleting this task.')
     scheduler.clear(graph_id)
     watcher.stop_graph_watch(graph_id)
     if not graph_store.delete_graph(graph_id):

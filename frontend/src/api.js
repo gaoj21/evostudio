@@ -58,13 +58,6 @@ export const api = {
   runningAssistantTurns: (g, context) => req(`/api/graphs/${encodeURIComponent(g)}/assistant/turns${context ? `?context=${encodeURIComponent(context)}` : ''}`),
   stopChatJob: (g, id) => req(`/api/graphs/${encodeURIComponent(g)}/chat/jobs/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
   chatMemoryResources: g => req(`${agentPath(g)}/memory-resources`),
-  restoreCanvasAgents: (id, agents) => req(`/api/graphs/${encodeURIComponent(id)}/agents/restore-canvas`, { method: 'POST', body: { agents } }),
-  canvasAgents: g => req(agentPath(g)),
-  createCanvasAgent: (g, body) => req(agentPath(g), { method: 'POST', body }),
-  removeCanvasAgent: (g, a) => req(agentPath(g, a), { method: 'DELETE' }),
-  // Bring back one removed Chat Agent (archived, sessions kept); other Agents are untouched.
-  restoreCanvasAgent: (g, a) => req(`${agentPath(g, a)}/restore`, { method: 'POST' }),
-  updateCanvasAgent: (g, a, body) => req(agentPath(g, a), { method: 'PUT', body }),
   agentSessions: (g, a) => req(`${agentPath(g, a)}/sessions`),
   deleteAgentSession: (g, a, s) => req(`${agentPath(g, a)}/sessions/${encodeURIComponent(s)}`, { method: 'DELETE' }),
   createAgentSession: (g, a) => req(`${agentPath(g, a)}/sessions`, { method: 'POST' }),

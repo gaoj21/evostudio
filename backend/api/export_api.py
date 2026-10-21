@@ -447,7 +447,11 @@ def project_files(graph: dict, include_vendor: bool = True) -> tuple[dict, dict]
 
     # Exported as it would run: with the edges' mappings and the nodes'
     # enabled flags made explicit, the same way a stored graph is on load.
-    graph = migrate_flow(copy.deepcopy(graph))
+    # Chat Agents are not part of what runs; the standalone project leaves
+    # them out (the graph JSON keeps them).
+    from backend.features.agents.chat_agents import workflow_only
+    full = migrate_flow(copy.deepcopy(graph))
+    graph = workflow_only(full)
     tasks = graph.get("tasks", []) or []
     if graph.get('evaluators') or any((t.get('source') or {}).get('type') == 'dataloader' for t in tasks):
         raise HTTPException(422, 'DataLoader and Evaluator workflows run in Studio. Export the graph JSON to preserve their configuration; standalone Python export is not supported.')
@@ -506,7 +510,8 @@ def project_files(graph: dict, include_vendor: bool = True) -> tuple[dict, dict]
     sample = _sample_from_runs(graph_id)
 
     files: dict[str, str] = {}
-    files["graph.json"] = json.dumps(graph, ensure_ascii=False, indent=2)
+    # The whole canvas, Chat Agents included, so an import brings them back.
+    files["graph.json"] = json.dumps(full, ensure_ascii=False, indent=2)
     files["manifest.json"] = json.dumps(
         _manifest(graph, bundled_custom, bundled_skills, local_tools, builtin_tools),
         ensure_ascii=False, indent=2,

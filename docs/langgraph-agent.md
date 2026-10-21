@@ -63,12 +63,23 @@ and workflow-editing Chat remain available with their previous behavior.
 
 ## Independent canvas Chat Agents
 
-`+ Add Chat Agent` immediately creates a server-persisted Agent and shows its
-node on the canvas. Click it to chat or open Harness settings. These resources
-are stored separately from workflow tasks and edges: clicking workflow Run
-never executes them, and workflow Save is not needed to save their settings.
-Node positions are saved after dragging. Chat Agents are scoped to the task's
-stable task ID, falling back to graph ID for legacy documents.
+A Chat Agent is a node of the workflow graph (`kind: "chat_agent"`; see
+`backend/features/agents/chat_agents.py`). `+ Add Chat Agent` adds the node;
+click it to chat or open Harness settings. Its settings are saved, undone,
+copied, renamed, exported and imported with the workflow like any other node.
+It does not run: it has no inputs, outputs or data edges, and runs, run plans,
+Evolve and the standalone export see the workflow without it. Its memory
+connections are its `memories` list, drawn as reads/writes lines.
+
+Conversations stay in the harness store, keyed by the workflow's stable task
+ID (graph ID for legacy documents) and the node's `agent_id`, which never
+changes when the node is renamed. A message runs with the settings of the
+**saved** workflow: a node that was never saved cannot be chatted with until
+the workflow is saved, and unsaved edits apply from the next save. A copy of
+the workflow (project copy, Evolve result, import) has its own task ID, so its
+Chat Agents start with conversations of their own. Agents an earlier version
+kept beside the graph are moved onto it once (on open, and at startup); their
+rows are kept as `migrated-agent`, conversations untouched.
 
 Each Agent has independent sessions, instructions, provider selection, maximum
 model steps, execution deadline and Memory connections. A message starts a

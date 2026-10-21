@@ -6,7 +6,8 @@
 
 - `harness.py` — the Chat Agent runtime shared by canvas conversations and agent nodes.
 - `graph_agent.py` — the agent itself: a LangGraph graph (model ⇄ tools), with a plan and scratch files in its state.
-- `harness_api.py` — Durable, independently runnable canvas Agents and chat sessions.
+- `harness_api.py` — Conversations with Chat Agents (sessions, messages, Stop) and the one-time move of old Agent rows onto their workflows.
+- `chat_agents.py` — Chat Agent nodes (kind "chat_agent"): stored form, validation, `workflow_only` (what runs never sees).
 
 ## 修改边界
 

@@ -1,4 +1,4 @@
-"""Durable, independently runnable canvas Agents and chat sessions."""
+"""Conversations with Chat Agents (chat_agent nodes of the saved workflow)."""
 import hashlib
 import json
 import sqlite3
@@ -9,9 +9,11 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from typing import Literal
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, Field, ConfigDict
 from backend.api import graphs, harness, mem0_service, memory_resources
 from backend.api.studio_config import data_path
+from backend.features.agents import chat_agents
+from backend.features.agents.chat_agents import MemoryBinding, space_of  # noqa: F401 - re-exported
 
 router = APIRouter(prefix='/api/graphs/{graph_id}/agents', tags=['harness'])
 # What Stop can and cannot reach: the Agent loop is interrupted at its next
@@ -25,29 +27,16 @@ _lock = threading.RLock()
 _running = {}
 
 
-class MemoryBinding(BaseModel):
-    space_id: str | None = Field(default=None, pattern=r'^[a-f0-9]{32}$')
-    memory_id: str | None = Field(default=None, min_length=5, max_length=200)
-
-    @model_validator(mode='after')
-    def reference(self):
-        if bool(self.space_id) == bool(self.memory_id): raise ValueError('Provide exactly one memory reference')
-        return self
-    read_source_handle: str | None = Field(default=None, max_length=40)
-    read_target_handle: str | None = Field(default=None, max_length=40)
-    write_source_handle: str | None = Field(default=None, max_length=40)
-    write_target_handle: str | None = Field(default=None, max_length=40)
-    read: bool = True
-    write: bool = False
-
-
 class AgentSettings(BaseModel):
+    """A Chat Agent's settings, as the workflow assistant checks them before
+    writing them into the node (agent_ops)."""
     model_config = ConfigDict(extra='forbid')
-    name: str = Field(default='Chat Agent', min_length=1, max_length=120)
+    name: str = Field(default='chat_agent', min_length=1, max_length=120)
     # "deepagents" is what agents saved before say; it is the same engine.
     engine: Literal['langgraph', 'deepagents'] = 'langgraph'
+    description: str = Field(default='', max_length=2000)
     provider: str | None = None
-    instructions: str = Field(default='You are a helpful research assistant.', max_length=30000)
+    instructions: str = Field(default=chat_agents.DEFAULT_INSTRUCTIONS, max_length=30000)
     max_steps: int = Field(default=20, ge=1, le=100)
     timeout: int = Field(default=300, ge=10, le=1800)
     toolkits: list[str] | None = None
@@ -121,13 +110,6 @@ def get(db, id, scope, kind, parent=None):
     return json.loads(row[1])
 
 
-def space_of(binding):
-    """The Mem0 space a binding names, or None for a workflow memory."""
-    if binding.get('space_id'): return binding['space_id']
-    reference = str(binding.get('memory_id') or '')
-    return reference.removeprefix('mem:space:') if reference.startswith('mem:space:') else None
-
-
 def unavailable_memory(binding):
     """Why a Mem0 binding cannot be used here, naming the space and the fix."""
     space_id = space_of(binding)
@@ -152,21 +134,100 @@ def validate_memories(graph, settings):
     if len(set(ids)) != len(ids): raise HTTPException(422, 'Duplicate memory connection')
 
 
-def detach_spaces(graph, space_ids):
-    """Remove these Mem0 spaces from every Chat Agent of the task; returns
-    what each changed Agent lost, for telling the user."""
-    space_ids = set(space_ids)
+UNSAVED = ('This Chat Agent is not in the saved workflow. Save the workflow to chat with it; '
+           'a conversation uses the settings last saved.')
+
+
+def agent_for(graph, agent_id):
+    """The Chat Agent node `agent_id` of the saved workflow, as the harness
+    runs it. The stored graph is the authority: a node only on the canvas
+    (added or changed and not saved) is refused with what to do (409)."""
+    task = chat_agents.find(graph, agent_id)
+    if task is None: raise HTTPException(409, UNSAVED)
+    try: return chat_agents.settings_of(task)
+    except ValueError as exc: raise HTTPException(422, str(exc)) from exc
+
+
+def active_sessions(graph) -> list:
+    """Conversations of this workflow executing now."""
     scope = owner(graph)
-    detached = []
     with _lock, database() as db:
-        for id, body in db.execute('SELECT id, body FROM objects WHERE owner=? AND kind=?', (scope, 'agent')).fetchall():
+        ids = [r[0] for r in db.execute("SELECT id FROM objects WHERE owner=? AND kind='session'", (scope,))]
+        return [sid for sid in ids if sid in _running]
+
+
+# --------------------------------------------------------------------------
+# Migration: Chat Agents kept as harness rows before they were nodes
+# --------------------------------------------------------------------------
+
+MIGRATED = 'migrated-agent'
+_migrate_lock = threading.Lock()
+
+
+def _node_from_row(agent: dict, name: str) -> dict:
+    settings = {k: agent[k] for k in chat_agents.SETTINGS if k in agent and k != 'description'}
+    return chat_agents.normalize({'name': name, 'kind': chat_agents.KIND,
+                                  'agent_id': agent['id'], **settings})
+
+
+def migrate_agents(graph_id: str) -> int:
+    """Turn this workflow's Chat Agent rows (kind 'agent') into chat_agent
+    nodes of its saved graph; returns how many were added.
+
+    Each active row becomes a node keeping its id as agent_id (so its
+    conversations stay reachable), its position, settings and memories,
+    named after it with a suffix when the name is taken. The graph is saved
+    first and the rows marked 'migrated-agent' after (never deleted): an
+    interruption in between is finished by the next call, which finds the
+    node by agent_id and only marks the row. Removed Agents
+    ('archived-agent') stay archived."""
+    import logging
+    with _migrate_lock:
+        graph = graphs.load_graph(graph_id)
+        if graph is None: return 0
+        scope = owner(graph)
+        with _lock, database() as db:
+            rows = db.execute("SELECT id, body FROM objects WHERE owner=? AND kind='agent' ORDER BY rowid",
+                              (scope,)).fetchall()
+        if not rows: return 0
+        tasks = list(graph.get('tasks') or [])
+        present = {t.get('agent_id') for t in tasks if chat_agents.is_chat_agent(t)}
+        taken = {t.get('name') for t in tasks}
+        added, done = [], []
+        for id, body in rows:
             agent = json.loads(body)
-            kept = [m for m in agent.get('memories', []) if space_of(m) not in space_ids]
-            if len(kept) == len(agent.get('memories', [])): continue
-            lost = [space_of(m) for m in agent['memories'] if space_of(m) in space_ids]
-            put(db, id, scope, 'agent', '', {**agent, 'memories': kept})
-            detached.append({'agent_id': id, 'agent': agent.get('name'), 'space_ids': lost})
-    return detached
+            if id in present:
+                done.append((id, agent, chat_agents.find(graph, id)['name']))
+                continue
+            name = chat_agents.node_name(agent.get('name') or 'Chat Agent', taken)
+            try: node = _node_from_row({**agent, 'id': id}, name)
+            except ValueError as exc:
+                logging.getLogger(__name__).warning('Chat Agent %s of %s not migrated: %s', id, graph_id, exc)
+                continue
+            taken.add(name); tasks.append(node); added.append(node)
+            done.append((id, agent, name))
+        if added:
+            graphs.save_graph(graph['id'], {**graph, 'tasks': tasks})
+        with _lock, database() as db:
+            for id, agent, name in done:
+                put(db, id, scope, MIGRATED, '', {**agent, 'migrated_to': {'graph_id': graph['id'], 'node': name}})
+        return len(added)
+
+
+def migrate_all() -> int:
+    """migrate_agents for every workflow with rows left; for startup."""
+    import logging
+    with database() as db:
+        owners = {r[0] for r in db.execute("SELECT DISTINCT owner FROM objects WHERE kind='agent'")}
+    if not owners: return 0
+    added = 0
+    for summary in graphs.list_graphs():
+        graph = graphs.load_graph(summary['id'])
+        if not graph or not ({str(graph.get('task_id') or ''), str(graph['id'])} & owners): continue
+        try: added += migrate_agents(graph['id'])
+        except Exception as exc:  # noqa: BLE001 - one workflow must not stop the others
+            logging.getLogger(__name__).warning('Chat Agents of %s not migrated: %s', graph['id'], exc)
+    return added
 
 
 @router.get('/memory-resources')
@@ -174,82 +235,12 @@ def list_memory_resources(graph_id: str):
     return {'resources': memory_resources.catalog(graph_for(graph_id))}
 
 
-@router.get('')
-def list_agents(graph_id: str):
-    scope = owner(graph_for(graph_id))
-    with database() as db:
-        return {'agents': [json.loads(r[0]) for r in db.execute('SELECT body FROM objects WHERE owner=? AND kind=?', (scope, 'agent'))]}
-
-
-class NewAgent(AgentSettings):
-    # The workflow assistant chooses the id of an Agent it adds, so later
-    # operations of the same turn can address it; never an id already used.
-    id: str | None = Field(default=None, pattern=r'^[a-f0-9]{32}$')
-
-
-@router.post('', status_code=201)
-def create_agent(graph_id: str, body: NewAgent):
-    graph = graph_for(graph_id)
-    wanted = getattr(body, 'id', None)  # callers may pass plain AgentSettings
-    settings = body.model_dump(exclude={'id'})
-    validate_memories(graph, settings)
-    agent = {'id': wanted or uuid.uuid4().hex, **settings}
-    with _lock, database() as db:
-        if wanted and db.execute('SELECT 1 FROM objects WHERE id=?', (wanted,)).fetchone():
-            raise HTTPException(409, 'An Agent with this ID already exists')
-        put(db, agent['id'], owner(graph), 'agent', '', agent)
-    return agent
-
-
-class AgentSnapshot(AgentSettings):
-    id: str = Field(pattern=r'^[a-f0-9]{32}$')
-
-
-class CanvasSnapshot(BaseModel):
-    agents: list[AgentSnapshot] = Field(max_length=200)
-
-
-@router.post('/restore-canvas')
-def restore_canvas(graph_id: str, body: CanvasSnapshot):
-    """Restore definitions only; sessions/checkpoints are never rewound."""
-    scope = owner(graph_for(graph_id))
-    ids = [a.id for a in body.agents]
-    if len(set(ids)) != len(ids): raise HTTPException(422, 'Duplicate Agent ID')
-    with _lock, database() as db:
-        db.execute('BEGIN IMMEDIATE')
-        rows = db.execute("SELECT id, kind, body FROM objects WHERE owner=? AND kind IN ('agent','archived-agent')", (scope,)).fetchall()
-        known = {row[0]: row for row in rows}
-        if any(id not in known for id in ids): raise HTTPException(409, 'Canvas history contains an Agent unavailable in this task. Reload the task.')
-        sessions = db.execute("SELECT id FROM objects WHERE owner=? AND kind='session'", (scope,)).fetchall()
-        if any(row[0] in _running for row in sessions):
-            raise HTTPException(409, 'Stop running Chat sessions before restoring their canvas settings.')
-        for id, kind, raw in rows:
-            if kind == 'agent' and id not in ids:
-                put(db, id, scope, 'archived-agent', '', json.loads(raw))
-        for agent in body.agents:
-            # References can belong to the canvas draft being restored alongside
-            # this snapshot. The existing send-message preflight validates them.
-            put(db, agent.id, scope, 'agent', '', agent.model_dump())
-    return {'agents': [a.model_dump() for a in body.agents]}
-
-
-@router.put('/{agent_id}')
-def update_agent(graph_id: str, agent_id: str, body: AgentSettings):
-    graph = graph_for(graph_id)
-    settings = body.model_dump()
-    validate_memories(graph, settings)
-    with database() as db:
-        get(db, agent_id, owner(graph), 'agent')
-        agent = {'id': agent_id, **settings}
-        put(db, agent_id, owner(graph), 'agent', '', agent)
-    return agent
-
-
 @router.get('/{agent_id}/sessions')
 def list_sessions(graph_id: str, agent_id: str):
+    # Sessions are listed for any agent_id of the workflow: a Chat Agent not
+    # saved yet simply has none.
     scope = owner(graph_for(graph_id))
     with database() as db:
-        get(db, agent_id, scope, 'agent')
         rows = [json.loads(r[0]) for r in db.execute('SELECT body FROM objects WHERE owner=? AND kind=? AND parent=?', (scope, 'session', agent_id))]
     # Recover crashed executions; checkpoints remain untouched for diagnosis.
     with _lock:
@@ -264,10 +255,11 @@ def list_sessions(graph_id: str, agent_id: str):
 
 @router.post('/{agent_id}/sessions', status_code=201)
 def create_session(graph_id: str, agent_id: str):
-    scope = owner(graph_for(graph_id))
+    graph = graph_for(graph_id)
+    agent_for(graph, agent_id)
+    scope = owner(graph)
     session = {'id': uuid.uuid4().hex, 'created_at': time.time(), 'status': 'idle', 'messages': [], 'events': [], 'error': None}
     with database() as db:
-        get(db, agent_id, scope, 'agent')
         put(db, session['id'], scope, 'session', agent_id, session)
     return session
 
@@ -341,8 +333,8 @@ def _execute(graph, agent, session, event):
 def send_message(graph_id: str, agent_id: str, session_id: str, body: TurnInput):
     graph = graph_for(graph_id)
     if not body.message.strip(): raise HTTPException(422, 'Message must not be blank')
+    agent = agent_for(graph, agent_id)
     with _lock, database() as db:
-        agent = get(db, agent_id, owner(graph), 'agent')
         session = get(db, session_id, owner(graph), 'session', agent_id)
         if session_id in _running: raise HTTPException(409, 'This session is already running')
         if session['status'] != 'idle':
@@ -387,39 +379,10 @@ def stop_session(graph_id: str, agent_id: str, session_id: str):
     return session
 
 
-@router.delete('/{agent_id}')
-def remove_agent(graph_id: str, agent_id: str):
-    """Archive the canvas Agent without erasing sessions or checkpoints."""
-    scope = owner(graph_for(graph_id))
-    with _lock, database() as db:
-        agent = get(db, agent_id, scope, 'agent')
-        sessions = [r[0] for r in db.execute('SELECT id FROM objects WHERE owner=? AND kind=? AND parent=?', (scope, 'session', agent_id))]
-        if any(sid in _running for sid in sessions):
-            raise HTTPException(409, 'Stop this Agent and wait for execution to finish before removing it')
-        put(db, agent_id, scope, 'archived-agent', '', agent)
-    return {'removed': True, 'history_retained': True}
-
-
-@router.post('/{agent_id}/restore')
-def restore_agent(graph_id: str, agent_id: str):
-    """Bring back one removed canvas Agent, its definition and sessions as
-    they were archived. Restoring an Agent that is already on the canvas is a
-    no-op, so a repeated undo cannot fail half-way."""
-    scope = owner(graph_for(graph_id))
-    with _lock, database() as db:
-        row = db.execute("SELECT kind, body FROM objects WHERE id=? AND owner=? AND kind IN ('agent','archived-agent')",
-                         (agent_id, scope)).fetchone()
-        if not row: raise HTTPException(404, 'Agent not found')
-        agent = json.loads(row[1])
-        if row[0] == 'archived-agent': put(db, agent_id, scope, 'agent', '', agent)
-    return agent
-
-
 @router.delete('/{agent_id}/sessions/{session_id}')
 def delete_session(graph_id: str, agent_id: str, session_id: str):
     scope = owner(graph_for(graph_id))
     with _lock, database() as db:
-        get(db, agent_id, scope, 'agent')
         session = get(db, session_id, scope, 'session', agent_id)
         if session_id in _running: raise HTTPException(409, 'Stop this conversation and wait for it to finish before deleting it.')
         from langgraph.checkpoint.sqlite import SqliteSaver

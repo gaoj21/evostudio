@@ -6,8 +6,8 @@ task `risk_detector`, a Chat Agent by its title, a node by what it does ("the
 named ...", with nothing for the model (or the person) to go on. This module
 resolves a name in tiers, most certain first, and says how it got there:
 
-1. exact id/name (a Chat Agent's `chat:<id>` or bare id too)
-2. exact display name (title / label / an Agent's name)
+1. exact id/name (a Chat Agent's agent_id or `chat:<agent_id>` too)
+2. exact display name (title / label)
 3. normalized: NFKC, case-folded, whitespace/-/_ collapsed; also the slug
 4. alias: the query inside a name or description (CJK included), or a
    name inside the query
@@ -63,27 +63,21 @@ def candidate(id, kind, ref=None, labels=(), aliases=(), description="", names=(
 
 
 def task_candidates(tasks: list) -> list:
+    """Every node; a Chat Agent (kind "chat_agent") is also found by its
+    agent_id (or the chat:<agent_id> it was addressed by before it was a
+    node) and by what its instructions say."""
     out = []
     for t in tasks or []:
         if not isinstance(t, dict) or not t.get("name"):
             continue
+        chat = t.get("kind") == "chat_agent"
+        about = t.get("description") or (t.get("instructions") if chat else "")
         out.append(candidate(
             t["name"], t.get("kind") or "task", t,
             labels=[t.get(k) for k in ("title", "label", "display_name")],
-            aliases=[t.get("description")], description=t.get("description")))
-    return out
-
-
-def agent_candidates(agents: list) -> list:
-    out = []
-    for a in agents or []:
-        if not isinstance(a, dict) or not a.get("id"):
-            continue
-        raw = str(a["id"])
-        bare = raw[len("chat:"):] if raw.startswith("chat:") else raw
-        out.append(candidate(
-            "chat:" + bare, "chat_agent", a, names=[bare], labels=[a.get("name")],
-            aliases=[a.get("instructions")], description=a.get("instructions")))
+            names=[t.get("agent_id"), f"chat:{t['agent_id']}"] if chat and t.get("agent_id") else (),
+            aliases=[t.get("description"), *([t.get("instructions")] if chat else [])],
+            description=about))
     return out
 
 

@@ -79,7 +79,7 @@ def delete_entry(graph_id: str, space_id: str, memory_id: str):
 
 @router.delete('/spaces/{space_id}')
 def delete_space(graph_id: str, space_id: str):
-    from backend.api import harness_api
+    from backend.features.agents.chat_agents import agents_of, space_of
     graph = graph_for(graph_id)
     call(service.get_space, graph, space_id)
     # A space is shared across the project. Check every saved task, including
@@ -89,8 +89,8 @@ def delete_space(graph_id: str, space_id: str):
         if not candidate: continue
         references = [r.get('space_id') for r in candidate.get('memory_resources', [])]
         references += [(t.get('memory') or {}).get('space_id') for t in candidate.get('tasks', [])]
-        for agent in harness_api.list_agents(candidate['id'])['agents']:
-            references += [m.get('space_id') or str(m.get('memory_id', '')).removeprefix('mem:space:') for m in agent.get('memories', [])]
+        for agent in agents_of(candidate):
+            references += [space_of(m) for m in agent.get('memories') or []]
         if space_id in references:
             raise HTTPException(409, 'Remove this space from all canvases and disconnect its Agents before deleting it.')
     with service._lock:

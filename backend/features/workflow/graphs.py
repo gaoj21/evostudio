@@ -665,8 +665,8 @@ def _archive_graph_data(graph_id: str, archived_id: str | None = None,
         archived_id = _archived_id(graph_id)
         _write_marker(graph_id, archived_id)
     stamp = archived_id.rsplit(".deleted-", 1)[1]
-    # Its Chat Agents too, filed under the task id (or, for older
-    # workflows, the graph id): a new workflow of that name must not
+    # Its Chat Agents' conversations too, filed under the task id (or, for
+    # older workflows, the graph id): a new workflow of that name must not
     # inherit them.
     try:
         from backend.features.agents import harness_api
@@ -711,6 +711,20 @@ def check_shape(body: dict) -> None:
             raise GraphValidationError([f"'{key}' must be text."])
 
 
+def chat_agent_tasks(tasks, edges):
+    """The tasks with every Chat Agent node in its stored form (each with an
+    agent_id of its own); refuses invalid settings and data edges touching
+    one. See backend/features/agents/chat_agents.py."""
+    from backend.features.agents import chat_agents
+    errors = chat_agents.check_edges(tasks, edges)
+    if errors:
+        raise GraphValidationError(errors)
+    try:
+        return chat_agents.normalize_tasks(tasks)
+    except ValueError as exc:
+        raise GraphValidationError([str(exc)]) from None
+
+
 def validate_harness_tasks(tasks):
     for task in tasks:
         config = task.get('harness')
@@ -733,6 +747,7 @@ def save_graph(graph_id: str, body: dict) -> dict:
     check_shape(body)
     existing = load_graph(graph_id) or {}
     validate_harness_tasks(body.get('tasks', []))
+    tasks = chat_agent_tasks(body.get('tasks', []), body.get('edges', []))
     resources = body.get('memory_resources', existing.get('memory_resources', []))
     positions = body.get('memory_positions', existing.get('memory_positions', {}))
     if not isinstance(resources, list) or len(resources) > 200 or any(
@@ -790,7 +805,7 @@ def save_graph(graph_id: str, body: dict) -> dict:
         # A client that does not send the list keeps the stored one.
         "evaluators": evaluator_list(body.get("evaluators", existing.get("evaluators", []))),
         "flow_version": body.get("flow_version", 0),
-        "tasks": body.get("tasks", []),
+        "tasks": tasks,
         "edges": body.get("edges", []),
     }
     with _lock:
@@ -878,7 +893,10 @@ def parked_task_names(tasks: list[dict], edges: list[dict]) -> set:
     now something the node says. Old graphs get the flag on first load
     (migrate_flow), from what the old rule would have decided.
     """
-    return {t.get("name") for t in tasks or [] if t.get("enabled") is False}
+    # A Chat Agent never runs; runs see the workflow without it
+    # (chat_agents.workflow_only), and this keeps it out wherever not.
+    return {t.get("name") for t in tasks or []
+            if t.get("enabled") is False or t.get("kind") == "chat_agent"}
 
 def validate_source_tasks(tasks: list[dict]) -> None:
     """Static checks for canvas source nodes (known type, required config)."""
@@ -1142,6 +1160,11 @@ def validate_graph(graph: dict, check_memory: bool = True) -> tuple[list[dict], 
     # not change what was handed in.
     check_shape(graph)
     graph = migrate_flow(copy.deepcopy(graph))
+    # Chat Agents are checked as what they are, then left out: they take no
+    # part in runs, so nothing below (framework, bindings, inputs) sees them.
+    from backend.features.agents.chat_agents import workflow_only
+    chat_agent_tasks(graph.get("tasks", []) or [], graph.get("edges", []) or [])
+    graph = workflow_only(graph)
     tasks = graph.get("tasks", []) or []
     edges = graph.get("edges", []) or []
     evaluator_list(graph.get("evaluators"))

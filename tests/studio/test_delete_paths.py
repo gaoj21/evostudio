@@ -133,13 +133,12 @@ def test_deleting_a_space_does_not_wait_for_mem0_to_start(tmp_path, monkeypatch)
     """Starting Mem0 loads the embedding model; deleting a space must not."""
     import threading
     from unittest.mock import Mock
-    from backend.api import harness_api, mem0_api, mem0_service as service
+    from backend.api import mem0_api, mem0_service as service
     monkeypatch.setattr(service, "ROOT", tmp_path / "mem0")
     monkeypatch.setattr(service, "_client", None)
     graph = {"id": "a", "project_id": "p"}
     monkeypatch.setattr(mem0_api, "graph_for", lambda g: graph)
     monkeypatch.setattr(mem0_api.graphs, "list_graphs", lambda: [])
-    monkeypatch.setattr(harness_api, "list_agents", lambda g: {"agents": []})
     space = service.create_space(graph, "S")["id"]
     started, db = threading.Event(), Mock()
 
@@ -445,19 +444,24 @@ def test_a_deleted_workflows_evaluator_draft_is_archived_with_it(studio_data):
 
 
 def test_a_deleted_workflows_chat_agents_are_archived_not_inherited(studio_data):
-    """Chat Agents live in the harness store under the workflow's task id;
-    left there, a new workflow of the same name opened with them."""
+    """Chat Agent conversations live in the harness store under the
+    workflow's task id; left there, a new workflow of the same name (and a
+    Chat Agent node of the same agent_id) opened with them."""
     from backend.features.agents import harness_api
     doomed = graphs.create_graph("Doomed", "")["id"]
-    agent = harness_api.create_agent(doomed, harness_api.AgentSettings(name="Helper"))
+    agent = {"id": "d0" * 16}
+    graphs.save_graph(doomed, {"name": "Doomed", "edges": [], "tasks": [
+        {"name": "helper", "kind": "chat_agent", "agent_id": agent["id"]}]})
     session = harness_api.create_session(doomed, agent["id"])
+    with harness_api.database() as db:              # a definition left from before the migration
+        harness_api.put(db, agent["id"], doomed, "migrated-agent", "", {"id": agent["id"]})
 
     assert graphs.delete_graph(doomed)
     _wait_archived()
 
     reborn = graphs.create_graph("Doomed", "")["id"]
     assert reborn == doomed
-    assert harness_api.list_agents(reborn)["agents"] == []
+    assert harness_api.list_sessions(reborn, agent["id"])["sessions"] == []
     with harness_api.database() as db:
         rows = db.execute("SELECT owner, kind FROM objects WHERE id IN (?, ?)",
                           (agent["id"], session["id"])).fetchall()

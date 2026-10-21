@@ -481,15 +481,13 @@ describe('applied operations', () => {
     expect(summarise(appliedOperations({
       operations: [{ op: 'delete_node', name: 'ghost' }, { op: 'validate' }],
       canvas_operations: [],
-      agent_actions: [{ action: 'remove', id: 'a1' }],
-    }))).toBe('removed Chat Agent · checked');
-    // A server that says what each Chat Agent change did is quoted, in order.
+    }))).toBe('checked');
+    // Chat Agent changes are canvas operations that say what they did, in order.
     expect(summarise(appliedOperations({
       operations: [{ op: 'create_agent' }, { op: 'connect_agent_memory' }, { op: 'inspect_agent' }],
-      canvas_operations: [{ op: 'add_node' }],
-      agent_actions: [{ action: 'create', id: 'n1', summary: "created Chat Agent 'Scout'" },
-        { action: 'update', id: 'n1', summary: "connected 'Scout' to memory 'Notes' (reads)" }],
-    }))).toBe("created Chat Agent 'Scout' · connected 'Scout' to memory 'Notes' (reads) · added · read a Chat Agent");
+      canvas_operations: [{ op: 'add_node', summary: "created Chat Agent 'scout'" },
+        { op: 'update_node', name: 'scout', summary: "connected 'scout' to memory 'Notes' (reads)" }, { op: 'add_node' }],
+    }))).toBe("created Chat Agent 'scout' · connected 'scout' to memory 'Notes' (reads) · added · read a Chat Agent");
     // An older server without canvas_operations: the operations stand.
     expect(appliedOperations({ operations: [{ op: 'add_node' }] })).toEqual([{ op: 'add_node' }]);
   });
@@ -535,17 +533,21 @@ describe('a canvas edited while the turn ran', () => {
 });
 
 describe('Chat Agent changes', () => {
-  it('hands agent actions to the canvas and shows what failed', async () => {
-    const onAgentActions = vi.fn().mockResolvedValue(["Chat Agent 'Helper' was not removed: busy"]);
-    api.chatGraph.mockResolvedValue({ reply: 'Removed.', operations: [{ op: 'delete_agent', name: 'helper' }],
-      canvas_operations: [], agent_actions: [{ action: 'remove', id: 'a1', name: 'Helper' }], applied: false });
-    const { user } = setup({ onAgentActions });
+  it('are canvas changes: applied with the graph and undone with its snapshot', async () => {
+    const next = { name: 'demo', tasks: [{ name: 'summarise' }, { name: 'scout', kind: 'chat_agent', agent_id: 'n1' }] };
+    api.chatGraph.mockResolvedValue({ reply: 'Created Scout.', operations: [{ op: 'create_agent' }, { op: 'connect_agent_memory' }],
+      canvas_operations: [{ op: 'add_node', summary: "created Chat Agent 'scout'" },
+        { op: 'update_node', name: 'scout', summary: "connected 'scout' to memory 'Notes' (reads)" }],
+      applied: true, graph: next });
+    const { onApply, user } = setup();
 
-    await send(user, 'delete the helper chat');
+    await send(user, 'add a chat agent Scout connected to Notes');
 
-    await waitFor(() => expect(onAgentActions).toHaveBeenCalledWith([{ action: 'remove', id: 'a1', name: 'Helper' }]));
-    expect(await screen.findByText("Chat Agent 'Helper' was not removed: busy")).toBeInTheDocument();
-    expect(screen.getByText('✓ removed Chat Agent')).toBeInTheDocument();
+    await waitFor(() => expect(onApply).toHaveBeenCalledWith(next));
+    expect(await screen.findByText("✓ created Chat Agent 'scout' · connected 'scout' to memory 'Notes' (reads)")).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Undo this change' }));
+    expect(onApply).toHaveBeenLastCalledWith(GRAPH);
+    expect(screen.getByText('Change undone.')).toBeInTheDocument();
   });
 });
 
@@ -618,62 +620,5 @@ describe('a generation that finishes onto a canvas nothing was lost from', () =>
     await send(user, 'Start over with a new workflow');
 
     await waitFor(() => expect(onApply).toHaveBeenCalledWith(GENERATED), { timeout: 4000 });
-  });
-});
-
-describe('Chat Agents the assistant creates', () => {
-  it('hands the create to the canvas, says what was done and offers Undo', async () => {
-    const actions = [{ action: 'create', id: 'n1', name: 'Scout', settings: { name: 'Scout' }, summary: "created Chat Agent 'Scout'" },
-      { action: 'update', id: 'n1', patch: { memories: [{ space_id: 's', read: true }] }, summary: "connected 'Scout' to memory 'Notes' (reads)" }];
-    const undo = [{ action: 'create', id: 'n1', name: 'Scout' }, { action: 'update', id: 'n1', name: 'Scout', previous: { memories: [] } }];
-    const onAgentActions = vi.fn().mockResolvedValue({ failed: [], undo });
-    const onUndoAgentActions = vi.fn().mockResolvedValue([]);
-    api.chatGraph.mockResolvedValue({ reply: 'Created Scout.', operations: [{ op: 'create_agent' }, { op: 'connect_agent_memory' }],
-      canvas_operations: [], agent_actions: actions, applied: false });
-    const { user } = setup({ onAgentActions, onUndoAgentActions });
-
-    await send(user, 'add a chat agent Scout connected to Notes');
-
-    await waitFor(() => expect(onAgentActions).toHaveBeenCalledWith(actions));
-    expect(await screen.findByText("✓ created Chat Agent 'Scout' · connected 'Scout' to memory 'Notes' (reads)")).toBeInTheDocument();
-    await user.click(await screen.findByRole('button', { name: 'Undo this change' }));
-    await waitFor(() => expect(onUndoAgentActions).toHaveBeenCalledWith(undo));
-  });
-});
-
-describe('undoing Chat Agent changes', () => {
-  it('hands the turn\'s agent undo to the canvas along with the workflow snapshot', async () => {
-    const next = { name: 'demo', tasks: [] };
-    const undoEntries = [{ action: 'remove', id: 'a1', name: 'Helper' }, { action: 'update', id: 'a2', name: 'Writer', previous: { name: 'Writer' } }];
-    const onAgentActions = vi.fn().mockResolvedValue({ failed: [], undo: undoEntries });
-    const onUndoAgentActions = vi.fn().mockResolvedValue([]);
-    api.chatGraph.mockResolvedValue({ reply: 'Done.', operations: [{ op: 'delete_node' }, { op: 'delete_agent' }, { op: 'update_agent' }],
-      canvas_operations: [{ op: 'delete_node', name: 'summarise' }], applied: true, graph: next,
-      agent_actions: [{ action: 'remove', id: 'a1' }, { action: 'update', id: 'a2', patch: { name: 'Editor' } }] });
-    const { onApply, user } = setup({ onAgentActions, onUndoAgentActions });
-
-    await send(user, 'tidy up');
-    await screen.findByText('Done.');
-    expect(screen.queryByText(/Undo restores the workflow only/)).not.toBeInTheDocument();
-
-    await user.click(await screen.findByRole('button', { name: 'Undo this change' }));
-    expect(onApply).toHaveBeenLastCalledWith(GRAPH);
-    await waitFor(() => expect(onUndoAgentActions).toHaveBeenCalledWith(undoEntries));
-    expect(screen.getByText('Change undone.')).toBeInTheDocument();
-  });
-
-  it('offers Undo for a turn that only changed Chat Agents, and shows what could not be undone', async () => {
-    const onAgentActions = vi.fn().mockResolvedValue({ failed: [], undo: [{ action: 'remove', id: 'a1', name: 'Helper' }] });
-    const onUndoAgentActions = vi.fn().mockResolvedValue(["Chat Agent 'Helper' was not restored: gone"]);
-    api.chatGraph.mockResolvedValue({ reply: 'Removed.', operations: [{ op: 'delete_agent' }], canvas_operations: [],
-      agent_actions: [{ action: 'remove', id: 'a1' }], applied: false });
-    const { onApply, user } = setup({ onAgentActions, onUndoAgentActions });
-
-    await send(user, 'delete the helper chat');
-    await user.click(await screen.findByRole('button', { name: 'Undo this change' }));
-
-    expect(onApply).not.toHaveBeenCalled();
-    expect(onUndoAgentActions).toHaveBeenCalledWith([{ action: 'remove', id: 'a1', name: 'Helper' }]);
-    expect(await screen.findByText("Chat Agent 'Helper' was not restored: gone")).toBeInTheDocument();
   });
 });

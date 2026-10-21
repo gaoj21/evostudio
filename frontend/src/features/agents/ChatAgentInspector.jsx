@@ -1,14 +1,14 @@
 import NumberInput from '../../components/NumberInput.jsx';
 import React, { useEffect, useRef, useState } from 'react';
-import { memoryId, memoryBinding } from './useCanvasAgents.js';
+import { memoryId, setMemory } from './chatAgents.js';
 import ResourceActions from '../../components/ResourceActions.jsx';
 import { api } from '../../api.js';
 import CopyButton from '../chat/CopyButton.jsx';
 const errorText = e => String(e.body?.detail || e.message);
-// The settings fields a draft can differ from what is saved in (memory
-// connections save on their own, the id never changes).
-const settingKeys = (...drafts) => [...new Set(drafts.flatMap(Object.keys))].filter(k => !['id', 'memories'].includes(k));
-const differs = (a, b, k) => JSON.stringify(a[k]) !== JSON.stringify(b[k]);
+// What a conversation runs with: these settings as last saved with the
+// workflow. Edits are canvas edits (undoable, saved with the workflow).
+const SETTINGS = ['description', 'instructions', 'provider', 'max_steps', 'timeout', 'toolkits', 'tools', 'skill_names', 'memories'];
+const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 // Which conversation was open, so reopening this Agent returns to it (and to a
 // turn still running there) rather than to whichever session is newest.
 const sessionKey = (graphId, agentId) => `evoagentx-studio:agent-session:${graphId}:${agentId}`;
@@ -18,10 +18,19 @@ function pickSession(sessions, preferred) {
     || sessions.find(s => ['running', 'stopping'].includes(s.status))?.id
     || sessions[0]?.id || null;
 }
-export default function ChatAgentInspector({ graphId, agent, onBack, onSave, saving = false, memoryNodes = [], backLabel = '← Back to workflow' }) {
+// The Chat Agent node's inspector: its settings (written into the node, so
+// they mark the workflow unsaved and undo with it) and its conversations,
+// which use the settings saved with the workflow (`saved`, null while the
+// node has never been saved).
+export default function ChatAgentInspector({ graphId, agent, saved = null, onBack, onChange, onRename, onSaveWorkflow,
+  saving = false, runMode = false, memoryNodes = [], backLabel = '← Back to workflow' }) {
+  const agentId = agent.agent_id;
   const [page, setPage] = useState('chat');
-  const [draft, setDraft] = useState(agent);
-  const [baseline, setBaseline] = useState(agent);
+  const draft = agent;
+  const setDraft = next => onChange?.(Object.fromEntries(SETTINGS.filter(k => k in next && !same(next[k], agent[k])).map(k => [k, next[k]])));
+  const [name, setName] = useState(agent.name);
+  useEffect(() => { setName(agent.name); }, [agent.name]);
+  const commitName = () => { const wanted = name.trim(); if (wanted && wanted !== agent.name) onRename?.(wanted); else setName(agent.name); };
   const [toolkits, setToolkits] = useState([]);
   const [skills, setSkills] = useState([]);
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(true);
@@ -29,7 +38,7 @@ export default function ChatAgentInspector({ graphId, agent, onBack, onSave, sav
   const [spaces, setSpaces] = useState([]);
   const [spacesLoaded, setSpacesLoaded] = useState(false);
   const [sessions, setSessions] = useState([]);
-  const [sessionId, setSessionId] = useState(() => loadSessionId(graphId, agent.id));
+  const [sessionId, setSessionId] = useState(() => loadSessionId(graphId, agentId));
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const deletedSessions = useRef(new Set());
@@ -38,12 +47,12 @@ export default function ChatAgentInspector({ graphId, agent, onBack, onSave, sav
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const session = sessions.find(s => s.id === sessionId);
-  const settingsDirty = settingKeys(draft, baseline).some(k => differs(draft, baseline, k));
-  // Leaving the Agent drops its unsaved settings with it, so ask first.
-  const leave = () => { if (!settingsDirty || window.confirm('Discard unsaved harness settings?')) onBack(); };
+  // Settings that differ from the saved ones (a rename is not one: the
+  // conversation is the Agent's, by agent_id, whatever the node is called).
+  const settingsDirty = !!saved && SETTINGS.some(k => !same(agent[k], saved[k]));
   useEffect(() => {
-    try { if (sessionId) localStorage.setItem(sessionKey(graphId, agent.id), sessionId); } catch { /* Browser storage may be unavailable. */ }
-  }, [graphId, agent.id, sessionId]);
+    try { if (sessionId) localStorage.setItem(sessionKey(graphId, agentId), sessionId); } catch { /* Browser storage may be unavailable. */ }
+  }, [graphId, agentId, sessionId]);
   const running = ['running', 'stopping'].includes(session?.status);
   useEffect(() => {
     let active = true;
@@ -51,16 +60,13 @@ export default function ChatAgentInspector({ graphId, agent, onBack, onSave, sav
       if (active) { setToolkits(t.tools || []); setSkills(s.skills || []); }
     }).catch(e => { if (active) setError(errorText(e)); }).finally(() => { if (active) setCapabilitiesLoading(false); });
     return () => { active = false; };
-  }, [graphId, agent.id]);
-  useEffect(() => {
-    setDraft(previous => ({ ...previous, memories: agent.memories }));
-  }, [agent]);
+  }, [graphId, agentId]);
   useEffect(() => {
     let active = true;
     let timer;
     async function refresh() {
       try {
-        const r = await api.agentSessions(graphId, agent.id);
+        const r = await api.agentSessions(graphId, agentId);
         if (!active) return;
         const visible = r.sessions.filter(s => !deletedSessions.current.has(s.id));
         setSessions(visible);
@@ -75,7 +81,7 @@ export default function ChatAgentInspector({ graphId, agent, onBack, onSave, sav
     refresh();
     (api.chatMemoryResources ? api.chatMemoryResources(graphId) : api.mem0Spaces(graphId).then(r => ({ resources: r.spaces.map(s => ({ ...s, id: `mem:space:${s.id}`, writable: true })) }))).then(r => { if (active) { setSpaces(r.resources); setSpacesLoaded(true); } }).catch(e => { if (active) setError(errorText(e)); });
     return () => { active = false; clearTimeout(timer); };
-  }, [graphId, agent.id]);
+  }, [graphId, agentId]);
   async function action(fn) {
     setBusy(true); setError('');
     try { await fn(); } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
@@ -86,30 +92,28 @@ export default function ChatAgentInspector({ graphId, agent, onBack, onSave, sav
   // the project the task was moved out of. Saving refuses them, so they are
   // shown and can be removed here.
   const available = m => resources.some(r => r.id === memoryId(m));
-  const stale = spacesLoaded ? agent.memories.filter(m => !available(m)) : [];
+  const memories = agent.memories || [];
+  const stale = spacesLoaded ? memories.filter(m => !available(m)) : [];
   const memoryName = m => resources.find(r => r.id === memoryId(m))?.name || memoryNodes.find(n => n.id === memoryId(m))?.data.title
     || (m.space_id ? `Shared memory ${m.space_id.slice(0, 8)}` : memoryId(m));
-  function removeStale() {
-    action(() => onSave(agent, current => ({ memories: current.memories.filter(available) })));
-  }
-  function memory(resource, key, value) {
-    action(() => onSave(agent, current => {
-      const previous = current.memories.find(m => memoryId(m) === resource.id) || { ...memoryBinding(resource.id), read: false, write: false };
-      const next = { ...previous, [key]: value };
-      return { memories: [...current.memories.filter(m => memoryId(m) !== resource.id), ...(next.read || next.write ? [next] : [])] };
-    }));
-  }
+  function removeStale() { onChange?.({ memories: memories.filter(available) }); }
+  function memory(resource, key, value) { onChange?.({ memories: setMemory(memories, resource.id, key, value) }); }
+  const canChat = !!saved;
+  const saveNote = !saved ? 'This Chat Agent is not saved yet. Save the workflow to chat with it.'
+    : settingsDirty ? 'Unsaved settings: messages use the saved settings until you save the workflow.' : null;
   return <aside className="inspector memory-inspector">
     <header className="memory-inspector-header">
-      <button className="link" onClick={page === 'settings' ? () => setPage('chat') : leave}>{page === 'settings' ? '← Back to chat' : backLabel}</button>
+      <button className="link" onClick={page === 'settings' ? () => setPage('chat') : onBack}>{page === 'settings' ? '← Back to chat' : backLabel}</button>
       <h3>{agent.name}</h3>
-      <span className="muted small">Independent Agent · LangGraph</span>
+      <span className="muted small">Chat Agent · not part of runs · LangGraph</span>
     </header>
     <div className="memory-inspector-body">
       {error && <p role="alert">{error}</p>}
-      {saving && <p role="status">Saving connections and settings…</p>}
-      {page === 'settings' ? <>
-        <div className="field"><label>Name<input value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} /></label></div>
+      {saveNote && <div role="status" className="chat-agent-save-note"><p className="muted small">{saveNote}</p>
+        {onSaveWorkflow && <button type="button" disabled={saving || runMode} onClick={onSaveWorkflow}>{saving ? 'Saving…' : 'Save workflow'}</button>}</div>}
+      {page === 'settings' ? <fieldset className="chat-agent-settings" disabled={runMode}>
+        <div className="field"><label>Name<input value={name} onChange={e => setName(e.target.value)} onBlur={commitName} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }} /></label></div>
+        <div className="field"><label>Description<input value={draft.description || ''} onChange={e => setDraft({ ...draft, description: e.target.value })} /></label></div>
         <div className="field"><label>Instructions<textarea rows={5} value={draft.instructions} onChange={e => setDraft({ ...draft, instructions: e.target.value })} /></label></div>
         <div className="field"><label>Model provider<input placeholder="Platform default" value={draft.provider || ''} onChange={e => setDraft({ ...draft, provider: e.target.value || null })} /></label></div>
         <div className="field"><label>Maximum model steps<NumberInput type="number" min="1" max="100" value={draft.max_steps} onChange={e => setDraft({ ...draft, max_steps: Number(e.target.value) })} /></label></div>
@@ -134,26 +138,17 @@ export default function ChatAgentInspector({ graphId, agent, onBack, onSave, sav
         {[...skills, ...(draft.skill_names || []).filter(n => !skills.some(s => s.name === n)).map(name => ({name,description:'Unavailable — remove or restore in Library'}))].map(s => <label className="field" key={s.name} title={s.description}><span><input type="checkbox" checked={(draft.skill_names || []).includes(s.name)} onChange={e => setDraft({...draft, skill_names:e.target.checked ? [...(draft.skill_names || []),s.name] : (draft.skill_names || []).filter(n => n !== s.name)})} />{s.name}</span><span className="muted small">{s.description}</span></label>)}
         <h4>Connected memories</h4>
         {!resources.length && <p>No Memory resources are available in this task.</p>}
-        <p className="muted small">Connections save immediately. Read retrieves before each message; Write saves successful exchanges.</p>
-        {resources.map(s => <div className="field" key={s.id}><strong>{s.name}</strong>{['read', 'write'].map(key => <label key={key}><input type="checkbox" disabled={busy || (key === 'write' && !s.writable)} aria-label={`${s.name} ${key}`} checked={!!agent.memories.find(m => memoryId(m) === s.id)?.[key]} onChange={e => memory(s, key, e.target.checked)} />{key === 'read' ? 'Read' : 'Write'}</label>)}{!s.writable && <p className="muted small">{s.write_reason}</p>}</div>)}
+        <p className="muted small">Read retrieves before each message; Write saves successful exchanges.</p>
+        {resources.map(s => <div className="field" key={s.id}><strong>{s.name}</strong>{['read', 'write'].map(key => <label key={key}><input type="checkbox" disabled={key === 'write' && !s.writable} aria-label={`${s.name} ${key}`} checked={!!memories.find(m => memoryId(m) === s.id)?.[key]} onChange={e => memory(s, key, e.target.checked)} />{key === 'read' ? 'Read' : 'Write'}</label>)}{!s.writable && <p className="muted small">{s.write_reason}</p>}</div>)}
         {stale.length > 0 && <div className="field" role="group" aria-label="Unavailable memories">
           <strong>Unavailable memories</strong>
-          <p className="muted small">This task can no longer use these connections, for example shared memory of a project it was moved from. Settings cannot be saved until they are removed.</p>
+          <p className="muted small">This task can no longer use these connections, for example shared memory of a project it was moved from. Chatting is refused until they are removed and the workflow saved.</p>
           {stale.map(m => <div key={memoryId(m)}>{memoryName(m)} · {[m.read && 'Read', m.write && 'Write'].filter(Boolean).join(' / ')}</div>)}
-          <button type="button" disabled={busy || saving} onClick={removeStale}>Remove unavailable memories</button>
+          <button type="button" onClick={removeStale}>Remove unavailable memories</button>
         </div>}
-        {settingsDirty && <p role="status" className="muted small">Unsaved changes</p>}
-        <button disabled={busy || !draft.name.trim()} onClick={() => action(async () => {
-          const sent = draft;
-          const patch = Object.fromEntries(settingKeys(draft, baseline).filter(k => differs(draft, baseline, k)).map(k => [k, draft[k]]));
-          const saved = await onSave(agent, patch);
-          // Edits made while the save was out stay on screen, and unsaved.
-          setDraft(current => Object.fromEntries([...Object.entries(saved), ...settingKeys(current).filter(k => differs(current, sent, k)).map(k => [k, current[k]])]));
-          setBaseline(saved); setPage('chat');
-        })}>Save settings</button>
-        <p className="muted small">Settings apply to the next message. An active execution keeps its starting configuration.</p>
-      </> : <>
-        <div className="memory-row"><button onClick={() => setPage('settings')}>Harness settings →</button><button disabled={busy} onClick={() => action(async () => replace(await api.createAgentSession(graphId, agent.id)))}>New session</button></div>
+        <p className="muted small">Changes are part of the workflow: they are undone with it and apply to the next message once the workflow is saved. An active execution keeps its starting configuration.</p>
+      </fieldset> : <>
+        <div className="memory-row"><button onClick={() => setPage('settings')}>Harness settings →</button><button disabled={busy || !canChat} onClick={() => action(async () => replace(await api.createAgentSession(graphId, agentId)))}>New session</button></div>
         {!!sessions.length && <label>Session<select value={sessionId || ''} onChange={e => { setSessionId(e.target.value); setConfirmDelete(false); }}>{sessions.map(s => <option key={s.id} value={s.id}>{new Date(s.created_at * 1000).toLocaleString()} · {s.status}</option>)}</select></label>}
         {!!sessions.length && <details className="conversation-history" onToggle={e => setHistoryOpen(e.currentTarget.open)}><summary>Conversation history · {sessions.length}</summary>{historyOpen && sessions.map(s => <ResourceActions key={s.id} name={s.messages[0]?.content?.slice(0, 50) || 'New conversation'} items={[
           { label: 'Open conversation', action: () => { setSessionId(s.id); setConfirmDelete(false); } },
@@ -164,14 +159,14 @@ export default function ChatAgentInspector({ graphId, agent, onBack, onSave, sav
           <button disabled={busy} onClick={() => setConfirmDelete(false)}>Cancel</button>
           <button className="danger" disabled={busy || running} onClick={() => action(async () => {
             const id = session.id;
-            await api.deleteAgentSession(graphId, agent.id, id);
+            await api.deleteAgentSession(graphId, agentId, id);
             deletedSessions.current.add(id);
             const remaining = sessions.filter(s => s.id !== id);
             setSessions(remaining); setSessionId(remaining[0]?.id || null); setConfirmDelete(false);
           })}>Confirm delete</button>
         </> : <button disabled={busy || running} title={running ? 'Stop this conversation before deleting it' : 'Delete this conversation'} onClick={() => setConfirmDelete(true)}>Delete conversation</button>}</div>}
         {!session?.messages.length && <p>Chat here to run this Agent independently. It can discover tools and use connected memories.</p>}
-        <div className="field"><strong>Connected Memory</strong>{!agent.memories.length && <p>No Memory connected.</p>}{agent.memories.map(m => <div key={memoryId(m)}>{memoryName(m)} · {[m.read && 'Read', m.write && 'Write'].filter(Boolean).join(' / ')}{stale.includes(m) && ' · unavailable (remove it in Harness settings)'}</div>)}</div>
+        <div className="field"><strong>Connected Memory</strong>{!memories.length && <p>No Memory connected.</p>}{memories.map(m => <div key={memoryId(m)}>{memoryName(m)} · {[m.read && 'Read', m.write && 'Write'].filter(Boolean).join(' / ')}{stale.includes(m) && ' · unavailable (remove it in Harness settings)'}</div>)}</div>
         <div aria-live="polite">{session?.messages.map((m, i) => <article className="agent-message" key={i}><strong>{m.role === 'user' ? 'You' : agent.name}</strong><div>{m.content}</div>{m.content && <CopyButton text={m.content} label={m.role === 'user' ? 'Copy your message' : 'Copy reply'} />}{m.failed && <small>Previous attempt failed; not replayed.</small>}</article>)}</div>
         {session?.events.length > 0 && <details><summary>Execution activity ({session.events.length})</summary>{session.events.map((e, i) => <div className="agent-event" key={i}><strong>{e.type} {e.name || ''}</strong>{e.type === 'memory_read' && <span> · {e.hits} records{e.total_records != null ? ` / ${e.total_records} stored` : ''}{e.mode === 'browse' ? ' · overview preview' : ''}</span>}<pre>{JSON.stringify(e.args || e.items || e.content, null, 2)}</pre></div>)}</details>}
         {session && <p className="muted small">{session.token_usage?.reported_calls
@@ -180,12 +175,12 @@ export default function ChatAgentInspector({ graphId, agent, onBack, onSave, sav
         {session?.error && <p role="alert">{session.error}</p>}
         {running && <p role="status">{session.status === 'stopping' ? (session.stop_note || 'Stopping after the current operation…') : 'Agent is running…'}</p>}
         <textarea aria-label="Message Chat Agent" rows={4} value={message} onChange={e => setMessage(e.target.value)} placeholder="Ask this Agent to investigate, use a tool, or recall a memory…" />
-        <div className="memory-row"><button disabled={saving || busy || running || !message.trim()} onClick={() => action(async () => {
-          const current = session || await api.createAgentSession(graphId, agent.id);
+        <div className="memory-row"><button disabled={!canChat || saving || busy || running || !message.trim()} onClick={() => action(async () => {
+          const current = session || await api.createAgentSession(graphId, agentId);
           if (!session) replace(current);
-          const result = await api.sendAgentMessage(graphId, agent.id, current.id, message);
+          const result = await api.sendAgentMessage(graphId, agentId, current.id, message);
           replace(result); setMessage('');
-        })}>Send</button>{running && <button disabled={busy || session.status === 'stopping'} onClick={() => action(async () => replace(await api.stopAgentSession(graphId, agent.id, session.id)))}>Stop</button>}</div>
+        })}>Send</button>{running && <button disabled={busy || session.status === 'stopping'} onClick={() => action(async () => replace(await api.stopAgentSession(graphId, agentId, session.id)))}>Stop</button>}</div>
         <p className="muted small">Runs independently of workflow Run. Conversations are saved on the server.</p>
       </>}
     </div>

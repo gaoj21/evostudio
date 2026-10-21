@@ -37,6 +37,18 @@ def _evolve_result(task_id, graph_id):
         "optimized_graph": {"name": "big", "tasks": [{"name": "t", "prompt": "x" * 1000}]}})
 
 
+AGENT = "c4" * 16
+
+
+def chat_agent(name="helper", agent_id=AGENT, **settings):
+    return {"name": name, "kind": "chat_agent", "agent_id": agent_id, **settings}
+
+
+def _sessions(graph_id, agent_id=AGENT):
+    from backend.features.agents import harness_api
+    return [s["id"] for s in harness_api.list_sessions(graph_id, agent_id)["sessions"]]
+
+
 def _client():
     from backend.api import app as studio_app
     return TestClient(studio_app.app)
@@ -53,8 +65,9 @@ class TestRenamingAWorkflow:
         from backend.features.agents import harness_api
         client = _client()
         gid = graphs.create_graph("Agents Kept", "")["id"]
-        graphs.save_graph(gid, {"name": "Agents Kept", "tasks": [make_task("a", outputs=["x"])], "edges": []})
-        harness_api.create_agent(gid, harness_api.AgentSettings(name="Helper"))
+        graphs.save_graph(gid, {"name": "Agents Kept", "tasks": [make_task("a", outputs=["x"]), chat_agent()],
+                                "edges": []})
+        session = harness_api.create_session(gid, AGENT)
 
         body = _body(client.get(f"/api/graphs/{gid}").json())
         body["name"] = "Agents Kept Renamed"
@@ -63,8 +76,21 @@ class TestRenamingAWorkflow:
         assert saved.status_code == 200
         new_id = saved.json()["id"]
         assert new_id != gid and saved.json()["task_id"] == gid
-        assert [a["name"] for a in client.get(f"/api/graphs/{new_id}/agents").json()["agents"]] == ["Helper"]
+        assert [t["name"] for t in saved.json()["tasks"] if t.get("kind") == "chat_agent"] == ["helper"]
+        assert _sessions(new_id) == [session["id"]]
         _wait_refiled()
+
+    def test_renaming_a_chat_agent_node_keeps_its_conversations(self, studio_data):
+        from backend.features.agents import harness_api
+        client = _client()
+        gid = graphs.create_graph("Node Rename", "")["id"]
+        graphs.save_graph(gid, {"name": "Node Rename", "tasks": [chat_agent("scout")], "edges": []})
+        session = harness_api.create_session(gid, AGENT)
+        body = _body(client.get(f"/api/graphs/{gid}").json())
+        body["tasks"][0]["name"] = "researcher"
+        saved = client.put(f"/api/graphs/{gid}", json=body).json()
+        assert [(t["name"], t["agent_id"]) for t in saved["tasks"]] == [("researcher", AGENT)]
+        assert _sessions(gid) == [session["id"]]
 
     def test_rename_answers_before_its_history_is_refiled_and_lists_it_meanwhile(
             self, studio_data, monkeypatch):
@@ -141,7 +167,8 @@ class TestRenamingAWorkflow:
         from backend.features.agents import harness_api
         gid = graphs.create_graph("Before Restart", "")["id"]
         _history(gid, ["r1"], "b1")
-        harness_api.create_agent(gid, harness_api.AgentSettings(name="Keeper"))
+        graphs.save_graph(gid, {"name": "Before Restart", "tasks": [chat_agent("keeper")], "edges": []})
+        session = harness_api.create_session(gid, AGENT)
         # As a server stopped right after the rename answered leaves it.
         graph = graphs.load_graph(gid)
         graph.update(id="after-restart", name="After Restart", task_id=gid)
@@ -155,7 +182,7 @@ class TestRenamingAWorkflow:
         assert {r["run_id"] for r in runner.list_runs(graph_id="after-restart")} == {"r1"}
         assert graphs.resume_refiles() == [gid]
         assert json.loads((runner.RUNS_DIR / "r1.json").read_text())["graph_id"] == "after-restart"
-        assert [a["name"] for a in harness_api.list_agents("after-restart")["agents"]] == ["Keeper"]
+        assert _sessions("after-restart") == [session["id"]]
         assert not graphs._refile_marker(gid).exists()
 
     def test_renaming_is_refused_while_a_source_watch_runs_and_watch_state_follows(
@@ -217,25 +244,30 @@ class TestSavingAWorkflow:
 class TestApplyingAnEvolveResult:
     def test_an_applied_copy_has_its_own_chat_agents(self, studio_data):
         """The copy took the original's task_id: the two shared Chat Agents,
-        and deleting the copy archived the original's."""
+        and deleting the copy archived the original's. Now the copies carry
+        the Chat Agent node, with conversations of their own."""
         from backend.features.agents import harness_api
         from backend.features.evaluation import evolve_api
         gid = graphs.create_graph("Evolved Source", "")["id"]
         graph = graphs.save_graph(gid, {"name": "Evolved Source", "task_id": "t-original",
-                                        "tasks": [make_task("a", outputs=["x"])], "edges": []})
-        harness_api.create_agent(gid, harness_api.AgentSettings(name="Original's"))
+                                        "tasks": [make_task("a", outputs=["x"]), chat_agent()], "edges": []})
+        session = harness_api.create_session(gid, AGENT)
         persistence.write_json(evolve_api.EVOLVE_DIR / "ev1" / "result.json", {
             "task_id": "ev1", "graph_id": gid, "status": "done", "optimized_graph": graph,
             "diff": [{"name": "a", "changed": True}]})
 
         copy = evolve_api.apply_evolve_result("ev1", mode="new")
         replaced = evolve_api.apply_evolve_result("ev1", mode="replace")
-        assert harness_api.list_agents(copy["id"])["agents"] == []
-        assert harness_api.list_agents(replaced["backup_id"])["agents"] == []
+        backup = graphs.load_graph(replaced["backup_id"])
+        for other in (copy, backup):
+            assert [t["agent_id"] for t in other["tasks"] if t.get("kind") == "chat_agent"] == [AGENT]
+            assert _sessions(other["id"]) == []
+        mine = harness_api.create_session(copy["id"], AGENT)
+        assert _sessions(copy["id"]) == [mine["id"]] and _sessions(gid) == [session["id"]]
         graphs.delete_graph(copy["id"])
         graphs.delete_graph(replaced["backup_id"])
         _wait_refiled()
-        assert [a["name"] for a in harness_api.list_agents(gid)["agents"]] == ["Original's"]
+        assert _sessions(gid) == [session["id"]]
 
     def test_the_evolve_list_does_not_parse_every_result_on_every_call(self, studio_data, monkeypatch):
         from backend.features.evaluation import evolve_api

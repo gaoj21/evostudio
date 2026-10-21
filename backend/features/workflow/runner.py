@@ -459,7 +459,10 @@ def start_run(graph: dict, inputs: dict, background: bool = True, gray_zone=None
     record_index: which of the source's records this run takes. A source that
     yields several used to hand over the first one without saying so.
     """
-    graph = copy.deepcopy(graph)
+    from backend.features.agents.chat_agents import workflow_only
+    # Chat Agents are chatted with, never run: the run and its snapshot are
+    # of the workflow without them.
+    graph = workflow_only(copy.deepcopy(graph))
     if start_at:
         tasks, edges = graph_store_subgraph(graph, start_at)
         graph = {**graph, "tasks": tasks, "edges": edges}

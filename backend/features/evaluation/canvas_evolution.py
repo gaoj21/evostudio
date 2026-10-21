@@ -281,7 +281,7 @@ def settings(graph, body):
             f"Canvas candidate replay requires isolated memory, and '{shared[0]}' {shared[1]} shared Mem0 memory"
             f"{'' if shared[2] == shared[0] else f' of {shared[2]!r}'}. Candidates would read and write the same store, "
             'so their scores would not be comparable. Switch those nodes to table or local memory, or evaluate saved results instead.')
-    available = [t['name'] for t in graph['tasks'] if t.get('kind') not in ('source', 'tool')]
+    available = [t['name'] for t in graph['tasks'] if t.get('kind') not in ('source', 'tool', 'chat_agent')]
     chosen = [] if mode == 'evaluate' else body.get('nodes', available)
     if not isinstance(chosen, list) or any(n not in available for n in chosen) or (mode != 'evaluate' and not chosen):
         raise SourceError('Choose valid prompt nodes to optimize.')

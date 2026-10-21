@@ -93,9 +93,9 @@ def create_task(project_id: str, body: TaskInput):
         graphs.delete_graph(graph['id']);raise
 
 
-def memory_uses(graph, agents):
-    """Every Mem0 space the task refers to, with where: canvas, node or Agent."""
-    from backend.api import harness_api
+def memory_uses(graph):
+    """Every Mem0 space the task refers to, with where: canvas, node or Chat Agent."""
+    from backend.features.agents.chat_agents import is_chat_agent, space_of
     uses = []
     for resource in graph.get('memory_resources') or []:
         uses.append((resource.get('space_id'), {'kind': 'canvas', 'name': resource.get('name')}))
@@ -103,13 +103,13 @@ def memory_uses(graph, agents):
         policy = task.get('memory') or {}
         if policy.get('provider') == 'mem0' and policy.get('space_id'):
             uses.append((policy['space_id'], {'kind': 'node', 'name': task.get('name')}))
-    for agent in agents:
-        for binding in agent.get('memories') or []:
-            uses.append((harness_api.space_of(binding), {'kind': 'agent', 'name': agent.get('name'), 'agent_id': agent.get('id')}))
+        if is_chat_agent(task):
+            for binding in task.get('memories') or []:
+                uses.append((space_of(binding), {'kind': 'agent', 'name': task.get('name'), 'agent_id': task.get('agent_id')}))
     return [(space_id, use) for space_id, use in uses if space_id]
 
 
-def lost_memory_bindings(graph, moved, agents):
+def lost_memory_bindings(graph, moved):
     """Mem0 spaces this task uses now that it could not reach after the move.
 
     Shared memory is scoped to a project (or to an unassigned task), so a
@@ -119,20 +119,20 @@ def lost_memory_bindings(graph, moved, agents):
     before, after = mem0_service.scope(graph), mem0_service.scope(moved)
     if before == after: return []
     lost = []
-    for space_id, use in memory_uses(graph, agents):
+    for space_id, use in memory_uses(graph):
         record = mem0_service.space_record(space_id)
         if record and record.get('scope') == before:
             lost.append({**use, 'space_id': space_id, 'space': record.get('name') or space_id})
     return lost
 
 
-def unreachable_memory_bindings(graph, copied, agents):
+def unreachable_memory_bindings(graph, copied):
     """Mem0 spaces a copy could not use. A copy is a new task: whatever its
     scope cannot reach is listed, since its Agents could not be created with it."""
     from backend.api import mem0_service
     scope = mem0_service.scope(copied)
     lost = []
-    for space_id, use in memory_uses(graph, agents):
+    for space_id, use in memory_uses(graph):
         record = mem0_service.space_record(space_id)
         if not record or record.get('scope') != scope:
             lost.append({**use, 'space_id': space_id, 'space': (record or {}).get('name') or space_id})
@@ -145,8 +145,11 @@ def _destination_name(project_id):
 
 def detach_memory_bindings(graph, space_ids):
     """The graph without these spaces, unbound the way the canvas unbinds them."""
+    from backend.features.agents.chat_agents import is_chat_agent, space_of
     tasks = []
     for task in graph.get('tasks') or []:
+        if is_chat_agent(task):
+            task = {**task, 'memories': [m for m in task.get('memories') or [] if space_of(m) not in space_ids]}
         policy = task.get('memory') or {}
         if policy.get('provider') == 'mem0' and policy.get('space_id') in space_ids:
             policy = {k: v for k, v in policy.items() if k != 'space_id'}
@@ -164,14 +167,13 @@ def assign_task(project_id: str, graph_id: str, detach: bool = False):
     """Move a task. Shared memory it uses from the old project stays there:
     without `detach` the move is refused (409) with the bindings it would
     lose; with it they are removed and listed under `detached`."""
-    from backend.api import harness_api
     if project_id != 'unassigned': get_project(project_id)
     if not re.fullmatch(r"[a-z0-9_-]+", graph_id): raise HTTPException(404, "Task not found")
     with _lock:
         graph=graphs.load_graph(graph_id)
         if not graph:raise HTTPException(404,'Task not found')
         moved={**graph,'project_id':None if project_id == 'unassigned' else project_id,'task_id':graph.get('task_id') or graph['id']}
-        lost=lost_memory_bindings(graph, moved, harness_api.list_agents(graph_id)['agents'])
+        lost=lost_memory_bindings(graph, moved)
         if lost and not detach:
             destination = _destination_name(project_id)
             raise HTTPException(409, {
@@ -179,7 +181,6 @@ def assign_task(project_id: str, graph_id: str, detach: bool = False):
                 'destination': destination, 'bindings': lost})
         space_ids={item['space_id'] for item in lost}
         saved=graphs.save_graph(graph_id, detach_memory_bindings(moved, space_ids) if space_ids else moved)
-        if space_ids: harness_api.detach_spaces(moved, space_ids)
     return {**saved, 'detached': lost}
 
 
@@ -208,15 +209,13 @@ def copy_task(project_id: str, graph_id: str, detach: bool = False):
     `detach` the copy is refused (409) with those bindings; with it the copy
     is made without them and they are listed under `detached`."""
     import copy
-    from backend.api import harness_api
     if project_id != 'unassigned': get_project(project_id)
     if not re.fullmatch(r'[a-z0-9_-]+', graph_id): raise HTTPException(404, 'Task not found')
     original = graphs.load_graph(graph_id)
     if not original: raise HTTPException(404, 'Task not found')
-    agents = harness_api.list_agents(graph_id)['agents']
     task_id = uuid.uuid4().hex
     target = {**original, 'project_id': None if project_id == 'unassigned' else project_id, 'task_id': task_id}
-    lost = unreachable_memory_bindings(original, target, agents)
+    lost = unreachable_memory_bindings(original, target)
     if lost and not detach:
         destination = _destination_name(project_id)
         raise HTTPException(409, {
@@ -227,15 +226,11 @@ def copy_task(project_id: str, graph_id: str, detach: bool = False):
     created = graphs.create_graph(name, original.get('goal', ''))
     try:
         body = {**copy.deepcopy(target), 'id': created['id'], 'name': name}
+        # Its Chat Agents come along as nodes; the copy's own task_id keys
+        # their conversations apart from the original's.
         cloned = graphs.save_graph(created['id'], detach_memory_bindings(body, space_ids) if space_ids else body)
-        for agent in agents:
-            settings = {k:v for k,v in agent.items() if k in harness_api.AgentSettings.model_fields}
-            settings['memories'] = [m for m in settings.get('memories') or [] if harness_api.space_of(m) not in space_ids]
-            harness_api.create_agent(cloned['id'], harness_api.AgentSettings(**settings))
         return {**cloned, 'detached': lost}
     except Exception:
         # No partial task should appear after an unsuccessful copy.
-        for agent in harness_api.list_agents(created['id'])['agents']:
-            harness_api.remove_agent(created['id'], agent['id'])
         graphs.delete_graph(created['id'])
         raise

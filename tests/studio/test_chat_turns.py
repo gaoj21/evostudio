@@ -113,7 +113,9 @@ def test_inline_requests_are_unchanged(monkeypatch):
 def test_harness_turn_finishes_after_the_client_goes_away(tmp_path, monkeypatch):
     from backend.api import harness_api as api
     monkeypatch.setattr(api, 'data_path', lambda *p: tmp_path.joinpath(*p))
-    monkeypatch.setattr(api.graphs, 'load_graph', lambda id: {'id': id} if id == 'a' else None)
+    agent = {'id': 'ab' * 16}
+    monkeypatch.setattr(api.graphs, 'load_graph', lambda id: {'id': id, 'tasks': [
+        {'name': 'helper', 'kind': 'chat_agent', 'agent_id': agent['id']}]} if id == 'a' else None)
     monkeypatch.setattr(api.harness, 'make_model', lambda provider: object())
     release = threading.Event()
 
@@ -125,7 +127,6 @@ def test_harness_turn_finishes_after_the_client_goes_away(tmp_path, monkeypatch)
     app = FastAPI()
     app.include_router(api.router)
     with TestClient(app) as client:
-        agent = client.post('/api/graphs/a/agents', json={}).json()
         path = f'/api/graphs/a/agents/{agent["id"]}/sessions'
         session = client.post(path).json()
         assert client.post(f'{path}/{session["id"]}/messages', json={'message': 'research'}).status_code == 202

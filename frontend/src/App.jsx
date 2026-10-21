@@ -20,7 +20,7 @@ import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panel
 import ChatAgentNode from './features/agents/ChatAgentNode.jsx';
 import ResourceMenu from './components/ResourceMenu.jsx';
 import ChatAgentInspector from './features/agents/ChatAgentInspector.jsx';
-import { useCanvasAgents, isChatNode, chatNodeId, memoryId, memoryBinding } from './features/agents/useCanvasAgents.js';
+import { isChatAgent, chatAgentEdges, memoryId, newChatAgentNode, setMemory } from './features/agents/chatAgents.js';
 import MemoryResourceInspector from './features/memory/MemoryResourceInspector.jsx';
 import { connectMemory, disconnectMemory, removeMemoryReferences, renameMemoryReferences } from './features/memory/memoryConnections.js';
 import { connectEdge, graphToFlow, flowToGraph, uniqueName, memoryOverlay, isMemoryId } from './features/canvas/convert.js';
@@ -45,7 +45,7 @@ import ConnectionEditor from './features/canvas/ConnectionEditor.jsx';
 import { memorySiblings } from './features/memory/MemorySettings.jsx';
 import RunDialog from './features/execution/RunDialog.jsx';
 import MemoryNode from './features/memory/MemoryNode.jsx';
-import { RESET_MEMORY_KEYS, UNDO_KEYS, describeMemoryAction, isResetMemoryShortcut, resetMemoryConfirmation } from './shortcuts.js';
+import { RESET_MEMORY_KEYS, describeMemoryAction, isResetMemoryShortcut, resetMemoryConfirmation } from './shortcuts.js';
 import { DELETE_WORKFLOW_TEXT } from './features/workspace/workflowDelete.js';
 import MemoryPanel from './features/memory/MemoryPanel.jsx';
 import EvolvePanel from './features/evaluation/EvolvePanel.jsx';
@@ -119,9 +119,6 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
   const [graph, setGraph] = useState(null); // {id, name, goal}
   const graphRef = useRef(graph);
   graphRef.current = graph;
-  const reportAgentError = useCallback(e => setErrors(extractErrors(e)), []);
-  const canvasAgents = useCanvasAgents(graph?.id, reportAgentError);
-  const followAgents = canvasAgents.follow;
   
   const [spaceNames, setSpaceNames] = useState({});
   useEffect(() => {
@@ -329,12 +326,12 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
   const SETTLE_MS = 350;
 
   const historyTimer = useRef(null);
-  const snapshot = (meta, n, e) => ({ scope: meta?.id, nodes: n, edges: e, agents: canvasAgents.loaded ? canvasAgents.agents : undefined, meta: {
+  const snapshot = (meta, n, e) => ({ scope: meta?.id, nodes: n, edges: e, meta: {
     name: meta?.name, goal: meta?.goal, output_dir: meta?.output_dir,
     preprocess: meta?.preprocess, memory_resources: meta?.memory_resources || [],
     memory_positions: meta?.memory_positions || {},
   } });
-  const fingerprint = value => JSON.stringify({graph: flowToGraph(value.meta, value.nodes, value.edges), agents: value.agents});
+  const fingerprint = value => JSON.stringify(flowToGraph(value.meta, value.nodes, value.edges));
   const currentSnapshot = useRef(null);
   currentSnapshot.current = snapshot(graph, nodes, edges);
   const resetHistory = useCallback((n, e, meta) => {
@@ -355,7 +352,6 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
       h.last = current;
       return undefined;
     }
-    if (h.last.agents === undefined && current.agents !== undefined) h.last = {...h.last, agents: current.agents};
     if (fingerprint(h.last) === fingerprint(current)) return undefined;
     historyTimer.current = setTimeout(() => {
       h.past.push(h.last);
@@ -364,7 +360,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
       h.last = current;
     }, SETTLE_MS);
     return () => clearTimeout(historyTimer.current);
-  }, [nodes, edges, graph, canvasAgents.agents, canvasAgents.loaded]);
+  }, [nodes, edges, graph]);
 
   useEffect(() => {
     if (!graph || cleanRef.current === null) return;
@@ -378,10 +374,8 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
     setDirty(current !== cleanRef.current);
   }, [graph, nodes, edges]);
 
-  const restoringCanvas = useRef(false);
   const restore = useCallback(
-    async (from, to) => {
-      if (restoringCanvas.current) return;
+    (from, to) => {
       const h = history.current;
       clearTimeout(historyTimer.current);
       // Flush an edit immediately: undo must work before the debounce expires.
@@ -393,12 +387,6 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
       }
       if (!h[from].length) return;
       const saved = h[from][h[from].length - 1];
-      if (saved.agents !== undefined && JSON.stringify(saved.agents) !== JSON.stringify(current.agents)) {
-        restoringCanvas.current = true;
-        try { await canvasAgents.restore(saved.agents); }
-        catch (error) { setErrors(extractErrors(error)); return; }
-        finally { restoringCanvas.current = false; }
-      }
       if (graphRef.current?.id !== current.scope) return;
       h[to].push(h.last);
       h[from].pop();
@@ -410,7 +398,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
       setEditingConnection(null);
       setSelectedId(null);
     },
-    [setNodes, setEdges, canvasAgents.restore]
+    [setNodes, setEdges]
   );
 
   const undo = useCallback(() => restore('past', 'future'), [restore]);
@@ -548,7 +536,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
 
   const onNodesChange = useCallback(
     (changes) => {
-      const dimensions = changes.filter(c => (isMemoryId(c.id) || isChatNode(c.id)) && c.type === 'dimensions' && c.dimensions);
+      const dimensions = changes.filter(c => isMemoryId(c.id) && c.type === 'dimensions' && c.dimensions);
       if (dimensions.length) setResourceMeasurements(previous => {
         let next = previous;
         for (const c of dimensions) {
@@ -561,12 +549,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
       });
       const positions = changes.filter(c => isMemoryId(c.id) && c.type === 'position' && c.position);
       if (positions.length) setGraph(g => ({ ...g, memory_positions: { ...(g.memory_positions || {}), ...Object.fromEntries(positions.map(c => [c.id, c.position])) } }));
-      const chatChanges = changes.filter(c => isChatNode(c.id) && c.type === 'position' && c.position);
-      if (chatChanges.length) canvasAgents.setAgents(list => list.map(a => {
-        const change = chatChanges.find(c => c.id === chatNodeId(a.id) && c.type === 'position' && c.position);
-        return change ? { ...a, ...change.position } : a;
-      }));
-      changes = changes.filter(c => !isMemoryId(c.id) && !isChatNode(c.id));
+      changes = changes.filter(c => !isMemoryId(c.id));
       if (!changes.length) return;
       const removed = changes.filter((c) => c.type === 'remove').map((c) => c.id);
       if (removed.length) {
@@ -879,7 +862,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
         const clean = cleanRef.current === JSON.stringify(flowToGraph(graph, nodesRef.current, edgesRef.current));
         const renamed = await api.renameGraph(graph.id, name);
         const meta = { ...graphRef.current, id: renamed.id, name: renamed.name };
-        if (renamed.id !== graph.id) { renameChatHistory(graph.id, renamed.id); followAgents(renamed.id); }
+        if (renamed.id !== graph.id) renameChatHistory(graph.id, renamed.id);
         setResourceMeasurements({});
         graphRef.current = meta;
         setGraph(meta);
@@ -891,7 +874,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
         setErrors(extractErrors(err));
       }
     })());
-  }, [markClean, refreshList, followAgents]);
+  }, [markClean, refreshList]);
 
   const saveCurrent = useCallback(() => {
     if (saveFlight.current) return saveFlight.current;
@@ -909,10 +892,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
       // Renaming a workflow renames its identity too, so the id that comes back
       // may not be the one that went out. Everything downstream — run history,
       // the workspace, exports — is keyed on it, so follow it.
-      if (saved.id !== graph.id) {
-        renameChatHistory(graph.id, saved.id);
-        if (graphRef.current?.id === graph.id) followAgents(saved.id);
-      }
+      if (saved.id !== graph.id) renameChatHistory(graph.id, saved.id);
       const fromServer = { id: saved.id, name: saved.name, goal: saved.goal || '',
                            output_dir: saved.output_dir || 'runs',
                            preprocess: saved.preprocess || null };
@@ -935,7 +915,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
       refreshList();
       return meta;
     })());
-  }, [refreshList, markClean, followAgents]);
+  }, [refreshList, markClean]);
 
   const onSaveRef = useRef(null);
 
@@ -1079,15 +1059,6 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
     () => flowToGraph(graph, nodes, edges),
     [graph, nodes, edges]
   );
-  // The assistant also sees the Chat Agents on the canvas, to address them by
-  // name. They are not part of the workflow graph and are never saved in it.
-  const assistantSnapshot = useCallback(
-    () => ({ ...flowToGraph(graph, nodes, edges),
-      canvas_agents: canvasAgents.agents.map(({ id, name, instructions, provider, max_steps, timeout, toolkits, tools, skill_names, memories, x, y }) =>
-        ({ id, name, instructions, provider, max_steps, timeout, toolkits, tools, skill_names, memories, x, y })) }),
-    [graph, nodes, edges, canvasAgents.agents]
-  );
-
   const openPastRun = useCallback(
     async (listedRun) => {
       closeOverlay();
@@ -1269,139 +1240,38 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
   // Where a node-major batch is, said in node terms, for the badge and the
   // drawer: "node 3/8 · detect · 120/275". Null for a record-major batch.
   const batchStageText = stageText(batch);
-  const removeCanvasResource = useCallback(async id => {
-    const origin = graph?.id;
-    try {
-      if (isChatNode(id)) {
-        const agentId = id.slice('chat:'.length);
-        const name = canvasAgents.agents.find(a => a.id === agentId)?.name || agentId;
-        await canvasAgents.remove(agentId);
-        if (graphRef.current?.id === origin) {
-          // No dialog: the removal is undoable, and this says how.
-          const notice = {
-            text: `Chat Agent '${name}' removed. Undo with ${UNDO_KEYS}, or:`,
-            actionLabel: 'Undo',
-            onAction: async () => {
-              setNotices(current => current?.filter(n => n !== notice) || null);
-              try { await canvasAgents.unarchive(agentId); } catch (e) { reportAgentError(e); }
-            },
-          };
-          setNotices([notice]);
-        }
-      } else {
-        const resource = memoryOverlay(nodesRef.current, { resources: graph?.memory_resources || [] }).memNodes.find(n => n.id === id);
-        if (!resource) return;
-        for (const agent of canvasAgents.agents.filter(a => a.memories.some(m => memoryId(m) === id))) {
-          await canvasAgents.save(agent, current => ({ memories: current.memories.filter(m => memoryId(m) !== id) }));
-        }
-        if (graphRef.current?.id !== origin) return;
-        setNodes(nds => {
-          const related = memoryOverlay(nds, { resources: graph?.memory_resources || [] }).memEdges.filter(e => e.data.resource === id);
-          return related.reduce((current, edge) => disconnectMemory(current, edge), nds).map(n => {
-            const owns = resource.data.kind === 'mem0'
-              ? n.data.memory?.provider === 'mem0' && n.data.memory.space_id === resource.data.space_id
-              : n.id === resource.data.owner;
-            return owns ? { ...n, data: { ...n.data, use_long_term_memory: false,
-              memory: { ...n.data.memory, read_enabled: false, write_enabled: false, ...(resource.data.kind === 'mem0' ? { space_id: undefined } : {}) } } } : n;
-          });
-        });
-        setGraph(g => ({ ...g, memory_resources: (g.memory_resources || []).filter(r => r.space_id !== resource.data.space_id) }));
-      }
-      if (graphRef.current?.id !== origin) return;
-      setSelectedId(selected => selected === id ? null : selected);
-      setInspectorParent(parent => parent === id ? null : parent);
-      setSelectedMemoryEdges(new Set());
-    } catch (e) { reportAgentError(e); }
-  }, [graph?.id, graph?.memory_resources, canvasAgents.remove, canvasAgents.unarchive, canvasAgents.save, canvasAgents.agents, setNodes, reportAgentError]);
-  // Chat Agent changes the assistant made, carried out through the same
-  // calls the canvas's own controls use, so the harness store and the canvas
-  // agree. Returns what could not be done, for the chat to show, and how to
-  // take back what was done, for its Undo.
-  const applyAgentActions = useCallback(async actions => {
-    const failed = [];
-    const undo = [];
-    // The Agents as this batch leaves them: a later action may address an
-    // Agent an earlier one created, or change one an earlier one changed.
-    const known = new Map(canvasAgents.current().map(a => [a.id, a]));
-    let created = null;
-    const verb = { create: 'created', remove: 'removed', update: 'updated' };
-    for (const action of actions || []) {
-      const agent = known.get(action.id);
-      const label = agent?.name || action.name || action.settings?.name || action.id;
-      try {
-        if (action.action === 'create') {
-          const made = await canvasAgents.create({ ...(action.settings || {}), id: action.id });
-          known.set(made.id, made);
-          created = made;
-          undo.push({ action: 'create', id: made.id, name: made.name });
-          continue;
-        }
-        if (!agent) throw new Error('it is no longer on the canvas');
-        if (action.action === 'remove') {
-          await canvasAgents.remove(agent.id);
-          known.delete(agent.id);
-          if (created?.id === agent.id) created = null;
-          undo.push({ action: 'remove', id: agent.id, name: agent.name });
-          const nodeId = chatNodeId(agent.id);
-          setSelectedId(selected => selected === nodeId ? null : selected);
-          setInspectorParent(parent => parent === nodeId ? null : parent);
-        } else if (action.action === 'update') {
-          const patch = action.patch || {};
-          const saved = await canvasAgents.save(agent, patch);
-          known.set(agent.id, saved || { ...agent, ...patch });
-          undo.push({ action: 'update', id: agent.id, name: agent.name,
-            previous: Object.fromEntries(Object.keys(patch).map(key => [key, agent[key] === undefined ? null : agent[key]])) });
-        }
-      } catch (e) {
-        failed.push(`Chat Agent '${label}' was not ${verb[action.action] || 'changed'}: ${e?.body?.detail || e.message}`);
-      }
-    }
-    // A new Agent is shown and selected, as the Library's button does.
-    if (created && known.has(created.id)) {
-      const shown = known.get(created.id);
-      openNodeInspector(null, { id: chatNodeId(shown.id) });
-      setCenter(shown.x + 130, shown.y + 60, { zoom: 0.85, duration: 200 });
-    }
-    return { failed, undo };
-  }, [canvasAgents.current, canvasAgents.create, canvasAgents.remove, canvasAgents.save, openNodeInspector, setCenter]);
-  // The chat's Undo for those changes, newest first: a removed Agent comes
-  // back (with its sessions), an updated one gets its previous settings and
-  // a created one is removed again (archived, like any removal).
-  const undoAgentActions = useCallback(async entries => {
-    const failed = [];
-    const present = new Set(canvasAgents.current().map(a => a.id));
-    const verb = { create: 'removed', remove: 'restored', update: 'reverted' };
-    for (const entry of [...(entries || [])].reverse()) {
-      const label = entry.name || entry.id;
-      try {
-        if (entry.action === 'remove') {
-          await canvasAgents.unarchive(entry.id);
-          present.add(entry.id);
-        } else if (entry.action === 'create') {
-          if (present.has(entry.id)) await canvasAgents.remove(entry.id);
-          present.delete(entry.id);
-          const nodeId = chatNodeId(entry.id);
-          setSelectedId(selected => selected === nodeId ? null : selected);
-          setInspectorParent(parent => parent === nodeId ? null : parent);
-        } else if (entry.action === 'update') {
-          if (!present.has(entry.id)) throw new Error('it is no longer on the canvas');
-          await canvasAgents.save({ id: entry.id }, () => entry.previous || {});
-        }
-      } catch (e) {
-        failed.push(`Chat Agent '${label}' was not ${verb[entry.action] || 'reverted'}: ${e?.body?.detail || e.message}`);
-      }
-    }
-    return failed;
-  }, [canvasAgents.current, canvasAgents.unarchive, canvasAgents.remove, canvasAgents.save]);
+  // A Chat Agent is deleted like any node. A memory drops out of every node
+  // bound to it, Chat Agents included; all of it on the canvas, undoable.
+  const removeCanvasResource = useCallback(id => {
+    if (nodesRef.current.some(n => n.id === id && isChatAgent(n))) { deleteNode(id); return; }
+    const resource = memoryOverlay(nodesRef.current, { resources: graph?.memory_resources || [] }).memNodes.find(n => n.id === id);
+    if (!resource) return;
+    setNodes(nds => {
+      const related = memoryOverlay(nds, { resources: graph?.memory_resources || [] }).memEdges.filter(e => e.data.resource === id);
+      return related.reduce((current, edge) => disconnectMemory(current, edge), nds).map(n => {
+        if (isChatAgent(n)) return (n.data.memories || []).some(m => memoryId(m) === id)
+          ? { ...n, data: { ...n.data, memories: n.data.memories.filter(m => memoryId(m) !== id) } } : n;
+        const owns = resource.data.kind === 'mem0'
+          ? n.data.memory?.provider === 'mem0' && n.data.memory.space_id === resource.data.space_id
+          : n.id === resource.data.owner;
+        return owns ? { ...n, data: { ...n.data, use_long_term_memory: false,
+          memory: { ...n.data.memory, read_enabled: false, write_enabled: false, ...(resource.data.kind === 'mem0' ? { space_id: undefined } : {}) } } } : n;
+      });
+    });
+    setGraph(g => ({ ...g, memory_resources: (g.memory_resources || []).filter(r => r.space_id !== resource.data.space_id) }));
+    setSelectedId(selected => selected === id ? null : selected);
+    setInspectorParent(parent => parent === id ? null : parent);
+    setSelectedMemoryEdges(new Set());
+  }, [graph?.memory_resources, setNodes, deleteNode]);
   const memoryNodes = useMemo(() => {
     if (!showMemory) return [];
     const wrote = {};
     (run?.memory_written || []).forEach((w) => { wrote[w.node] = (wrote[w.node] || 0) + 1; });
     return memoryOverlay(nodes, { wrote, resources: graph?.memory_resources || [], positions: graph?.memory_positions || {}, spaceNames }).memNodes.map(n => {
-      const connections = canvasAgents.agents.flatMap(a => a.memories.filter(m => memoryId(m) === n.id).map(m => ({ ...m, agent: chatNodeId(a.id) })));
+      const connections = nodes.filter(isChatAgent).flatMap(a => (a.data.memories || []).filter(m => memoryId(m) === n.id).map(m => ({ ...m, agent: a.id })));
       return { ...resourceGeometry(n, resourceMeasurements[n.id]), data: { ...n.data, readers: [...n.data.readers, ...connections.filter(m => m.read).map(m => m.agent)], writers: [...n.data.writers, ...connections.filter(m => m.write).map(m => m.agent)], onDelete: removeCanvasResource, runMode }, measured: resourceMeasurements[n.id], selected: n.id === selectedId };
     });
-  }, [nodes, selectedId, showMemory, spaceNames, resourceMeasurements, canvasAgents.agents, removeCanvasResource, runMode, run?.memory_written, graph?.memory_resources, graph?.memory_positions]);
+  }, [nodes, selectedId, showMemory, spaceNames, resourceMeasurements, removeCanvasResource, runMode, run?.memory_written, graph?.memory_resources, graph?.memory_positions]);
   useEffect(() => {
     if (!memoryFocus) return;
     const resource = memoryNodes.find(n => n.id === memoryFocus);
@@ -1414,20 +1284,20 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
     fitView({ nodes: memoryNodes.map(n => ({ id: n.id })), padding: 0.3, duration: 200, maxZoom: 1 });
     setLocatingMemories(false);
   }, [locatingMemories, memoryNodes, fitView]);
-  const canvasNodes = useMemo(() => [...displayNodes, ...memoryNodes, ...canvasAgents.nodes.map(n => ({ ...resourceGeometry(n, resourceMeasurements[n.id]), data: { ...n.data, onDelete: removeCanvasResource, runMode }, measured: resourceMeasurements[n.id], selected: n.id === selectedId }))], [displayNodes, memoryNodes, canvasAgents.nodes, selectedId, resourceMeasurements, removeCanvasResource, runMode]);
+  const canvasNodes = useMemo(() => [...displayNodes, ...memoryNodes], [displayNodes, memoryNodes]);
   const fittedResourceGraph = useRef(null);
   // The opening fit-to-graph has happened: following the running node before
   // it would be undone by it.
   const [fittedGraph, setFittedGraph] = useState(null);
   useEffect(() => {
-    if (!graph?.id || !canvasAgents.loaded || fittedResourceGraph.current === graph.id) return undefined;
+    if (!graph?.id || fittedResourceGraph.current === graph.id) return undefined;
     const frame = requestAnimationFrame(() => {
       fitView({padding:0.2, maxZoom:1});
       fittedResourceGraph.current = graph.id;
       setFittedGraph(graph.id);
     });
     return () => cancelAnimationFrame(frame);
-  }, [graph?.id, canvasAgents.loaded, canvasNodes, fitView]);
+  }, [graph?.id, canvasNodes, fitView]);
 
   // The camera follows the node that is working now, so it is always in
   // view. Moving the canvas by hand stops the following until the next run —
@@ -1460,21 +1330,24 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
     };
     return flowEdges(displayEdges, statusOf, active);
   }, [displayEdges, displayNodes, runMode, batch, run]);
-  const chatAgent = canvasAgents.agents.find(a => chatNodeId(a.id) === selectedId);
-  const chatEdges = showMemory ? canvasAgents.edges.filter(e => memoryNodes.some(n => n.id === e.source || n.id === e.target)).map(e => ({ ...e, selected: selectedMemoryEdges.has(e.id), deletable: true })) : [];
+  const chatAgent = nodes.find(n => n.id === selectedId && isChatAgent(n)) || null;
+  const chatEdges = showMemory ? chatAgentEdges(nodes).filter(e => memoryNodes.some(n => n.id === e.source || n.id === e.target)).map(e => ({ ...e, selected: selectedMemoryEdges.has(e.id), deletable: true })) : [];
+  const isChatId = id => nodesRef.current.some(n => n.id === id && isChatAgent(n));
+  const updateMemories = (id, change) => setNodes(nds => nds.map(n => n.id === id && isChatAgent(n)
+    ? { ...n, data: { ...n.data, memories: change(n.data.memories || []) } } : n));
   const connectCanvas = conn => {
-    if (!isChatNode(conn.source) && !isChatNode(conn.target)) return onConnect(conn);
-    const read = isChatNode(conn.target);
+    if (!isChatId(conn.source) && !isChatId(conn.target)) return onConnect(conn);
+    if (!isMemoryId(conn.source) && !isMemoryId(conn.target)) { setErrors(['A Chat Agent does not take part in runs: connect it to a memory, not to another node.']); return; }
+    const read = isChatId(conn.target);
     const id = read ? conn.target : conn.source;
     const resourceId = read ? conn.source : conn.target;
     const resource = memoryOverlay(nodesRef.current, { resources: graph?.memory_resources || [] }).memNodes.find(n => n.id === resourceId);
     if (!resource) { setErrors(['Connect Chat to an existing Memory resource.']); return; }
     if (!read && resource.data.kind !== 'mem0') { setErrors(['This history is written by its workflow Agent. Chat can read it; use a shared Memory for Chat writes.']); return; }
-    const agent = canvasAgents.agents.find(a => chatNodeId(a.id) === id);
-    canvasAgents.save(agent, current => {
-      const previous = current.memories.find(m => memoryId(m) === resourceId) || { ...memoryBinding(resourceId), read: false, write: false };
-      return { memories: [...current.memories.filter(m => memoryId(m) !== resourceId), { ...previous, [read ? 'read' : 'write']: true, [read ? 'read_source_handle' : 'write_source_handle']: conn.sourceHandle || (read ? 's-out' : 'out'), [read ? 'read_target_handle' : 'write_target_handle']: conn.targetHandle || (read ? 'in' : 's-in') }] };
-    }).catch(reportAgentError);
+    updateMemories(id, memories => setMemory(memories, resourceId, read ? 'read' : 'write', true, {
+      [read ? 'read_source_handle' : 'write_source_handle']: conn.sourceHandle || (read ? 's-out' : 'out'),
+      [read ? 'read_target_handle' : 'write_target_handle']: conn.targetHandle || (read ? 'in' : 's-in') }));
+    setErrors(null);
   };
   const changeCanvasEdges = changes => {
     setSelectedMemoryEdges(current => {
@@ -1488,13 +1361,21 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
     for (const change of changes) {
       const edge = chatEdges.find(e => e.id === change.id);
       if (edge && change.type === 'remove') {
-        const agent = canvasAgents.agents.find(a => a.id === edge.data.chatAgent);
-        canvasAgents.save(agent, current => ({ memories: current.memories.map(m => memoryId(m) === edge.data.space ? { ...m, [edge.data.direction]: false } : m).filter(m => m.read || m.write) })).catch(reportAgentError);
+        updateMemories(edge.data.chatAgent, memories => setMemory(memories, edge.data.space, edge.data.direction, false));
       }
     }
     onEdgesChange(changes.filter(c => !chatEdges.some(e => e.id === c.id)));
   };
 
+  // The Chat Agent as last saved (matched by agent_id, so a rename since is
+  // still the same Agent): conversations run with these settings.
+  const savedChatAgent = node => {
+    try {
+      const saved = JSON.parse(cleanRef.current || 'null');
+      const task = (saved?.tasks || []).find(t => t.kind === 'chat_agent' && t.agent_id === node.data.agent_id);
+      return task ? { ...task, name: task.name } : null;
+    } catch { return null; }
+  };
   const selectedMemory = memoryOverlay(nodes, { resources: graph?.memory_resources || [], positions: graph?.memory_positions || {}, spaceNames }).memNodes.find(n => n.id === selectedId);
   const selectedNode = nodes.find((n) => n.id === selectedId) || null;
 
@@ -1546,15 +1427,12 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
           <div className="library-resources">
             <div className="library-heading"><span className="library-eyebrow">BUILD YOUR WORKFLOW</span><h2>Library</h2><p>Everything you need to start building.</p></div>
             <div className="library-resource-actions">
-          <button className="library-resource-action library-chat-action" aria-label="+ Add Chat Agent" type="button" disabled={!graph?.id || canvasAgents.busy} onClick={async () => {
-            try {
-              const origin = graph?.id;
-              const agent = await canvasAgents.add();
-              if (graphRef.current?.id !== origin) return;
-              openNodeInspector(null, { id: chatNodeId(agent.id) });
-              setCenter(agent.x + 130, agent.y + 60, { zoom: 0.85, duration: 200 });
-            } catch (e) { reportAgentError(e); }
-          }}><span className="library-resource-icon" aria-hidden="true">◌</span><span><strong>{canvasAgents.busy ? 'Adding Agent…' : 'Chat Agent'}</strong><small>An independent conversation</small></span><span className="library-add" aria-hidden="true">+</span></button>
+          <button className="library-resource-action library-chat-action" aria-label="+ Add Chat Agent" type="button" disabled={runMode || !graph?.id} onClick={() => {
+            const node = newChatAgentNode(nodesRef.current);
+            setNodes(nds => [...nds, node]);
+            openNodeInspector(null, { id: node.id });
+            setCenter(node.position.x + 130, node.position.y + 60, { zoom: 0.85, duration: 200 });
+          }}><span className="library-resource-icon" aria-hidden="true">◌</span><span><strong>Chat Agent</strong><small>An independent conversation</small></span><span className="library-add" aria-hidden="true">+</span></button>
           <button className="library-resource-action library-memory-action" aria-label="+ Add shared memory" type="button" disabled={runMode || !graph?.id || creatingMemory} onClick={addSharedMemory}><span className="library-resource-icon" aria-hidden="true">▤</span><span><strong>{creatingMemory ? 'Adding memory…' : 'Shared memory'}</strong><small>Knowledge your Agents can share</small></span><span className="library-add" aria-hidden="true">+</span></button>
           </div>
           {memoryOverlay(nodes, { resources: graph?.memory_resources || [] }).memNodes.length > 0 && <button className="library-locate" type="button" onClick={() => {
@@ -1579,7 +1457,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
         { label: 'Open settings', action: () => openNodeInspector(null, canvasMenu.node) },
         { label: 'Remove from canvas', danger: true, disabled: runMode, action: () => {
           const id = canvasMenu.node.id;
-          if (isChatNode(id) || isMemoryId(id)) removeCanvasResource(id); else deleteNode(id);
+          if (isMemoryId(id)) removeCanvasResource(id); else deleteNode(id);
         } },
       ] : [{ label: 'Delete connection', danger: true, disabled: runMode || canvasMenu.edge.deletable === false, action: () => changeCanvasEdges([{ id: canvasMenu.edge.id, type: 'remove' }]) }]} />}
 
@@ -1631,12 +1509,6 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
             setEditingConnection({ edge, graphId: graph?.id });
         }}
         onNodeClick={openNodeInspector}
-        onNodeDragStop={(_event, node) => {
-          if (isChatNode(node.id)) {
-            const agent = canvasAgents.agents.find(a => chatNodeId(a.id) === node.id);
-            canvasAgents.save(agent, node.position).catch(reportAgentError);
-          }
-        }}
         onPaneClick={returnToWorkflow}
         onDrop={runMode ? undefined : onDrop}
         onDragOver={onDragOver}
@@ -1798,9 +1670,15 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
       )}
       <div className="sidebar-body">
         {(forcedTab || rightTab) === 'inspector' ? (
-          chatAgent ? <ChatAgentInspector key={chatAgent.id} graphId={graph?.id} agent={chatAgent} saving={canvasAgents.isSaving(chatAgent.id)} memoryNodes={memoryOverlay(nodes, { resources: graph?.memory_resources || [], spaceNames }).memNodes} backLabel={inspectorParent ? '← Back to memory' : '← Back to workflow'} onBack={() => { if (inspectorParent) { setSelectedId(inspectorParent); setInspectorParent(null); } else returnToWorkflow(); }} onSave={canvasAgents.save} /> :
+          chatAgent ? <ChatAgentInspector key={chatAgent.data.agent_id || chatAgent.id} graphId={graph?.id}
+            agent={{ ...chatAgent.data, name: chatAgent.id }} saved={savedChatAgent(chatAgent)} runMode={runMode}
+            memoryNodes={memoryOverlay(nodes, { resources: graph?.memory_resources || [], spaceNames }).memNodes}
+            backLabel={inspectorParent ? '← Back to memory' : '← Back to workflow'}
+            onBack={() => { if (inspectorParent) { setSelectedId(inspectorParent); setInspectorParent(null); } else returnToWorkflow(); }}
+            onChange={patch => updateNode(chatAgent.id, patch)} onRename={name => renameNode(chatAgent.id, name)}
+            onSaveWorkflow={onSave} saving={saving} /> :
           isMemoryId(selectedId) ? <MemoryResourceInspector key={`${graph?.id}:${selectedId}`}
-            resource={selectedMemory} graphId={graph?.id} nodes={[...nodes, ...canvasAgents.nodes]} edges={[...executionEdges, ...chatEdges]} runMode={runMode}
+            resource={selectedMemory} graphId={graph?.id} nodes={nodes} edges={[...executionEdges, ...chatEdges]} runMode={runMode}
             onBack={returnToWorkflow}
             onEditAgent={id => { setInspectorParent(selectedId); setSelectedId(id); setNodes(nds => nds.map(n => ({ ...n, selected: n.id === id }))); openInspector(); }}
             onConnect={(agent, direction) => connectCanvas(direction === 'read' ? { source: selectedId, target: agent } : { source: agent, target: selectedId })}
@@ -1832,10 +1710,8 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
           <ChatPanel
             key={graph?.id}
             graphId={graph?.id}
-            getGraph={assistantSnapshot}
+            getGraph={chatSnapshot}
             onApply={applyChatGraph}
-            onAgentActions={applyAgentActions}
-            onUndoAgentActions={undoAgentActions}
             onSaved={() => { pendingCleanRef.current = true; refreshList(); }}
             onOpenPanel={panel => panel === 'workspace' ? openWorkspace() : openOverlay(panel)}
             onRunRequest={startRun}

@@ -102,6 +102,10 @@ def compile_plan(graph: dict, start_at=None, mode: str = "single") -> dict:
     # copy of its own, so this is the copy the rest of the plan reads.
     graph = graph_store.migrate_flow(copy.deepcopy(graph))
     graph_store.validate_graph(graph, check_memory=False)
+    # Chat Agents take no part in a run: not planned, not skipped, and
+    # editing one does not make a confirmed plan stale.
+    from backend.features.agents.chat_agents import workflow_only
+    graph = workflow_only(graph)
 
     tasks = graph.get("tasks") or []
     edges = graph.get("edges") or []

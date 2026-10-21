@@ -125,17 +125,21 @@ def test_foreign_space_binding_is_rejected_before_run(setup):
 
 
 def test_delete_space_checks_all_saved_connections_and_preserves_foreign_spaces(setup, monkeypatch):
-    from backend.api import mem0_api, harness_api
+    from backend.api import mem0_api
     from fastapi import HTTPException
     a, b, foreign, space, db = setup
     monkeypatch.setattr(mem0_api, 'graph_for', lambda g: {'a': a, 'c': foreign}[g])
     monkeypatch.setattr(mem0_api.graphs, 'list_graphs', lambda: [b])
     monkeypatch.setattr(mem0_api.graphs, 'load_graph', lambda g: {**b, 'memory_resources': [{'space_id': space}]})
-    monkeypatch.setattr(harness_api, 'list_agents', lambda g: {'agents': []})
     with pytest.raises(HTTPException) as error: mem0_api.delete_space('a', space)
     assert error.value.status_code == 409
     db.delete_all.assert_not_called()
     with pytest.raises(HTTPException): mem0_api.delete_space('c', space)
+    # A Chat Agent node connected to it holds it too.
+    agent = {'name': 'helper', 'kind': 'chat_agent', 'memories': [{'space_id': space, 'read': True}]}
+    monkeypatch.setattr(mem0_api.graphs, 'load_graph', lambda g: {**b, 'tasks': [agent]})
+    with pytest.raises(HTTPException) as error: mem0_api.delete_space('a', space)
+    assert error.value.status_code == 409
     monkeypatch.setattr(mem0_api.graphs, 'load_graph', lambda g: b)
     assert mem0_api.delete_space('a', space) == {'removed': True}
     db.delete_all.assert_called_once_with(user_id=space)

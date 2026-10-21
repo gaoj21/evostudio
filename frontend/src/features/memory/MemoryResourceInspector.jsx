@@ -15,7 +15,8 @@ export default function MemoryResourceInspector({ resource, graphId, nodes, edge
   const [agent, setAgent] = useState('');
   const [manage, setManage] = useState(false);
   const [entriesOpened, setEntriesOpened] = useState(false);
-  const agents = nodes.filter(n => !n.data.kind || n.data.kind === 'task');
+  // Workflow LLM nodes and Chat Agents: both can be connected to a memory.
+  const agents = nodes.filter(n => !n.data.kind || n.data.kind === 'task' || n.data.kind === 'chat_agent');
   const data = resource?.data;
   const connections = edges.filter(e => e.data?.resource === resource?.id);
   const connected = [...new Set(connections.map(e => e.data.agent))];

@@ -77,30 +77,26 @@ export function summarise(operations) {
     .join(' · ');
 }
 
-// Operations that edit the canvas graph, and those that change Chat Agents.
+// Operations that edit the canvas graph, and the Chat Agent shortcuts (which
+// the server reports as the canvas operations they amount to).
 const CANVAS_OPS = new Set(['add_node', 'update_node', 'delete_node', 'rename_node', 'add_edge',
   'delete_edge', 'set_goal', 'set_name', 'auto_layout', 'configure_workflow', 'set_output_dir']);
 const AGENT_OPS = new Set(['create_agent', 'delete_agent', 'update_agent', 'connect_agent_memory',
   'disconnect_agent_memory', 'add_agent_tool', 'remove_agent_tool', 'add_agent_skill', 'remove_agent_skill']);
-const AGENT_ACTION_OPS = { create: 'create_agent', remove: 'delete_agent', update: 'update_agent' };
 
 // What a turn actually did. A server that reports the canvas edits that took
 // effect is believed over the operations the model asked for: a delete that
 // matched nothing must not read as "deleted".
 export function appliedOperations(res) {
   if (!Array.isArray(res?.canvas_operations)) return res?.operations || [];
-  const agentOps = (res.agent_actions || []).map(a => ({ op: AGENT_ACTION_OPS[a.action] || 'update_agent',
-    ...(a.summary ? { summary: a.summary } : {}) }));
   const others = (res.operations || []).filter(o => !CANVAS_OPS.has(o?.op) && !AGENT_OPS.has(o?.op));
-  return [...res.canvas_operations, ...agentOps, ...others];
+  return [...res.canvas_operations, ...others];
 }
 
-// The canvas as a comparable value; Chat Agents travel alongside and are
-// tracked by the harness, not by this comparison.
+// The canvas as a comparable value (Chat Agents are among its tasks).
 export function canvasKey(graph) {
   if (!graph) return '';
-  const { canvas_agents: _agents, ...rest } = graph;
-  return JSON.stringify(rest);
+  return JSON.stringify(graph);
 }
 
 // What a generated workflow would replace: the nodes, their settings and the
@@ -108,7 +104,7 @@ export function canvasKey(graph) {
 // no reason to hold its result back.
 export function contentKey(graph) {
   if (!graph) return '';
-  const { canvas_agents: _agents, memory_positions: _positions, tasks, ...rest } = graph;
+  const { memory_positions: _positions, tasks, ...rest } = graph;
   return JSON.stringify({ ...rest, tasks: (tasks || []).map(({ x: _x, y: _y, ...task }) => task) });
 }
 
@@ -132,8 +128,6 @@ export default function ChatPanel({
   graphId,
   getGraph,
   onApply,
-  onAgentActions,
-  onUndoAgentActions,
   onSaved,
   onRunRequest,
   onOpenPanel,
@@ -166,11 +160,6 @@ export default function ChatPanel({
   const pollJobRef = useRef(null);
   const getGraphRef = useRef(getGraph);
   getGraphRef.current = getGraph;
-  // A turn settles minutes after it was asked; act on the canvas as it is then.
-  const onAgentActionsRef = useRef(onAgentActions);
-  onAgentActionsRef.current = onAgentActions;
-  const onUndoAgentActionsRef = useRef(onUndoAgentActions);
-  onUndoAgentActionsRef.current = onUndoAgentActions;
   // Which graph is open right now. A generation started minutes ago must not
   // drop its result onto a different canvas if the user switched graphs.
   const activeGraph = useRef(graphId);
@@ -338,8 +327,7 @@ export default function ChatPanel({
       let replayed = null;
       if (operations.length && api.replayChatOperations) {
         try {
-          const { canvas_agents: _agents, ...graph } = current;
-          replayed = await api.replayChatOperations(graphId, { graph, operations });
+          replayed = await api.replayChatOperations(graphId, { graph: current, operations });
         } catch (err) {
           replayed = { applied: false, errors: [err?.body?.detail || err.message] };
         }
@@ -355,7 +343,6 @@ export default function ChatPanel({
           ...(replayed?.errors || []), ...(replayed?.notes || [])];
       }
     }
-    const agentActions = res.agent_actions || [];
     const nextMessages = [
       ...messagesOf(sessionId),
       {
@@ -378,17 +365,6 @@ export default function ChatPanel({
     ];
     updateSession(sessionId, nextMessages);
     if (graphToApply) onApply(graphToApply);
-    if (agentActions.length && onAgentActionsRef.current) {
-      // { failed, undo } — or, from an older host, just the failures.
-      const outcome = await onAgentActionsRef.current(agentActions);
-      const failed = Array.isArray(outcome) ? outcome : outcome?.failed || [];
-      const agentUndo = Array.isArray(outcome) ? [] : outcome?.undo || [];
-      if (failed.length || agentUndo.length) {
-        updateSession(sessionId, m => m.map(msg => msg.id === id ? { ...msg,
-          errors: failed.length ? [...(msg.errors || []), ...failed] : msg.errors,
-          agentUndo: agentUndo.length ? agentUndo : msg.agentUndo } : msg));
-      }
-    }
     if (res.saved && res.graph?.id && res.graph.id !== graphId) saveHistory(res.graph.id, nextMessages);
     if (res.saved) onSaved && onSaved();
     if (res.panel) onOpenPanel?.(res.panel);
@@ -587,22 +563,16 @@ export default function ChatPanel({
     );
   }, [setMessages]);
 
-  // Takes back a turn: the canvas as it was before it, and the Chat Agents it
-  // removed or changed.
+  // Takes back a turn: the canvas as it was before it, Chat Agents included
+  // (they are nodes of it).
   const undo = useCallback(
-    async (id) => {
+    (id) => {
       const message = messagesRef.current.find((m) => m.id === id);
-      const agentUndo = message?.agentUndo || [];
-      if (!message?.snapshot && !agentUndo.length) return;
+      if (!message?.snapshot) return;
       setMessages((m) =>
-        m.map((msg) => (msg.id === id ? { ...msg, snapshot: null, agentUndo: null, undone: true } : msg))
+        m.map((msg) => (msg.id === id ? { ...msg, snapshot: null, undone: true } : msg))
       );
-      if (message.snapshot) onApply(message.snapshot);
-      const failed = agentUndo.length && onUndoAgentActionsRef.current
-        ? (await onUndoAgentActionsRef.current(agentUndo)) || [] : [];
-      if (failed.length) {
-        setMessages((m) => m.map((msg) => (msg.id === id ? { ...msg, errors: [...(msg.errors || []), ...failed] } : msg)));
-      }
+      onApply(message.snapshot);
     },
     [onApply, setMessages]
   );
@@ -690,7 +660,7 @@ export default function ChatPanel({
                 <button type="button" onClick={() => keepCanvas(m.id)}>Keep mine</button>
               </div>
             )}
-            {(m.snapshot || m.agentUndo?.length > 0) && (
+            {m.snapshot && (
               <button type="button" className="chat-undo" onClick={() => undo(m.id)}>
                 Undo this change
               </button>

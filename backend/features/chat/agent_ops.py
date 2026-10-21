@@ -1,16 +1,16 @@
-"""The workflow assistant's operations on canvas Chat Agents.
+"""The workflow assistant's operations on Chat Agents.
 
-Chat Agents live in the harness store and the frontend owns their canvas
-state, so nothing here writes the store: every change comes back as an
-`agent_actions` entry the frontend carries out through the same calls its own
-controls use (create / save / remove), which keeps its Undo and the canvas in
-step. What can be checked without writing is checked here, against the same
-rules the harness endpoints apply (AgentSettings, the memory catalog and
-validate_memories, the tool and skill catalogs), so a bad request comes back
-to the model as an operation_error naming what it could have meant, instead
-of failing later in the browser.
+A Chat Agent is a workflow node of kind "chat_agent" (see
+backend/features/agents/chat_agents.py), so every operation here is an edit
+of the graph: it changes the node in the canvas the turn works on and comes
+back as an ordinary canvas operation (add_node / update_node / rename_node),
+which the client replays and undoes like any other edit. What it writes is
+checked first, against the same rules the harness applies (AgentSettings,
+the memory catalog and validate_memories, the tool and skill catalogs), so a
+bad request comes back to the model as an operation_error naming what it
+could have meant.
 
-A memory connection is the Agent's `memories` binding list -- the canvas's own
+A memory connection is the node's `memories` binding list -- the canvas's own
 connect gesture edits exactly that, and its "reads"/"writes" edges are drawn
 from it -- so connecting or disconnecting a memory is an update of that list.
 """
@@ -18,24 +18,20 @@ from it -- so connecting or disconnecting a memory is an update of that list.
 from __future__ import annotations
 
 import copy
-import uuid
+import re
 
+from backend.features.agents import chat_agents
 from backend.features.chat import node_resolver
 
 # Settings an operation may set; "skills" is accepted for skill_names.
-FIELDS = ("name", "instructions", "provider", "max_steps", "timeout", "toolkits", "tools",
-          "skill_names", "memories", "x", "y")
+FIELDS = ("name", "description", "instructions", "provider", "max_steps", "timeout", "toolkits",
+          "tools", "skill_names", "memories", "x", "y")
 ALIASES = {"skills": "skill_names"}
 
 
 def _error(message, candidates=None):
     from backend.features.chat.chat_api import ChatError
     return ChatError(message, candidates)
-
-
-def bare_id(agent: dict) -> str:
-    raw = str(agent.get("id") or "")
-    return raw[len("chat:"):] if raw.startswith("chat:") else raw
 
 
 # --------------------------------------------------------------------------
@@ -154,30 +150,28 @@ def _tools_view(agent):
 
 
 def summary(agent: dict, resources: list) -> dict:
-    """An Agent as the assistant sees it on the canvas, every step."""
+    """A Chat Agent node as the assistant sees it on the canvas, every step."""
     by_id = {r["id"]: r for r in resources}
     instructions = str(agent.get("instructions") or "")
-    out = {"id": "chat:" + bare_id(agent), "name": agent.get("name") or bare_id(agent),
+    out = {"name": agent.get("name"), "kind": chat_agents.KIND,
            "instructions": instructions[:160] + ("…" if len(instructions) > 160 else "")}
-    if "provider" in agent:
-        out["provider"] = agent.get("provider") or "platform default"
-    if "tools" in agent or "toolkits" in agent:
-        out["tools"] = _tools_view(agent)
+    if agent.get("description"):
+        out["description"] = str(agent["description"])[:120]
+    out["provider"] = agent.get("provider") or "platform default"
+    out["tools"] = _tools_view(agent)
     if agent.get("skill_names"):
         out["skills"] = agent["skill_names"]
-    if "memories" in agent:
-        out["memories"] = [_memory_view(m, by_id) for m in agent.get("memories") or []]
+    out["memories"] = [_memory_view(m, by_id) for m in agent.get("memories") or []]
     return out
 
 
 def inspect(agent: dict, resources: list) -> dict:
     by_id = {r["id"]: r for r in resources}
     full = {k: v for k, v in agent.items() if k != "memories"}
-    full["id"] = "chat:" + bare_id(agent)
     full["provider"] = agent.get("provider") or None
     full["tools"] = _tools_view(agent)
     full["memories"] = [_memory_view(m, by_id) for m in agent.get("memories") or []]
-    full["kind"] = "chat_agent"
+    full["kind"] = chat_agents.KIND
     return full
 
 
@@ -193,7 +187,7 @@ def _binding(op, item, resources, previous):
         raise _error(f"{op}: each memory must be a name, an id or an object")
     resource = resolve_memory(op, item, resources)
     old = next((m for m in previous if binding_key(m) == resource["id"]), {})
-    binding = {k: v for k, v in old.items() if k.endswith("_handle")}
+    binding = {k: v for k, v in {**old, **item}.items() if k.endswith("_handle") and isinstance(v, str)}
     binding.update({"space_id": resource["space_id"]} if resource["kind"] == "mem0"
                    else {"memory_id": resource["id"]})
     binding["read"] = bool(item.get("read", old.get("read", True)))
@@ -304,81 +298,102 @@ def _check_settings(op, settings):
 # --------------------------------------------------------------------------
 
 class AgentOps:
-    """Applies one batch's Chat Agent operations to `agents` (the list the
-    assistant sees), recording an action per change for the frontend."""
+    """Applies one batch's Chat Agent operations to the graph the turn works
+    on (`get_graph()`, read each time: a save in the batch replaces it).
+    Each change returns the canvas operations it amounts to."""
 
-    def __init__(self, graph, agents, actions, notes, observe, resolve):
-        self.graph, self.agents, self.actions = graph, agents, actions
-        self.notes, self.observe, self._resolve = notes, observe, resolve
+    def __init__(self, get_graph, notes, observe, resolve, rename):
+        self.get_graph, self.notes, self.observe = get_graph, notes, observe
+        self._resolve, self._rename = resolve, rename
         self._resources = None
+
+    @property
+    def tasks(self):
+        return self.get_graph().setdefault("tasks", [])
+
+    @property
+    def agents(self):
+        return [t for t in self.tasks if chat_agents.is_chat_agent(t)]
 
     @property
     def resources(self):
         if self._resources is None:
-            self._resources = memory_catalog(self.graph)
+            self._resources = memory_catalog(self.get_graph())
         return self._resources
 
     def find(self, op, raw, destructive=False):
         query = raw.get("agent") or raw.get("name") or raw.get("id")
-        return self._resolve(op, query, [], self.agents, destructive=destructive, notes=self.notes)
+        if isinstance(query, str) and query.startswith("chat:"):
+            query = query[len("chat:"):]
+        return self._resolve(op, query, self.agents, destructive=destructive, notes=self.notes)
 
-    def _record(self, op, match, patch, text):
+    def _record(self, op, match, patch, text) -> list:
         agent = match["ref"]
         ignored = patch.pop("_ignored", None)
         if ignored:
             self.notes.append(f"{op}: ignored unsupported field(s) {', '.join(ignored)}; "
                               f"supported: {', '.join(FIELDS)}")
+        applied = []
+        if "name" in patch:
+            new_name = patch.pop("name")
+            if new_name != agent.get("name") and chat_agents.node_name(new_name, set()) != agent.get("name"):
+                applied.append(self._rename(agent, new_name))
         changed = {k: v for k, v in patch.items() if agent.get(k, object()) != v}
-        if not changed:
+        if not changed and not applied:
             self.notes.append(f"Chat Agent '{agent.get('name')}' already has those settings; nothing changed.")
-            return
-        agent.update(copy.deepcopy(changed))
-        self.actions.append({"action": "update", "id": bare_id(agent), "patch": changed, "summary": text})
+            return []
+        if changed:
+            agent.update(copy.deepcopy(changed))
+            applied.append({"op": "update_node", "name": agent["name"], "patch": copy.deepcopy(changed)})
+        applied[-1]["summary"] = text
+        return applied
 
-    def update(self, op, raw, patch=None, match=None):
+    def update(self, op, raw, patch=None, match=None) -> list:
         match = match or self.find(op, raw)
         agent = match["ref"]
         before = agent.get("name")
-        patch = normalize_patch(op, raw.get("patch") if patch is None else patch, agent, self.graph, self.resources)
+        patch = normalize_patch(op, raw.get("patch") if patch is None else patch, agent,
+                                self.get_graph(), self.resources)
         if not {k for k in patch if k != "_ignored"}:
             raise _error(f"{op}: nothing to change; supported fields: {', '.join(FIELDS)}")
         fields = [k for k in patch if k != "_ignored"]
         if fields == ["name"]:
             text = f"renamed Chat Agent '{before}' to '{patch['name']}'"
         else:
-            text = f"updated Chat Agent '{patch.get('name', before)}' ({', '.join(fields)})"
-        self._record(op, match, patch, text)
+            text = f"updated Chat Agent '{before}' ({', '.join(fields)})"
+        return self._record(op, match, patch, text)
 
-    def create(self, op, raw):
+    def create(self, op, raw) -> list:
         spec = raw.get("agent") if isinstance(raw.get("agent"), dict) else raw.get("settings") or {
             k: v for k, v in raw.items() if k != "op"}
         if not isinstance(spec, dict):
             raise _error(f"{op}: give the new Chat Agent's settings as fields of the operation")
-        spec = {k: v for k, v in spec.items() if k not in ("id", "engine")}
-        taken = {str(a.get("name") or "").casefold() for a in self.agents}
+        wanted_id = spec.get("agent_id")
+        spec = {k: v for k, v in spec.items() if k not in ("id", "engine", "agent_id", "kind")}
+        taken = {t.get("name") for t in self.tasks}
         if not str(spec.get("name") or "").strip():
             n = len(self.agents) + 1
-            while f"chat agent {n}" in taken:
+            while f"chat_agent_{n}" in taken:
                 n += 1
-            spec["name"] = f"Chat Agent {n}"
-        settings = normalize_patch(op, spec, {}, self.graph, self.resources)
+            spec["name"] = f"chat_agent_{n}"
+        settings = normalize_patch(op, spec, {}, self.get_graph(), self.resources)
         ignored = settings.pop("_ignored", None)
         if ignored:
             self.notes.append(f"{op}: ignored unsupported field(s) {', '.join(ignored)}")
-        base, n = settings["name"], 2
-        while settings["name"].casefold() in taken:
-            settings["name"] = f"{base} {n}"
-            n += 1
-        if settings["name"] != base:
-            self.notes.append(f"{op}: named the new Chat Agent '{settings['name']}' ('{base}' is taken)")
-        # The id is chosen here so later operations of this turn can address
-        # the new Agent before the frontend has created it.
-        agent = {"id": uuid.uuid4().hex, **copy.deepcopy(settings)}
-        self.agents.append(agent)
-        self.actions.append({"action": "create", "id": agent["id"], "name": settings["name"],
-                             "settings": settings, "summary": f"created Chat Agent '{settings['name']}'"})
+        asked = settings.pop("name")
+        name = chat_agents.node_name(asked, taken)
+        if name != chat_agents.node_name(asked, set()):
+            self.notes.append(f"{op}: named the new Chat Agent '{name}' ('{asked}' is taken)")
+        count = len(self.agents)
+        used = {a.get("agent_id") for a in self.agents}
+        agent_id = (wanted_id if isinstance(wanted_id, str) and re.fullmatch(chat_agents.AGENT_ID[1:-1], wanted_id)
+                    and wanted_id not in used else chat_agents.new_agent_id())
+        task = chat_agents.normalize({"x": 400 + count * 40, "y": 250, **copy.deepcopy(settings),
+                                      "name": name, "kind": chat_agents.KIND, "agent_id": agent_id})
+        self.tasks.append(task)
+        return [{"op": "add_node", "task": copy.deepcopy(task), "summary": f"created Chat Agent '{name}'"}]
 
-    def connect(self, op, raw):
+    def connect(self, op, raw) -> list:
         match = self.find(op, raw)
         agent = match["ref"]
         resource = resolve_memory(op, raw.get("memory"), self.resources)
@@ -388,12 +403,12 @@ class AgentOps:
         write = bool(raw.get("write", False)) or bool(old and old.get("write"))
         binding = _binding(op, {"memory": resource["id"], "read": read, "write": write}, self.resources, current)
         memories = [binding if binding_key(m) == resource["id"] else m for m in current] if old else current + [binding]
-        check_memories(op, self.graph, memories, self.resources)
+        check_memories(op, self.get_graph(), memories, self.resources)
         mode = "reads and writes" if read and write else "writes" if write else "reads"
-        self._record(op, match, {"memories": memories},
-                     f"connected '{agent.get('name')}' to memory '{resource['name']}' ({mode})")
+        return self._record(op, match, {"memories": memories},
+                            f"connected '{agent.get('name')}' to memory '{resource['name']}' ({mode})")
 
-    def disconnect(self, op, raw):
+    def disconnect(self, op, raw) -> list:
         match = self.find(op, raw)
         agent = match["ref"]
         current = copy.deepcopy(agent.get("memories") or [])
@@ -410,11 +425,11 @@ class AgentOps:
                 m = {**m, direction: False}
             if binding_key(m) != resource["id"] or (direction in ("read", "write") and (m.get("read") or m.get("write"))):
                 memories.append(m)
-        self._record(op, match, {"memories": memories},
-                     f"disconnected '{agent.get('name')}' from memory '{resource['name']}'"
-                     + (f" ({direction})" if direction in ("read", "write") else ""))
+        return self._record(op, match, {"memories": memories},
+                            f"disconnected '{agent.get('name')}' from memory '{resource['name']}'"
+                            + (f" ({direction})" if direction in ("read", "write") else ""))
 
-    def tool(self, op, raw, add):
+    def tool(self, op, raw, add) -> list:
         match = self.find(op, raw)
         agent = match["ref"]
         catalog = tool_catalog()
@@ -424,7 +439,7 @@ class AgentOps:
             if add:
                 self.notes.append(f"Chat Agent '{agent.get('name')}' already has every available tool, "
                                   f"including {', '.join(names)}; nothing changed.")
-                return
+                return []
             current = everything
         elif agent.get("tools") is None:
             current = [sub["name"] for t in catalog if t["name"] in agent["toolkits"] for sub in t.get("tools", [])]
@@ -434,9 +449,9 @@ class AgentOps:
         label = ", ".join(names)
         text = (f"gave '{agent.get('name')}' the tool {label}" if add
                 else f"removed the tool {label} from '{agent.get('name')}'")
-        self._record(op, match, {"tools": tools, "toolkits": None}, text)
+        return self._record(op, match, {"tools": tools, "toolkits": None}, text)
 
-    def skill(self, op, raw, add):
+    def skill(self, op, raw, add) -> list:
         match = self.find(op, raw)
         agent = match["ref"]
         current = list(agent.get("skill_names") or [])
@@ -448,17 +463,20 @@ class AgentOps:
             if name is None:
                 raise _error(f"{op}: Chat Agent '{agent.get('name')}' has no skills")
             skills = [n for n in current if n != name]
-        self._record(op, match, {"skill_names": skills},
-                     f"{'gave' if add else 'removed'} skill '{name}' {'to' if add else 'from'} '{agent.get('name')}'")
+        return self._record(op, match, {"skill_names": skills},
+                            f"{'gave' if add else 'removed'} skill '{name}' {'to' if add else 'from'} '{agent.get('name')}'")
 
-    def inspect(self, op, raw):
+    def inspect(self, op, raw) -> list:
         self.observe(op, inspect(self.find(op, raw)["ref"], self.resources))
+        return []
 
-    def list(self, op):
+    def list(self, op) -> list:
         self.observe(op, [summary(a, self.resources) for a in self.agents])
+        return []
 
-    def apply(self, op, raw) -> bool:
-        """Handles `op` if it is a Chat Agent operation; False otherwise."""
+    def apply(self, op, raw):
+        """The canvas operations `op` amounts to, if it is a Chat Agent
+        operation; None otherwise."""
         handlers = {
             "create_agent": lambda: self.create(op, raw),
             "update_agent": lambda: self.update(op, raw),
@@ -472,9 +490,8 @@ class AgentOps:
             "list_agents": lambda: self.list(op),
         }
         if op not in handlers:
-            return False
-        handlers[op]()
-        return True
+            return None
+        return handlers[op]()
 
 
 AGENT_OPS = ("create_agent", "update_agent", "delete_agent", "connect_agent_memory",
