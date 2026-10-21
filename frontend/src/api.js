@@ -37,7 +37,6 @@ export const api = {
   inspectEvaluatorCode: code => req('/api/evaluators/interface', {method:'POST',body:{code}}),
   graphEvaluators: id => req(`/api/graphs/${encodeURIComponent(id)}/evaluators`),
   saveGraphEvaluators: (id,evaluators) => req(`/api/graphs/${encodeURIComponent(id)}/evaluators`, {method:'PUT',body:{evaluators}}),
-  deleteGraphEvaluator: (id,name) => req(`/api/graphs/${encodeURIComponent(id)}/evaluators/${encodeURIComponent(name)}`, {method:'DELETE'}),
   // preview saves nothing; run keeps the report on that batch/run.
   previewGraphEvaluator: (id,body) => req(`/api/graphs/${encodeURIComponent(id)}/evaluators/preview`, {method:'POST',body}),
   runGraphEvaluator: (id,body) => req(`/api/graphs/${encodeURIComponent(id)}/evaluators/run`, {method:'POST',body}),
@@ -45,6 +44,7 @@ export const api = {
   // the panel to copy a path from elsewhere in Studio.
   evaluatorDraft: id => req(`/api/graphs/${encodeURIComponent(id)}/evaluators/draft`),
   saveEvaluatorDraft: (id,body) => req(`/api/graphs/${encodeURIComponent(id)}/evaluators/draft`, {method:'PUT',body}),
+  deleteEvaluatorDraft: id => req(`/api/graphs/${encodeURIComponent(id)}/evaluators/draft`, {method:'DELETE'}),
   inspectDataLoaderCode: code => req('/api/dataloaders/interface', {method:'POST',body:{code}}),
   previewDataLoader: config => req('/api/dataloaders/preview', {method:'POST',body:config}),
   stopDataLoaderPreview: id => req(`/api/dataloaders/preview/${encodeURIComponent(id)}/stop`, {method:'POST'}),

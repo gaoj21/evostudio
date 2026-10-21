@@ -362,8 +362,15 @@ class TestDeleting:
 
     def test_it_goes_when_the_caller_has_said_so(self, filled):
         outcome = filled.delete_file("probe", "runs", recursive=True)
-        assert outcome["files"] == 2
+        # Confirmed: the folder is not walked again just to count it.
+        assert outcome["directory"] is True and outcome["files"] is None
         assert not (filled.workspace_root("probe") / "runs").exists()
+
+    def test_the_warning_counts_only_so_far(self, filled, monkeypatch):
+        monkeypatch.setattr(filled, "COUNT_LIMIT", 1)
+        with pytest.raises(filled.WorkspaceError) as raised:
+            filled.delete_file("probe", "runs")
+        assert "1+ file(s)" in str(raised.value)
 
     def test_deleting_cannot_reach_outside_the_workspace(self, filled):
         with pytest.raises(filled.WorkspaceError):
@@ -408,7 +415,7 @@ class TestThroughTheWorkspaceApi:
         allowed = client.request("DELETE", "/api/graphs/probe/workspace/file",
                                  params={"path": "runs", "recursive": "true"})
         assert allowed.status_code == 200
-        assert allowed.json()["files"] == 1
+        assert allowed.json()["deleted"] == "runs"
 
 class TestAuxiliaryUploads:
     def test_large_checkpoint_is_streamed_and_path_is_usable(self, store):

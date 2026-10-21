@@ -31,3 +31,21 @@ export function describeMemoryAction(out) {
 // Kept for callers that only clear.
 export const describeReset = describeMemoryAction;
 
+
+// Undo, in the platform's own notation, for notices that point to it.
+export const UNDO_KEYS = typeof navigator !== 'undefined'
+  && /Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘Z' : 'Ctrl+Z';
+
+/** What the confirmation before a memory reset says, from what reset clears
+ * (backend memory_reset.STORES: memory, tables, stm — this workflow's part). */
+export function resetMemoryConfirmation(name) {
+  return {
+    title: `Reset memory of "${name}"?`,
+    body: 'Clears this workflow\'s long-term memory, memory tables and short-term '
+      + '(session) memory; other workflows are not touched. '
+      + 'A backup copy is made first, in the memory-backups folder of the Studio data '
+      + 'directory — the exact location is shown when the reset is done.',
+    confirmLabel: 'Back up and reset',
+    danger: true,
+  };
+}

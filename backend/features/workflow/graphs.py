@@ -89,9 +89,13 @@ def _data_paths(graph_id: str) -> list[Path]:
     from backend.api import memory_store
     from backend.api import stm_store
     from backend.api import table_store
+    from backend.api import evaluator_tools
     from backend.api import workspace as workspace_mod
+    # The unsaved evaluator draft too: left behind, a new workflow given the
+    # id would open with the deleted one's pasted code.
     return [workspace_mod.workspace_root(graph_id), memory_store.MEMORY_DIR / graph_id,
-            table_store.TABLES_DIR / graph_id, stm_store.STM_DIR / f"{graph_id}.json"]
+            table_store.TABLES_DIR / graph_id, stm_store.STM_DIR / f"{graph_id}.json",
+            evaluator_tools.DRAFTS_DIR / f"{graph_id}.json"]
 
 
 def _has_data(graph_id: str) -> bool:
@@ -100,10 +104,10 @@ def _has_data(graph_id: str) -> bool:
     A workflow deleted before its data was archived left its memory and
     history behind; a new workflow given the id would inherit both.
     """
-    if any(p.exists() for p in _data_paths(graph_id)):
+    if is_archiving(graph_id) or any(p.exists() for p in _data_paths(graph_id)):
         return True
     from backend.api import runner
-    return bool(runner.list_runs(graph_id=graph_id))
+    return bool(runner._run_index(graph_id)[0]) or bool(_history_files(graph_id))
 
 
 def rename_graph(graph_id: str, name: str) -> dict:
@@ -204,35 +208,145 @@ def _move_graph_data(old_id: str, new_id: str) -> list[str]:
     return failed
 
 
-def _repoint_history(old_id: str, new_id: str) -> None:
+def _history_files(graph_id: str) -> list[tuple[Path, int | None]]:
+    """The run and batch files filed under `graph_id`, each with the indent
+    its writer uses. Chosen on the small cached view each listing already
+    keeps of every file — not by parsing every run and batch, which is the
+    whole of the data directory."""
+    from backend.api import batch as batch_store
+    from backend.api import runner
+    from backend.features.persistence import file_view
+    # A run still in memory is listed from memory (path None), but its file
+    # is on disk too and must follow, or it keeps the old id.
+    found = []
+    for run_id, _, path in runner._run_index(graph_id)[0]:
+        path = path or runner.RUNS_DIR / f"{run_id}.json"
+        if path.is_file():
+            found.append((path, 2))
+    if batch_store.BATCHES_DIR.is_dir():
+        for path in batch_store.BATCHES_DIR.glob("*.json"):
+            digest = file_view(path, "batch-digest", batch_store._digest, persist=True)
+            if digest is not None and digest.get("graph_id") == graph_id:
+                found.append((path, None))
+    return found
+
+
+def _repoint_history(old_id: str, new_id: str, files=None) -> None:
     """Point this workflow's past runs and batches at its new id.
 
     Without this its own history disappears from the History panel the moment
     it is renamed — the records are still there, filed under a name that no
-    longer exists.
+    longer exists. Only this workflow's files are rewritten, each atomically,
+    and the listings' views of them are updated with them.
     """
     from backend.api import batch as batch_store
     from backend.api import runner
-    for directory in (runner.RUNS_DIR, batch_store.BATCHES_DIR):
-        if not directory.is_dir():
-            continue
-        for path in directory.glob("*.json"):
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                continue
-            if data.get("graph_id") != old_id:
-                continue
-            data["graph_id"] = new_id
-            try:
-                path.write_text(json.dumps(data, indent=2, ensure_ascii=False,
-                                           default=str), encoding="utf-8")
-            except OSError:
-                continue
+    from backend.features.persistence import remember_view, write_json
     for store in (runner._runs, batch_store._batches):
-        for state in store.values():
+        for state in list(store.values()):
             if state.get("graph_id") == old_id:
                 state["graph_id"] = new_id
+    for path, indent in (_history_files(old_id) if files is None else files):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if data.get("graph_id") != old_id:
+            continue
+        data["graph_id"] = new_id
+        try:
+            write_json(path, data, indent=indent)
+        except OSError:
+            continue
+        if indent is None:
+            remember_view(path, "batch-digest", batch_store._digest(data), persist=True)
+        else:
+            remember_view(path, "run-meta", runner._run_meta(data), persist=True)
+
+
+# Ids whose history is still being refiled after a delete: taken until done.
+_archiving: set[str] = set()
+_archiving_lock = threading.Lock()
+
+
+def _refile_markers_dir() -> Path:
+    """One marker per refile still to finish. Written before a refile starts
+    and removed when it is done, so a refile the server stopped in the middle
+    of is finished at the next start instead of leaving part of the history
+    under the deleted id. A folder, not `*.json` beside the graphs: the graph
+    listing globs those."""
+    return GRAPHS_DIR / ".refiling"
+
+
+def _refile_marker(graph_id: str) -> Path:
+    return _refile_markers_dir() / f"{safe_id(graph_id, 'graph id')}.json"
+
+
+def is_archiving(graph_id: str) -> bool:
+    """Is a deleted workflow's history still being refiled away from this id?
+
+    Counts a marker left by a server that stopped mid-refile as well, so the
+    id stays taken from the first request after a restart, before the
+    startup cleanup has picked the refile up again."""
+    if graph_id in _archiving:
+        return True
+    return is_safe_id(graph_id) and _refile_marker(graph_id).is_file()
+
+
+def _refile(old_id: str, new_id: str, files=None) -> None:
+    """Refile `old_id`'s history under `new_id`, then drop its marker.
+
+    Idempotent: a file already pointing elsewhere is skipped, so running it
+    again after an interrupted attempt only finishes what is left."""
+    import logging
+    try:
+        _repoint_history(old_id, new_id, files)
+    except Exception as exc:  # noqa: BLE001 - a background thread must not die silently
+        # The marker stays: the next start tries again.
+        logging.getLogger(__name__).warning(
+            "delete %s: could not refile its history: %s", old_id, exc)
+    else:
+        _refile_marker(old_id).unlink(missing_ok=True)
+    finally:
+        with _archiving_lock:
+            _archiving.discard(old_id)
+
+
+def resume_refiles() -> list[str]:
+    """Finish the refiles a previous process left half-done; returns their ids.
+
+    Called from the startup cleanup thread. Each id is held in `_archiving`
+    while its refile runs, as during the original delete."""
+    import logging
+    folder = _refile_markers_dir()
+    if not folder.is_dir():
+        return []
+    pending = []
+    for marker in sorted(folder.glob("*.json")):
+        try:
+            data = json.loads(marker.read_text(encoding="utf-8"))
+            old_id, new_id, task_id = data["old_id"], data["new_id"], data.get("task_id")
+            if not (is_safe_id(old_id) and is_safe_id(new_id)) or marker.stem != old_id:
+                raise ValueError("ids do not match the marker")
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            logging.getLogger(__name__).warning(
+                "unreadable refile marker %s left in place: %s", marker, exc)
+            continue
+        with _archiving_lock:
+            if old_id in _archiving:        # this process is already on it
+                continue
+            _archiving.add(old_id)
+        pending.append((old_id, new_id, task_id))
+    for old_id, new_id, task_id in pending:
+        if _graph_path(old_id).is_file():
+            # Stopped before the workflow file went: nothing was deleted.
+            _refile_marker(old_id).unlink(missing_ok=True)
+            with _archiving_lock:
+                _archiving.discard(old_id)
+            continue
+        # Moving what is still in place and refiling are both safe to repeat.
+        _archive_graph_data(old_id, new_id, background=False, task_id=task_id)
+    return [old_id for old_id, _, _ in pending]
 
 
 def _save(graph: dict) -> None:
@@ -289,12 +403,41 @@ def delete_graph(graph_id: str) -> bool:
         path = _graph_path(graph_id)
         if not path.is_file():
             return False
+        # The marker goes first: a server stopped anywhere after this point
+        # finishes the delete at its next start (resume_refiles), instead of
+        # leaving data or history under an id a new workflow could take.
+        try:
+            task_id = json.loads(path.read_text(encoding="utf-8")).get("task_id")
+        except (OSError, ValueError, AttributeError):
+            task_id = None
+        archived_id = _archived_id(graph_id)
+        _write_marker(graph_id, archived_id, task_id)
         path.unlink()
-    _archive_graph_data(graph_id)
+    _archive_graph_data(graph_id, archived_id, task_id=task_id)
     return True
 
 
-def _archive_graph_data(graph_id: str) -> str:
+def _archived_id(graph_id: str) -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    return f"{graph_id}.deleted-{stamp}"
+
+
+def _write_marker(graph_id: str, archived_id: str, task_id: str | None = None) -> None:
+    import logging
+    from backend.features.persistence import write_json
+    with _archiving_lock:
+        _archiving.add(graph_id)
+    try:
+        write_json(_refile_marker(graph_id), {
+            "old_id": graph_id, "new_id": archived_id, "task_id": task_id,
+            "started_at": _utcnow()})
+    except OSError as exc:
+        logging.getLogger(__name__).warning(
+            "delete %s: could not record its pending archive: %s", graph_id, exc)
+
+
+def _archive_graph_data(graph_id: str, archived_id: str | None = None,
+                        background: bool = True, task_id: str | None = None) -> str:
     """Set a deleted workflow's data aside, so a new one of that name starts
     empty rather than inheriting its memory and history.
 
@@ -305,8 +448,19 @@ def _archive_graph_data(graph_id: str) -> str:
     import logging
     import shutil
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    archived_id = f"{graph_id}.deleted-{stamp}"
+    if archived_id is None:
+        archived_id = _archived_id(graph_id)
+        _write_marker(graph_id, archived_id)
+    stamp = archived_id.rsplit(".deleted-", 1)[1]
+    # Its Chat Agents too, filed under the task id (or, for older
+    # workflows, the graph id): a new workflow of that name must not
+    # inherit them.
+    try:
+        from backend.features.agents import harness_api
+        harness_api.archive_owner([task_id, graph_id], archived_id)
+    except Exception as exc:  # noqa: BLE001 - the rest of the delete still goes ahead
+        logging.getLogger(__name__).warning(
+            "delete %s: could not archive its Chat Agents: %s", graph_id, exc)
     for item in _data_paths(graph_id):
         if not item.exists():
             continue
@@ -317,7 +471,16 @@ def _archive_graph_data(graph_id: str) -> str:
         except OSError as exc:
             logging.getLogger(__name__).warning(
                 "delete %s: could not archive %s: %s", graph_id, item, exc)
-    _repoint_history(graph_id, archived_id)
+    # Refiling rewrites every run and batch the workflow ever had — on a
+    # synced folder, minutes for a long history — so it happens after the
+    # delete has answered. Until it is done the id counts as taken; a marker
+    # on disk carries that, and the refile itself, across a restart.
+    files = _history_files(graph_id)
+    if files and background:
+        threading.Thread(target=_refile, args=(graph_id, archived_id, files),
+                         name=f"archive-{graph_id}", daemon=True).start()
+    else:
+        _refile(graph_id, archived_id, files)
     return archived_id
 
 

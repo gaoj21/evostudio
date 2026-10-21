@@ -45,7 +45,8 @@ import ConnectionEditor from './features/canvas/ConnectionEditor.jsx';
 import { memorySiblings } from './features/memory/MemorySettings.jsx';
 import RunDialog from './features/execution/RunDialog.jsx';
 import MemoryNode from './features/memory/MemoryNode.jsx';
-import { RESET_MEMORY_KEYS, describeMemoryAction, isResetMemoryShortcut } from './shortcuts.js';
+import { RESET_MEMORY_KEYS, UNDO_KEYS, describeMemoryAction, isResetMemoryShortcut, resetMemoryConfirmation } from './shortcuts.js';
+import { DELETE_WORKFLOW_TEXT } from './features/workspace/workflowDelete.js';
 import MemoryPanel from './features/memory/MemoryPanel.jsx';
 import EvolvePanel from './features/evaluation/EvolvePanel.jsx';
 import ReviewPanel from './components/ReviewPanel.jsx';
@@ -783,18 +784,21 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
     })();
   }, [newGraph, confirmDiscard]);
 
+  // One delete at a time: a second click while the first is in flight would
+  // delete again (404) or, after the list reopens, delete the next workflow.
+  const deletingGraph = useRef(false);
   const onDeleteGraph = useCallback(() => {
-    if (!graph?.id) return;
+    if (!graph?.id || deletingGraph.current) return;
     (async () => {
       // Deleting removes the workflow's JSON file with no way back.
       const ok = await confirm({
         title: `Delete "${graph.name || graph.id}"?`,
-        body: 'The workflow is deleted permanently. Runs and workspace files it '
-          + 'already produced are kept.',
+        body: DELETE_WORKFLOW_TEXT,
         confirmLabel: 'Delete',
         danger: true,
       });
-      if (!ok) return;
+      if (!ok || deletingGraph.current) return;
+      deletingGraph.current = true;
       try {
         await api.deleteGraph(graph.id);
         const list = await refreshList();
@@ -802,6 +806,8 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
         else await newGraph();
       } catch (err) {
         setErrors(extractErrors(err));
+      } finally {
+        deletingGraph.current = false;
       }
     })();
   }, [graph?.id, graph?.name, refreshList, openGraph, newGraph, confirm]);
@@ -877,20 +883,30 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
   const backupMemory = useCallback(async () => {
     if (!graph?.id) return;
     try {
-      setErrors([describeMemoryAction(await api.backupMemory(graph.id))]);
+      const out = await api.backupMemory(graph.id);
+      setErrors(null);
+      setNotices([describeMemoryAction(out)]);
     } catch (err) {
       setErrors(extractErrors(err));
     }
   }, [graph?.id]);
+  // The shortcut can repeat while a reset (backup, then clear) is in flight.
+  const resettingMemory = useRef(false);
+  // Menu item and shortcut both come here, so both ask first.
   const resetMemory = useCallback(async () => {
-    if (!graph?.id) return;
+    if (!graph?.id || resettingMemory.current) return;
+    resettingMemory.current = true;
     try {
+      if (!(await confirm(resetMemoryConfirmation(graph.name || graph.id)))) return;
       const out = await api.resetMemory(graph.id);
-      setErrors([describeMemoryAction(out)]);
+      setErrors(null);
+      setNotices([describeMemoryAction(out)]);
     } catch (err) {
       setErrors(extractErrors(err));
+    } finally {
+      resettingMemory.current = false;
     }
-  }, [graph?.id]);
+  }, [graph?.id, graph?.name, confirm]);
   const resetMemoryRef = useRef(resetMemory);
   resetMemoryRef.current = resetMemory;
 
@@ -1075,8 +1091,10 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
   }, [beginBatch, closeOverlay]);
 
   // ---- watch (scheduled source nodes) ----
+  const togglingWatch = useRef(false);
   const onToggleWatch = useCallback(async () => {
-    if (!graph?.id) return;
+    if (!graph?.id || togglingWatch.current) return;
+    togglingWatch.current = true;
     try {
       if (watchInfo?.watching) {
         await api.stopWatch(graph.id);
@@ -1088,6 +1106,8 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
       }
     } catch (err) {
       setErrors(extractErrors(err));
+    } finally {
+      togglingWatch.current = false;
     }
   }, [graph?.id, watchInfo?.watching, saveCurrent]);
 
@@ -1173,7 +1193,21 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
     const origin = graph?.id;
     try {
       if (isChatNode(id)) {
-        await canvasAgents.remove(id.slice('chat:'.length));
+        const agentId = id.slice('chat:'.length);
+        const name = canvasAgents.agents.find(a => a.id === agentId)?.name || agentId;
+        await canvasAgents.remove(agentId);
+        if (graphRef.current?.id === origin) {
+          // No dialog: the removal is undoable, and this says how.
+          const notice = {
+            text: `Chat Agent '${name}' removed. Undo with ${UNDO_KEYS}, or:`,
+            actionLabel: 'Undo',
+            onAction: async () => {
+              setNotices(current => current?.filter(n => n !== notice) || null);
+              try { await canvasAgents.unarchive(agentId); } catch (e) { reportAgentError(e); }
+            },
+          };
+          setNotices([notice]);
+        }
       } else {
         const resource = memoryOverlay(nodesRef.current, { resources: graph?.memory_resources || [] }).memNodes.find(n => n.id === id);
         if (!resource) return;
@@ -1198,7 +1232,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
       setInspectorParent(parent => parent === id ? null : parent);
       setSelectedMemoryEdges(new Set());
     } catch (e) { reportAgentError(e); }
-  }, [graph?.id, graph?.memory_resources, canvasAgents.remove, canvasAgents.save, canvasAgents.agents, setNodes, reportAgentError]);
+  }, [graph?.id, graph?.memory_resources, canvasAgents.remove, canvasAgents.unarchive, canvasAgents.save, canvasAgents.agents, setNodes, reportAgentError]);
   // Chat Agent changes the assistant made, carried out through the same
   // calls the canvas's own controls use, so the harness store and the canvas
   // agree. Returns what could not be done, for the chat to show, and how to
@@ -1752,8 +1786,11 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
       {notices && (
         <div className="notice-banner">
           <div>
-            {notices.map((notice, i) => (
-              <div key={i}>• {notice}</div>
+            {notices.map((notice, i) => (typeof notice === 'string'
+              ? <div key={i}>• {notice}</div>
+              : <div key={i}>• {notice.text}{' '}
+                  <button type="button" className="notice-action" onClick={notice.onAction}>{notice.actionLabel}</button>
+                </div>
             ))}
           </div>
           <button onClick={() => setNotices(null)}>✕</button>

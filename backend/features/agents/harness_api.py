@@ -84,6 +84,24 @@ def owner(graph):
     return scope
 
 
+def archive_owner(scopes, archived: str) -> int:
+    """File a deleted workflow's Chat Agents and conversations under its
+    archived id: kept, but a new workflow given the old id starts without
+    them. Sessions keep the checkpoint namespace they were created under, so
+    their history still resumes if the archive is ever restored."""
+    scopes = [str(s) for s in dict.fromkeys(scopes) if s]
+    moved = 0
+    with _lock, database() as db:
+        for scope in scopes:
+            rows = db.execute('SELECT id, kind, parent, body FROM objects WHERE owner=?', (scope,)).fetchall()
+            for id, kind, parent, body in rows:
+                value = json.loads(body)
+                if kind == 'session': value.setdefault('checkpoint_scope', scope)
+                put(db, id, archived, kind, parent, value)
+            moved += len(rows)
+    return moved
+
+
 @contextmanager
 def database():
     path = data_path('harness') / 'studio.sqlite'

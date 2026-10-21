@@ -102,7 +102,7 @@ export default function SchedulePanel({ open, graphId, onClose }) {
   };
 
   const remove = async () => {
-    setBusy(true);
+    setBusy(true); setError(null);
     try {
       await api.clearSchedule(graphId);
       setSchedule({ graph_id: graphId, scheduled: false });

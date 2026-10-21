@@ -35,6 +35,8 @@ const api = vi.hoisted(() => ({
   runGraph: vi.fn(),
   startWatch: vi.fn(),
   importGraph: vi.fn(),
+  resetMemory: vi.fn(),
+  deleteGraph: vi.fn(),
 }));
 
 vi.mock('./api.js', () => ({ api }));
@@ -113,8 +115,10 @@ vi.mock('./features/evaluation/EvolvePanel.jsx', () => ({
   default: ({ open }) => open ? <div>Evolve overlay</div> : null,
 }));
 vi.mock('./components/TopBar.jsx', () => ({
-  default: ({ dirty, onRun, onImport, onWorkspace, onToggleWatch, onReview, onRuns, onSave }) => (
+  default: ({ dirty, onRun, onImport, onWorkspace, onToggleWatch, onReview, onRuns, onSave, onResetMemory, onDelete }) => (
     <div>
+      <button type="button" onClick={onResetMemory}>Reset memory</button>
+      <button type="button" onClick={onDelete}>Delete workflow</button>
       <span data-testid="dirty">{dirty ? 'dirty' : 'clean'}</span>
       <button type="button" onClick={onSave}>Save</button>
       <button type="button" onClick={onRun}>Run</button>
@@ -711,4 +715,64 @@ it('undoes the Chat Agent changes an assistant turn made', async () => {
   expect(api.updateCanvasAgent).toHaveBeenLastCalledWith('old-id', 'a2', expect.objectContaining({ name: 'Writer', instructions: 'Write.' }));
   await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:a1')).toBe(true));
   expect(state.canvas.nodes.find(n => n.id === 'chat:a2').data.title).toBe('Writer');
+});
+
+
+describe('memory reset asks first', () => {
+  const OUT = { cleared: true, graph_id: 'old-id', backup: '/data/memory-backups/20260101-000000',
+                sizes: { memory: 2048 } };
+  it('from the menu: says what is cleared and that a backup comes first, then where it went', async () => {
+    api.resetMemory.mockResolvedValue(OUT);
+    const { user } = await loadedApp();
+    await user.click(screen.getByRole('button', { name: 'Reset memory' }));
+    expect(screen.getByText('Reset memory of "Original workflow"?')).toBeInTheDocument();
+    expect(screen.getByText(/long-term memory, memory tables and short-term/)).toBeInTheDocument();
+    expect(screen.getByText(/backup copy is made first, in the memory-backups folder/)).toBeInTheDocument();
+    expect(api.resetMemory).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Back up and reset' }));
+    await waitFor(() => expect(api.resetMemory).toHaveBeenCalledWith('old-id'));
+    expect(await screen.findByText(/copy kept at \/data\/memory-backups\/20260101-000000/)).toBeInTheDocument();
+    expect(document.querySelector('.notice-banner')).not.toBeNull();
+    expect(document.querySelector('.error-banner')).toBeNull();
+  });
+
+  it('from the shortcut: the same confirmation, and Cancel clears nothing', async () => {
+    api.resetMemory.mockResolvedValue(OUT);
+    const { user } = await loadedApp();
+    fireEvent.keyDown(window, { key: 'M', ctrlKey: true, shiftKey: true });
+    expect(await screen.findByText('Reset memory of "Original workflow"?')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(api.resetMemory).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'M', ctrlKey: true, shiftKey: true });
+    await user.click(await screen.findByRole('button', { name: 'Back up and reset' }));
+    await waitFor(() => expect(api.resetMemory).toHaveBeenCalledTimes(1));
+  });
+});
+
+it('says a removed Chat Agent can be brought back, and Undo does it', async () => {
+  const agent = { id: 'b'.repeat(32), name: 'Research', memories: [], x: 0, y: 0 };
+  api.canvasAgents.mockResolvedValue({ agents: [agent] });
+  api.removeCanvasAgent.mockResolvedValue({ removed: true });
+  api.restoreCanvasAgent.mockResolvedValue(agent);
+  const user = userEvent.setup();
+  render(<App initialGraphId="old-id" />);
+  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === `chat:${agent.id}`)).toBe(true));
+  await act(async () => state.canvas.nodes.find(n => n.id === `chat:${agent.id}`).data.onDelete(`chat:${agent.id}`));
+  expect(screen.getByText(/Chat Agent 'Research' removed\. Undo with (⌘Z|Ctrl\+Z)/)).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Undo' }));
+  await waitFor(() => expect(api.restoreCanvasAgent).toHaveBeenCalledWith('old-id', agent.id));
+  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === `chat:${agent.id}`)).toBe(true));
+  expect(screen.queryByText(/Chat Agent 'Research' removed/)).toBeNull();
+});
+
+it('says what deleting a workflow does to its history: archived, not kept in place', async () => {
+  api.deleteGraph.mockResolvedValue({ ok: true });
+  const { user } = await loadedApp();
+  await user.click(screen.getByRole('button', { name: 'Delete workflow' }));
+  const body = screen.getByText(/deleted permanently/);
+  expect(body.textContent).toMatch(/runs, batches, memory, workspace files and evaluator draft are not erased: they are moved to an archive/);
+  expect(body.textContent).toMatch(/<id>\.deleted-<time>/);
+  expect(body.textContent).not.toMatch(/are kept/);
+  await user.click(screen.getByRole('button', { name: 'Cancel' }));
+  expect(api.deleteGraph).not.toHaveBeenCalled();
 });

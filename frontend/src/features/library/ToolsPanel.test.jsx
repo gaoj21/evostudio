@@ -113,3 +113,34 @@ describe('a toolkit can be uploaded as a folder', () => {
     expect(await screen.findByText(/Installed for my_project/)).toBeInTheDocument();
   });
 });
+
+describe('deleting a skill', () => {
+  it('sends one delete however often it is clicked, and the skill leaves the list', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    api.listSkills.mockResolvedValueOnce({ skills: [{ name: 'rubric', description: 'r' }] })
+      .mockResolvedValue({ skills: [] });
+    let finish;
+    api.deleteSkill.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const user = userEvent.setup();
+    render(<ToolsPanel onAdd={vi.fn()} />);
+    const remove = await screen.findByTitle('Delete skill');
+    await user.click(remove);
+    expect(remove).toBeDisabled();
+    await user.click(remove);
+    expect(api.deleteSkill).toHaveBeenCalledTimes(1);
+    finish({ ok: true });
+    await waitFor(() => expect(screen.queryByText(/rubric/)).not.toBeInTheDocument());
+  });
+
+  it('a failed delete is shown and the skill stays listed', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    api.listSkills.mockResolvedValueOnce({ skills: [{ name: 'rubric', description: 'r' }] })
+      .mockRejectedValue(new Error('offline'));
+    api.deleteSkill.mockRejectedValue(Object.assign(new Error('x'), { body: { detail: 'Skill is locked' } }));
+    const user = userEvent.setup();
+    render(<ToolsPanel onAdd={vi.fn()} />);
+    await user.click(await screen.findByTitle('Delete skill'));
+    expect(await screen.findByText('Skill is locked')).toBeInTheDocument();
+    expect(screen.getByText(/rubric/)).toBeInTheDocument();
+  });
+});

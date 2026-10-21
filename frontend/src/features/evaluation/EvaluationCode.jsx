@@ -121,11 +121,12 @@ export default function EvaluationCode({ graphId, onChange, disabled = false }) 
   }, [graphId]);
 
   const discardDraft = async () => {
+    if (live.trim() && !window.confirm('Discard this evaluation code? It cannot be brought back.')) return;
     setCode(''); setLive(''); setConfig({}); setIface(null);
     baseline.current = { code: '', config: {} }; unsaved.current = false;
     clearLocalDraft(graphId);
     setDraftSavedAt(null); setDraftState('idle');
-    try { await api.saveEvaluatorDraft(graphId, { code: '', config: {} }); }
+    try { await api.deleteEvaluatorDraft(graphId); }
     catch { setDraftState('local'); }
   };
 

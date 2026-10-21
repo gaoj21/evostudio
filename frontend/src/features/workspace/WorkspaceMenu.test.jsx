@@ -291,3 +291,22 @@ it('shows checkpoint metadata and copy path without a text editor', async()=>{
   await user.click(screen.getByRole('button',{name:'Copy full path'}));
   expect(clipboard).toHaveBeenCalledWith('/server/workspace/model.pt');
 });
+
+describe('deleting from the tree', () => {
+  it('a second click while the delete is in flight sends nothing', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    let finish;
+    api.deleteWorkspaceFile.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const user = setup();
+    const remove = await waitFor(() => {
+      const found = [...document.querySelectorAll('.ws-file-del')][0];
+      if (!found) throw new Error('no delete button yet');
+      return found;
+    });
+    await user.click(remove);
+    await user.click(remove);
+    expect(api.deleteWorkspaceFile).toHaveBeenCalledTimes(1);
+    await act(async () => finish({ ok: true }));
+    await waitFor(() => expect(api.getWorkspace.mock.calls.length).toBeGreaterThan(1));
+  });
+});

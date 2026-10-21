@@ -8,7 +8,7 @@ vi.mock('../../api.js', () => ({
     evolveMetrics: vi.fn(), evolvePresets: vi.fn(), getGraph: vi.fn(),
     previewEvolveResults: vi.fn(), listBatches: vi.fn(), listRuns: vi.fn(), startEvolveResults: vi.fn(), startEvolveUpload: vi.fn(), applyEvolve: vi.fn(),
     listEvolveTasks: vi.fn(), getEvolveTask: vi.fn(), stopEvolve: vi.fn(),
-    graphEvaluators: vi.fn(), saveGraphEvaluators: vi.fn(), deleteGraphEvaluator: vi.fn(),
+    graphEvaluators: vi.fn(), saveGraphEvaluators: vi.fn(),
     previewGraphEvaluator: vi.fn(), runGraphEvaluator: vi.fn(), inspectEvaluatorCode: vi.fn(),
     evaluatorDraft: vi.fn(), saveEvaluatorDraft: vi.fn(), listDataResources: vi.fn(),
   },

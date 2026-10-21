@@ -37,6 +37,7 @@ def discard_candidate_batches(batch_ids):
     """Remove the batches candidate replays ran, and their runs: their
     records are already in the task, and they belong to no real workflow."""
     from backend.api import batch, runner
+    from backend.features.persistence import forget_view
     for batch_id in batch_ids or []:
         saved = batch.get_batch(batch_id, inputs=False) or {}
         for item in saved.get('items') or []:
@@ -45,10 +46,13 @@ def discard_candidate_batches(batch_ids):
                 with runner._lock:
                     runner._runs.pop(run_id, None)
                 (runner.RUNS_DIR / f'{run_id}.json').unlink(missing_ok=True)
+                # The listings' cached views of a deleted file go with it.
+                forget_view(runner.RUNS_DIR / f'{run_id}.json')
         with batch._lock:
             batch._batches.pop(batch_id, None)
             batch._threads.pop(batch_id, None)
         (batch.BATCHES_DIR / f'{batch_id}.json').unlink(missing_ok=True)
+        forget_view(batch.BATCHES_DIR / f'{batch_id}.json')
         batch._journal_path(batch_id).unlink(missing_ok=True)
         batch._inputs_path(batch_id).unlink(missing_ok=True)
 

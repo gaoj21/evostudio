@@ -14,6 +14,10 @@ _lock = threading.RLock()
 _client = None
 
 
+class NotFound(ValueError):
+    """A space or entry that does not exist (404, where other refusals are 422)."""
+
+
 def status():
     try:
         installed = version('mem0ai')
@@ -66,7 +70,7 @@ def get_space(graph, space_id):
         raise ValueError('Select a Mem0 space accessible to this task.')
     path = ROOT / 'spaces' / (space_id + '.json')
     if not path.is_file():
-        raise ValueError('Mem0 space not found.')
+        raise NotFound('Mem0 space not found.')
     item = json.loads(path.read_text(encoding='utf-8'))
     if item['scope'] != scope(graph):
         raise ValueError('Mem0 space belongs to a different project or task.')
@@ -111,7 +115,7 @@ def mutate(graph, space_id, memory_id, content=None):
         db = client()
         item = db.get(memory_id)
         if not item or item.get('user_id') != space_id:
-            raise ValueError('Memory entry not found in this space.')
+            raise NotFound('Memory entry not found in this space.')
         return db.delete(memory_id) if content is None else db.update(memory_id, text=content)
 
 

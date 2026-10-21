@@ -146,6 +146,20 @@ async def _lifespan(_app: FastAPI):
             print(f"[studio] startup cleanup failed: {type(exc).__name__}: {exc}")
         finally:
             done.set()
+        # Leftovers of deletes the last process did not finish; after the
+        # watchdog's deadline on purpose, as refiling a long history is slow
+        # rather than stuck.
+        try:
+            # A deleted workflow's history still being refiled: finish it.
+            # Its id stays taken meanwhile (the marker on disk says so).
+            refiled = graph_store.resume_refiles()
+            if refiled:
+                print(f"[studio] finished refiling the history of deleted: {', '.join(refiled)}")
+            # Deleted workspace folders whose background removal was cut short.
+            workspace.empty_trash()
+            data_resources.empty_trash()
+        except Exception as exc:
+            print(f"[studio] finishing earlier deletes failed: {type(exc).__name__}: {exc}")
 
     def watchdog():
         # A cleanup this slow is stuck on something: show where.
@@ -562,6 +576,8 @@ def _validate_source_nodes(graph: dict) -> None:
 def list_runs(graph_id: str | None = Query(default=None), summary: bool = Query(default=False)):
     """Recent runs. `summary=1`: ids, status, times and short input fields
     only — what a list shows; open a run for the rest."""
+    if graph_id and graph_store.is_archiving(graph_id):
+        return []           # deleted; its history is being refiled
     if summary is not True:
         return runner.list_runs(graph_id=graph_id)
     from backend.features.chat.result_chat import summary as summarize
@@ -613,7 +629,10 @@ def resume_schedule(graph_id: str, body: dict = Body(...)):
 
 @app.delete("/api/graphs/{graph_id}/schedule")
 def delete_schedule(graph_id: str):
-    return {"ok": True, "removed": scheduler.clear(graph_id)}
+    removed = scheduler.clear(graph_id)
+    if not removed and not graph_store.graph_exists(graph_id):
+        raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found")
+    return {"ok": True, "removed": removed}
 
 
 @app.post("/api/graphs/{graph_id}/rename")
@@ -962,6 +981,8 @@ def list_metrics():
 @app.get("/api/batches")
 def list_batches(graph_id: str | None = Query(default=None)):
     """Past batches for a workflow, newest first (without their records)."""
+    if graph_id and graph_store.is_archiving(graph_id):
+        return []           # deleted; its history is being refiled
     return batch_store.list_batches(graph_id=graph_id)
 
 
@@ -1056,6 +1077,8 @@ def start_watch(graph_id: str):
 @app.delete("/api/graphs/{graph_id}/watch")
 def stop_watch(graph_id: str):
     stopped = watcher.stop_graph_watch(graph_id)
+    if not stopped and not graph_store.graph_exists(graph_id):
+        raise HTTPException(status_code=404, detail=f"Graph '{graph_id}' not found")
     return {"watching": False, "stopped": stopped}
 
 

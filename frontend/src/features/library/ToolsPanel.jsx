@@ -215,13 +215,24 @@ export default function ToolsPanel({ onAdd, disabled }) {
   const [skills, setSkills] = useState([]);
   const [skillEditor, setSkillEditor] = useState(null); // null | {} | skill
 
+  // A failed refresh keeps the list it had: emptying it made a skill whose
+  // delete had failed look deleted.
   const refreshSkills = () => {
-    api.listSkills().then((r) => setSkills(r.skills || [])).catch(() => setSkills([]));
+    api.listSkills().then((r) => setSkills(r.skills || [])).catch(() => {});
   };
+  // `skill:<name>` / `tool:<name>` while its delete is in flight.
+  const [deleting, setDeleting] = useState(null);
 
-  const deleteSkill = (name) => {
-    if (!window.confirm(`Delete skill “${name}”? Workflows using it will need updating.`)) return;
-    api.deleteSkill(name).then(refreshSkills).catch(e => setSourceError(e?.body?.detail || e.message));
+  const deleteSkill = async (name) => {
+    if (deleting || !window.confirm(`Delete skill “${name}”? Workflows using it will need updating.`)) return;
+    setDeleting(`skill:${name}`);
+    setSourceError(null);
+    try {
+      await api.deleteSkill(name);
+      setSkills((list) => list.filter((s) => s.name !== name));
+      refreshSkills();
+    } catch (e) { setSourceError(e?.body?.detail || e.message); }
+    finally { setDeleting(null); }
   };
 
   const refreshTools = () => {
@@ -233,9 +244,15 @@ export default function ToolsPanel({ onAdd, disabled }) {
   }, []);
 
   const deleteTool = async (name) => {
-    if (!window.confirm(`Delete custom tool “${name}”? Workflows using it will need updating.`)) return;
-    try { await api.deleteCustomTool(name); refreshTools(); }
-    catch (e) { setSourceError(e?.body?.detail || e.message); }
+    if (deleting || !window.confirm(`Delete custom tool “${name}”? Workflows using it will need updating.`)) return;
+    setDeleting(`tool:${name}`);
+    setSourceError(null);
+    try {
+      await api.deleteCustomTool(name);
+      setCustomTools((list) => list.filter((t) => t.name !== name));
+      refreshTools();
+    } catch (e) { setSourceError(e?.body?.detail || e.message); }
+    finally { setDeleting(null); }
   };
 
   const addCustomNode = () => onAdd?.({
@@ -280,7 +297,7 @@ export default function ToolsPanel({ onAdd, disabled }) {
         <ResourceActions key={t.name} name={t.name} items={[{ label: 'Edit code and configuration', action: () => setEditorOpen(t) }, { label: 'Delete custom tool…', danger: true, action: () => deleteTool(t.name) }]}><div className="palette-item">
           <div className="palette-label">
             {t.name}
-            <button type="button" className="param-del" style={{ float: 'right' }} title="Delete" onClick={() => deleteTool(t.name)}>
+            <button type="button" className="param-del" style={{ float: 'right' }} title="Delete" disabled={deleting === `tool:${t.name}`} onClick={() => deleteTool(t.name)}>
               ✕
             </button>
           </div>
@@ -350,6 +367,7 @@ export default function ToolsPanel({ onAdd, disabled }) {
               className="param-del"
               style={{ float: 'right' }}
               title="Delete skill"
+              disabled={deleting === `skill:${sk.name}`}
               onClick={(e) => { e.stopPropagation(); deleteSkill(sk.name); }}
             >
               ✕

@@ -41,6 +41,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKSPACE_DIR = data_path("workspace")
 MAX_READ_BYTES = 100 * 1024
 
+# A deleted folder is renamed in here first and removed in the background,
+# so deleting a large folder answers at once. Not part of the project: never
+# listed, read or downloaded; emptied at startup if a removal was cut short.
+TRASH_DIR_NAME = ".studio-trash"
+
 
 def workspace_root(graph_id: str) -> Path:
     return WORKSPACE_DIR / graph_id
@@ -428,7 +433,7 @@ def tree(graph_id: str) -> list[dict]:
         rel = path.name
         # Bookkeeping, not part of the project: it says which version of the
         # framework is sitting in vendor/, and means nothing to a reader.
-        if rel in (VENDOR_STAMP, GENERATED_MANIFEST, "__pycache__"):
+        if rel in (VENDOR_STAMP, GENERATED_MANIFEST, "__pycache__", TRASH_DIR_NAME):
             continue
         if path.is_dir():
             files.append({"path": rel, "dir": True, "absolute_path": str(path.resolve())})
@@ -462,6 +467,8 @@ def _resolve_in_workspace(graph_id: str, relpath: str, allow_root: bool = True) 
         if target == root:
             raise WorkspaceError(f"Not a path inside the workspace: {relpath!r}")
         raise WorkspaceError(f"Path escapes the workspace: {relpath!r}")
+    if contains(root / TRASH_DIR_NAME, target, allow_root=True):
+        raise WorkspaceError(f"No such workspace path: {relpath!r}", not_found=True)
     return target
 
 
@@ -674,6 +681,19 @@ def make_dir(graph_id: str, relpath: str) -> dict:
     return {"path": relpath}
 
 
+COUNT_LIMIT = 10000
+
+
+def _count_files(folder: Path, limit: int) -> int:
+    """Files under `folder`, counting no further than `limit` + 1."""
+    count = 0
+    for _root, _dirs, files in os.walk(folder):
+        count += len(files)
+        if count > limit:
+            break
+    return count
+
+
 def delete_file(graph_id: str, relpath: str, recursive: bool = False) -> dict:
     """Delete a workspace file, or a directory.
 
@@ -686,18 +706,75 @@ def delete_file(graph_id: str, relpath: str, recursive: bool = False) -> dict:
     _refuse_if_memory(relpath, "delete")
     target = _resolve_in_workspace(graph_id, relpath, allow_root=False)
     if target.is_dir():
-        contents = [p for p in target.rglob("*") if p.is_file()]
-        if contents and not recursive:
-            raise WorkspaceError(
-                f"{relpath!r} holds {len(contents)} file(s). Deleting it removes "
-                "them too."
-            )
-        shutil.rmtree(target)
-        return {"deleted": relpath, "files": len(contents), "directory": True}
+        # Counted only to warn before a non-empty folder goes, and only so
+        # far: walking a large folder on a synced drive is the slow part of
+        # deleting it. Once confirmed, nothing is walked here.
+        if not recursive:
+            count = _count_files(target, COUNT_LIMIT)
+            if count:
+                shown = f"{COUNT_LIMIT}+" if count > COUNT_LIMIT else str(count)
+                raise WorkspaceError(
+                    f"{relpath!r} holds {shown} file(s). Deleting it removes "
+                    "them too."
+                )
+        _discard_dir(graph_id, target)
+        return {"deleted": relpath, "files": None if recursive else 0, "directory": True}
     if not target.is_file():
         raise WorkspaceError(f"No such workspace file: {relpath!r}", not_found=True)
     target.unlink()
     return {"deleted": relpath, "files": 1, "directory": False}
+
+
+def _discard_dir(graph_id: str, target: Path) -> None:
+    """Take a folder out of the workspace now; remove its files after.
+
+    The rename is instant and the folder is gone from every listing the
+    moment the delete answers; the removal itself (minutes for a large one on
+    a synced folder) runs in the background. Falls back to removing it in
+    place when it cannot be renamed (another volume, a locked file)."""
+    import shutil
+    import threading
+    import uuid
+
+    trash = workspace_root(graph_id) / TRASH_DIR_NAME
+    try:
+        trash.mkdir(exist_ok=True)
+        trashed = trash / f"{uuid.uuid4().hex}-{target.name}"
+        target.rename(trashed)
+    except OSError:
+        shutil.rmtree(target)
+        return
+    threading.Thread(target=_remove_trash, args=(trashed,),
+                     name=f"workspace-trash-{graph_id}", daemon=True).start()
+
+
+def _remove_trash(path: Path) -> None:
+    import logging
+    import shutil
+
+    shutil.rmtree(path, ignore_errors=True)
+    if path.exists():
+        logging.getLogger(__name__).warning(
+            "could not remove deleted workspace folder %s; retried at next start", path)
+    try:
+        path.parent.rmdir()                   # the trash folder, once empty
+    except OSError:
+        pass
+
+
+def empty_trash() -> int:
+    """Remove what deletes left in every workspace's trash (a removal the
+    server stopped in the middle of). Returns how many folders were emptied."""
+    import shutil
+
+    if not WORKSPACE_DIR.is_dir():
+        return 0
+    emptied = 0
+    for trash in WORKSPACE_DIR.glob(f"*/{TRASH_DIR_NAME}"):
+        if trash.is_dir() and not trash.is_symlink():
+            shutil.rmtree(trash, ignore_errors=True)
+            emptied += 1
+    return emptied
 
 
 def _download_memory(graph_id: str, relpath: str) -> tuple[str, str, bytes]:
@@ -751,6 +828,7 @@ def download(graph_id: str, relpath: str = "") -> tuple[str, str, bytes]:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(target.rglob("*")):
-            if path.is_file():
+            if path.is_file() and not (target == root
+                                       and path.relative_to(root).parts[0] == TRASH_DIR_NAME):
                 archive.write(path, f"{name}/{path.relative_to(target)}")
     return f"{name}.zip", "application/zip", buffer.getvalue()

@@ -45,6 +45,9 @@ it('offers task actions by right click and deletes only after confirmation', asy
  fireEvent.contextMenu((await screen.findByText('Existing task')).closest('article'), { clientX: 10, clientY: 20 });
  fireEvent.click(screen.getByRole('menuitem', { name: 'Delete task…' }));
  expect(api.deleteGraph).not.toHaveBeenCalled();
+ // Says where the history goes: archived, not kept in place.
+ expect(screen.getByText(/are not erased: they are moved to an archive/)).toHaveTextContent('<id>.deleted-<time>');
+ expect(screen.queryByText(/are retained/)).toBeNull();
  api.projectTasks.mockResolvedValue([]);
  fireEvent.click(screen.getByRole('button', { name: 'Delete', exact: true }));
  await waitFor(() => expect(api.deleteGraph).toHaveBeenCalledWith('old'));

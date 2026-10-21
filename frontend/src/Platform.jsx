@@ -4,6 +4,7 @@ import ResourceActions from './components/ResourceActions.jsx';
 import ResourceMenu from './components/ResourceMenu.jsx';
 import TaskDetail from './TaskDetail.jsx';
 import { api } from './api.js';
+import { DELETE_WORKFLOW_TEXT } from './features/workspace/workflowDelete.js';
 import './platform.css';
 
 function errorText(error) {
@@ -151,7 +152,7 @@ export default function Platform() {
         {['rename', 'rename-project'].includes(taskAction.kind) && <label>Name<input autoFocus name="name" required maxLength={120} defaultValue={taskAction.task.name} /></label>}
         {taskAction.kind === 'move' && <label>Project<select autoFocus name="project" defaultValue={selected}><option value="unassigned">Unassigned tasks</option>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>}
         {taskAction.kind === 'copy' && <p>Copy the workflow and canvas configuration into this project. Data resources, tools and shared Memory remain references; run and chat history are not copied.</p>}
-        {taskAction.kind === 'delete' && <p>Remove this task and its workflow definition. Stored run results and Memory data are retained.</p>}
+        {taskAction.kind === 'delete' && <p>{DELETE_WORKFLOW_TEXT}</p>}
         {taskAction.kind === 'delete-project' && <p>Only empty projects can be deleted. Move or delete their tasks first.</p>}
         <div className="form-actions"><button autoFocus={taskAction.kind.startsWith('delete')} type="button" disabled={busy} onClick={() => setTaskAction(null)}>Cancel</button><button disabled={busy} className={taskAction.kind.startsWith('delete') ? 'danger' : 'platform-primary'}>{busy ? 'Saving…' : taskAction.kind.startsWith('delete') ? 'Delete' : taskAction.kind === 'copy' ? 'Copy' : 'Save'}</button></div>
       </form>

@@ -131,22 +131,57 @@ async def upload(request: Request):
 
 @router.delete('/{resource_id}')
 def remove(resource_id: str):
-    from backend.api import graphs
+    """Delete a resource no saved workflow uses.
+
+    Under the association lock, so an attach cannot land between the in-use
+    check and the delete (it would write its manifest into a folder being
+    removed). The folder is renamed aside under the lock and removed after,
+    so a large one does not hold attaches up."""
     try:
-        load(resource_id)
-        used = []
-        for path in graphs.GRAPHS_DIR.glob('*.json'):
-            graph = json.loads(path.read_text(encoding='utf-8'))
-            from backend.features.evaluation.evaluator_tools import label_resource_ids
-            if resource_id in label_resource_ids(graph) or any(
-                    (t.get('source') or {}).get('resource_id') == resource_id for t in graph.get('tasks', [])):
-                used.append(graph.get('name', graph['id']))
-        if used:
-            raise HTTPException(409, 'Resource is used by saved workflows: ' + ', '.join(used))
-        shutil.rmtree(path_for(resource_id))
+        with _association_lock:
+            load(resource_id)
+            used = _used_by(resource_id)
+            if used:
+                raise HTTPException(409, 'Resource is used by saved workflows: ' + ', '.join(used))
+            trash = directory() / f'.deleted-{resource_id}-{uuid.uuid4().hex}'
+            path_for(resource_id).rename(trash)
+        shutil.rmtree(trash, ignore_errors=True)
         return {'deleted': resource_id}
     except SourceError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+
+def empty_trash():
+    """Remove resource folders a delete renamed aside but did not finish
+    removing (the server stopped, or a file was locked)."""
+    root = data_path('data-resources')
+    if root.is_dir():
+        for trash in root.glob('.deleted-*'):
+            if trash.is_dir() and not trash.is_symlink():
+                shutil.rmtree(trash, ignore_errors=True)
+
+
+def _used_by(resource_id):
+    """Names of the saved workflows that reference the resource. A workflow
+    file that cannot be read is skipped (and logged), not a 500: one corrupt
+    file must not make every resource undeletable."""
+    import logging
+    from backend.api import graphs
+    from backend.features.evaluation.evaluator_tools import label_resource_ids
+    used = []
+    for path in graphs.GRAPHS_DIR.glob('*.json'):
+        try:
+            graph = json.loads(path.read_text(encoding='utf-8'))
+            if not isinstance(graph, dict):
+                raise ValueError('not a workflow object')
+            if resource_id in label_resource_ids(graph) or any(
+                    isinstance(t, dict) and (t.get('source') or {}).get('resource_id') == resource_id
+                    for t in graph.get('tasks') or []):
+                used.append(graph.get('name') or graph.get('id') or path.stem)
+        except (OSError, ValueError, TypeError, AttributeError) as exc:
+            logging.getLogger(__name__).warning(
+                'data resource %s: skipped unreadable workflow file %s: %s', resource_id, path, exc)
+    return used
 
 
 @router.post('/{resource_id}/workspace')

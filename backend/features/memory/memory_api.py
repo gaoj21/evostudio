@@ -98,12 +98,21 @@ def _mem0_guard(graph_id: str | None) -> None:
         raise HTTPException(409, 'Shared Mem0 spaces exist. Reset individual workflows or manage shared entries in the Mem0 panel.')
 
 
+def _known_graph(graph_id):
+    """`graph_id`, or None for every store; 400 for an id that is not one
+    folder name — `../workspace` would empty a directory beside the stores."""
+    from backend.features.persistence import is_safe_id
+    if graph_id is not None and not is_safe_id(graph_id):
+        raise HTTPException(status_code=400, detail="Invalid workflow id.")
+    return graph_id
+
+
 def _live() -> bool:
     from backend.api import batch as batch_store
     from backend.api import runner
 
     return any(b.get("status") in ("running", "cancelling") for b in batch_store.list_batches()) \
-        or any(r.get("status") == "running" for r in runner.list_runs())
+        or any(r.get("status") in ("running", "stopping") for r in runner.list_runs())
 
 
 @router.post("/memory/backup")
@@ -114,7 +123,8 @@ def backup_memory(body: dict | None = None):
     while things run: a backup takes nothing away.
     """
     body = body or {}
-    return memory_reset.snapshot(body.get("graph_id") or None)
+    graph_id = _known_graph(body.get("graph_id") or None)
+    return memory_reset.snapshot(graph_id)
 
 
 @router.post("/memory/reset")
@@ -126,7 +136,7 @@ def reset_memory(body: dict | None = None):
     would leave it reading from nothing halfway through.
     """
     body = body or {}
-    graph_id = body.get('graph_id') or None
+    graph_id = _known_graph(body.get('graph_id') or None)
     _mem0_guard(graph_id)
     try:
         return memory_reset.clear(graph_id, busy=_live(),

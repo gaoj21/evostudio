@@ -273,10 +273,18 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
       .catch((err) => setFile({ content: `Error: ${err?.body?.detail || err.message}` }));
   }, [selected, graphId]);
 
+  // A delete in flight: a second click on the same entry would only 404.
+  const deleting = useRef(false);
+
   if (!open) return null;
 
   const removeFile = async (path, { recursive = false } = {}) => {
-    if (!window.confirm(`Delete ${path}?`)) return;
+    if (deleting.current || !window.confirm(`Delete ${path}?`)) return;
+    deleting.current = true;
+    try { await removeConfirmed(path, recursive); } finally { deleting.current = false; }
+  };
+
+  const removeConfirmed = async (path, recursive) => {
     setError(null);
     try {
       await api.deleteWorkspaceFile(graphId, path, recursive);

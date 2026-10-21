@@ -32,7 +32,13 @@ def _size(path) -> int:
 
 
 def _targets(graph_id: str | None):
-    """What a reset touches: every store, or only one workflow's part of each."""
+    """What a reset touches: every store, or only one workflow's part of each.
+
+    InvalidId for an id that is not one folder name: `../workspace` would
+    otherwise empty a directory beside the stores."""
+    from backend.features.persistence import safe_id
+    if graph_id is not None:
+        safe_id(graph_id, 'workflow id')
     for store in STORES:
         root = data_path(store)
         if graph_id is None:
@@ -51,6 +57,7 @@ def snapshot(graph_id: str | None = None) -> dict:
     cleaner moment — but a backup must never be refused for being
     inconvenient.
     """
+    targets = list(_targets(graph_id))
     stamp = _stamp()
     dest = BACKUPS / stamp
     # Two backups in the same second are two backups, not one folder.
@@ -60,7 +67,7 @@ def snapshot(graph_id: str | None = None) -> dict:
         suffix += 1
     stamp = dest.name
     sizes = {}
-    for store, target in _targets(graph_id):
+    for store, target in targets:
         if not target.exists():
             sizes[store] = 0
             continue
@@ -86,11 +93,12 @@ def clear(graph_id: str | None = None, *, busy: bool = False, backup: bool = Tru
     """
     if busy:
         raise RuntimeError("A run or batch is in progress; memory is left as it is.")
+    targets = list(_targets(graph_id))
     taken = snapshot(graph_id) if backup else {"backup": None, "saved": False,
                                                "stamp": _stamp(), "graph_id": graph_id,
                                                "sizes": {}}
     sizes = dict(taken["sizes"])
-    for store, target in _targets(graph_id):
+    for store, target in targets:
         if not target.exists():
             sizes.setdefault(store, 0)
             continue

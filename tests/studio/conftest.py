@@ -109,6 +109,13 @@ def _never_touch_real_data(tmp_path, monkeypatch):
     """
     import importlib
 
+    # Runs and batches held in memory are state too: one a test left in
+    # runner._runs stood in for another test's run file of the same id.
+    from backend.features.execution import batch as batch_impl
+    from backend.features.workflow import runner as runner_impl
+    monkeypatch.setattr(runner_impl, "_runs", {})
+    monkeypatch.setattr(batch_impl, "_batches", {})
+
     # Only these may be absent, and only for want of an optional extra.
     optional = {"evolve_api"}
     for module_name, attr in _DATA_PATHS:

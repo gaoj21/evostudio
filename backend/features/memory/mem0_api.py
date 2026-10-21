@@ -1,5 +1,6 @@
 """UI-facing Mem0 operations, scoped using the saved graph's project."""
 import logging
+import threading
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 from backend.api import graphs, mem0_service as service
@@ -36,6 +37,8 @@ def graph_for(graph_id):
 def call(fn, *args):
     try:
         return fn(*args)
+    except service.NotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except Exception as exc:
@@ -91,9 +94,24 @@ def delete_space(graph_id: str, space_id: str):
         if space_id in references:
             raise HTTPException(409, 'Remove this space from all canvases and disconnect its Agents before deleting it.')
     with service._lock:
+        if service._client is None:
+            # Starting Mem0 loads the embedding model — seconds — only to
+            # delete. The space goes now; its entries are purged behind it
+            # (an id is never reused, so a failed purge leaves nothing visible).
+            (service.ROOT / 'spaces' / (space_id + '.json')).unlink()
+            threading.Thread(target=_purge, args=(space_id,), name=f'mem0-purge-{space_id}', daemon=True).start()
+            return {'removed': True}
         try: service.client().delete_all(user_id=space_id)
         except Exception as exc:
             logging.getLogger(__name__).exception('Mem0 space deletion failed')
             raise HTTPException(503, 'Memory storage could not be deleted. Please retry.') from exc
         (service.ROOT / 'spaces' / (space_id + '.json')).unlink()
     return {'removed': True}
+
+
+def _purge(space_id):
+    try:
+        with service._lock:
+            service.client().delete_all(user_id=space_id)
+    except Exception:
+        logging.getLogger(__name__).exception('Mem0 space %s: entries could not be purged', space_id)
