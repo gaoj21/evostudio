@@ -518,6 +518,10 @@ def _prefill_for(graph_id: str, workflow_inputs: list[dict]) -> dict:
                           if k in wanted and k not in found})
             if len(found) > len(prefill):
                 prefill, source_run = found, run.get("run_id")
+            # Newest first: the first run that covers everything is the one.
+            # Reading on through the rest opened up to 20 whole run files.
+            if len(prefill) == len(wanted):
+                break
             if wanted <= set(prefill):
                 break
     return {

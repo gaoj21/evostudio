@@ -250,3 +250,39 @@ def test_restart_opens_only_batches_that_may_be_in_flight(monkeypatch):
     opened.clear()
     assert batch.mark_interrupted() == 0
     assert opened == []
+
+
+def test_concurrent_listings_and_cleanup_read_each_run_file_once(monkeypatch):
+    """With the cache empty, the startup cleanup, a task's run list and its
+    run plan each scanned every run file at once — three passes over a synced
+    folder. One scans; the others find the views it cached."""
+    import threading
+    runner.RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    for i in range(30):
+        _write(runner.RUNS_DIR / f'r{i:02d}.json', _run(f'r{i:02d}', f'2026-01-{i % 28 + 1:02d}T00:00:00'))
+    _restart()
+    opened = _opened(monkeypatch)
+    start = threading.Barrier(4)
+
+    def call(work):
+        start.wait()
+        work()
+    workers = [threading.Thread(target=call, args=(work,)) for work in (
+        runner.mark_interrupted, lambda: runner._run_index('g'),
+        lambda: runner._run_index('g'), lambda: runner._run_index(None))]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(10)
+    assert sorted(opened) == sorted(f'r{i:02d}.json' for i in range(30))
+
+
+def test_run_plan_prefill_stops_at_the_newest_run_that_covers_every_input(monkeypatch):
+    from backend.api import app as app_module
+    runs = [{'run_id': f'r{i}', 'inputs': {'topic': f't{i}'}, 'nodes': []} for i in range(5)]
+    read = []
+    monkeypatch.setattr(runner, 'list_runs', lambda graph_id=None, limit=20: [{'run_id': r['run_id']} for r in runs])
+    monkeypatch.setattr(runner, 'get_run', lambda run_id: read.append(run_id) or next(r for r in runs if r['run_id'] == run_id))
+    prefill = app_module._prefill_for('g', [{'name': 'topic'}])
+    assert read == ['r0']
+    assert prefill

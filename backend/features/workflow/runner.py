@@ -1703,6 +1703,11 @@ def mark_interrupted(before: float | None = None) -> int:
     from backend.features.persistence import cached_view, file_version, remember_view
     if not RUNS_DIR.is_dir():
         return 0
+    with _scan_lock:
+        return _mark_interrupted(before, cached_view, file_version, remember_view)
+
+
+def _mark_interrupted(before, cached_view, file_version, remember_view) -> int:
     marked = 0
     for path in RUNS_DIR.glob("*.json"):
         version = file_version(path)
@@ -1846,6 +1851,14 @@ def list_runs(graph_id: str | None = None, limit: int | None = 20) -> list[dict]
     return list_run_views(graph_id, limit, view=None)
 
 
+# One pass over the run files at a time. With the view cache still empty (the
+# first start after an upgrade, or a cleared cache) every file is read once;
+# the startup cleanup, a task page's run list and its run plan used to do that
+# in parallel, three times over, on a synced folder. The ones that wait find
+# the views already cached.
+_scan_lock = threading.Lock()
+
+
 def _run_meta(run: dict) -> dict:
     """What listings sort and filter runs by, and what a restart checks:
     kept per version of the run's file, so a changed status is never stale."""
@@ -1861,10 +1874,11 @@ def _run_index(graph_id: str | None) -> tuple[list, dict]:
     from backend.features.persistence import file_view
     found: dict[str, tuple] = {}
     if RUNS_DIR.is_dir():
-        for path in RUNS_DIR.glob("*.json"):
-            meta = file_view(path, "run-meta", _run_meta, persist=True)
-            if meta is not None:
-                found[path.stem] = (meta, path)
+        with _scan_lock:
+            for path in RUNS_DIR.glob("*.json"):
+                meta = file_view(path, "run-meta", _run_meta, persist=True)
+                if meta is not None:
+                    found[path.stem] = (meta, path)
     with _lock:
         live = {run_id: _public(state) for run_id, state in _runs.items()}
     for run_id, run in live.items():
