@@ -806,12 +806,13 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None,
 
             elif op in ('list_memories', 'read_memory'):
                 from backend.api import memory_resources
-                if op == 'list_memories': observe(op, memory_resources.catalog(graph))
+                scoped = agent_ops.with_scope(graph)
+                if op == 'list_memories': observe(op, memory_resources.catalog(scoped))
                 else:
-                    resource = memory_resources.resolve(graph, raw.get('memory_id'))
+                    resource = memory_resources.resolve(scoped, raw.get('memory_id'))
                     limit = max(1, min(100, int(raw.get('limit', 20))))
                     offset = max(0, int(raw.get('offset', 0)))
-                    observe(op, memory_resources.read(graph, resource, raw.get('query') or '', limit, offset=offset))
+                    observe(op, memory_resources.read(scoped, resource, raw.get('query') or '', limit, offset=offset))
 
             elif op == "cancel_run":
                 from backend.api import runner

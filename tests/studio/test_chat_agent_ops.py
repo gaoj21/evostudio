@@ -225,3 +225,28 @@ def test_the_store_accepts_the_chosen_id_once(studio_data):
     assert client.post(f"/api/graphs/{gid}/agents", json={"id": chosen, "name": "Again"}).status_code == 409
     assert client.post(f"/api/graphs/{gid}/agents", json={"id": "nope", "name": "Bad"}).status_code == 422
     assert len(client.post(f"/api/graphs/{gid}/agents", json={"name": "Auto"}).json()["id"]) == 32
+
+
+def test_the_canvas_snapshot_reaches_its_projects_shared_memory(studio_data, tmp_path, monkeypatch):
+    """The canvas the frontend sends has no project_id or task_id (the snapshot
+    carries only what the canvas draws); its shared memories are scoped by the
+    project, so the assistant found none and could not connect any of them."""
+    from backend.api import graphs, mem0_service
+    monkeypatch.setattr(mem0_service, "ROOT", tmp_path / "mem0")
+    stored = graphs.create_graph("Scoped", "")
+    graphs.save_graph(stored["id"], {**graphs.load_graph(stored["id"]), "project_id": "p1"})
+    space = mem0_service.create_space({"id": stored["id"], "project_id": "p1"}, "Team Notes")
+    snapshot = {"id": stored["id"], "name": "Scoped", "goal": "", "tasks": [], "edges": [],
+                "memory_resources": [{"space_id": space["id"], "name": "Team Notes"}],
+                "canvas_agents": [{"id": HELPER, "name": "Helper", "memories": []}]}
+
+    from backend.api import chat_api
+    result = chat_api.apply_operations(snapshot, [
+        {"op": "connect_agent_memory", "agent": "Helper", "memory": "Team Notes"},
+        {"op": "list_memories"}], stored["id"])
+
+    assert errors(result) == []
+    (action,) = result["agent_actions"]
+    assert action["patch"]["memories"] == [{"space_id": space["id"], "read": True, "write": False}]
+    listed = next(o["result"] for o in result["observations"] if o["op"] == "list_memories")
+    assert [m["name"] for m in listed] == ["Team Notes"]

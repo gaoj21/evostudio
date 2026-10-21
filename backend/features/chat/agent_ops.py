@@ -42,12 +42,31 @@ def bare_id(agent: dict) -> str:
 # catalogs
 # --------------------------------------------------------------------------
 
+def with_scope(graph: dict) -> dict:
+    """The canvas as the chat receives it, with the fields that decide which
+    shared memories it can reach. The canvas snapshot carries neither
+    project_id nor task_id; without them a workflow in a project looked for
+    its shared memories under its own id, found none, and nothing on the
+    canvas could be connected. The stored workflow is the authority."""
+    if graph.get("project_id") and graph.get("task_id"):
+        return graph
+    try:
+        from backend.api import graphs
+        stored = graphs.load_graph(graph.get("id")) if graph.get("id") else None
+    except Exception:  # noqa: BLE001 - an unsaved canvas keeps what it has
+        stored = None
+    if not stored:
+        return graph
+    return {**graph, **{key: stored[key] for key in ("project_id", "task_id")
+                        if stored.get(key) and not graph.get(key)}}
+
+
 def memory_catalog(graph: dict) -> list:
     """The memories this canvas can connect a Chat Agent to: its shared (Mem0)
     spaces in scope and its workflow memories, as the canvas shows them."""
     try:
         from backend.api import memory_resources
-        return memory_resources.catalog(graph)
+        return memory_resources.catalog(with_scope(graph))
     except Exception:  # noqa: BLE001 - a canvas without scope has no memories
         return []
 
@@ -259,7 +278,7 @@ def check_memories(op, graph, memories, resources):
     from fastapi import HTTPException
     from backend.api import harness_api
     try:
-        harness_api.validate_memories(graph, {"memories": memories})
+        harness_api.validate_memories(with_scope(graph), {"memories": memories})
     except HTTPException as exc:
         reachable = ", ".join(f"{r['name']} ({r['id']})" for r in resources) or "(none)"
         raise _error(f"{op}: {exc.detail} Memories this canvas can connect: {reachable}.",
