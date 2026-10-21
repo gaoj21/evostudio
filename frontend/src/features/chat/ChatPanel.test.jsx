@@ -582,6 +582,38 @@ describe('a canvas edited while a generation ran', () => {
   });
 });
 
+describe('a generation that finishes onto a canvas nothing was lost from', () => {
+  const GENERATED = { name: 'demo', tasks: [{ name: 'fetch' }, { name: 'report' }] };
+
+  it('is applied straight away when the canvas was empty, whatever moved meanwhile', async () => {
+    let current = { name: 'demo', tasks: [] };
+    api.chatGraph.mockImplementation(async () => {
+      current = { name: 'demo', tasks: [], memory_positions: { m: { x: 5, y: 5 } } };
+      return { reply: 'Created', operations: [{ op: 'generate_workflow' }], job_id: 'empty' };
+    });
+    api.chatJob.mockResolvedValue({ status: 'done', graph: GENERATED, elapsed: 3 });
+    const { onApply, user } = setup({ getGraph: () => current });
+    await send(user, 'Create a new workflow');
+
+    await waitFor(() => expect(onApply).toHaveBeenCalledWith(GENERATED), { timeout: 4000 });
+    expect(screen.queryByRole('button', { name: 'Replace' })).not.toBeInTheDocument();
+  });
+
+  it('is applied when only node positions changed', async () => {
+    const before = { name: 'demo', tasks: [{ name: 'old', x: 0, y: 0 }] };
+    let current = before;
+    api.chatGraph.mockImplementation(async () => {
+      current = { name: 'demo', tasks: [{ name: 'old', x: 120, y: 40 }] };
+      return { reply: 'Generating', operations: [{ op: 'generate_workflow' }], job_id: 'moved' };
+    });
+    api.chatJob.mockResolvedValue({ status: 'done', graph: GENERATED, elapsed: 3 });
+    const { onApply, user } = setup({ getGraph: () => current });
+    await send(user, 'Start over with a new workflow');
+
+    await waitFor(() => expect(onApply).toHaveBeenCalledWith(GENERATED), { timeout: 4000 });
+  });
+});
+
 describe('undoing Chat Agent changes', () => {
   it('hands the turn\'s agent undo to the canvas along with the workflow snapshot', async () => {
     const next = { name: 'demo', tasks: [] };

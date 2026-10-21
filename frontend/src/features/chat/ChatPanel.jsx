@@ -93,6 +93,21 @@ export function canvasKey(graph) {
   return JSON.stringify(rest);
 }
 
+// What a generated workflow would replace: the nodes, their settings and the
+// edges — not where the nodes sit. Dragging a node while a generation runs is
+// no reason to hold its result back.
+export function contentKey(graph) {
+  if (!graph) return '';
+  const { canvas_agents: _agents, memory_positions: _positions, tasks, ...rest } = graph;
+  return JSON.stringify({ ...rest, tasks: (tasks || []).map(({ x: _x, y: _y, ...task }) => task) });
+}
+
+// Generating a workflow onto an empty canvas has nothing to overwrite.
+export function generationWouldReplaceWork(before, current) {
+  if (!current || !(current.tasks || []).length) return false;
+  return contentKey(current) !== contentKey(before);
+}
+
 export function conversationHistory(messages) {
   return messages.map(m => ({ role: m.role, content: [m.content,
     m.role === 'assistant' && m.summary ? `Applied changes: ${m.summary}` : '',
@@ -183,7 +198,17 @@ export default function ChatPanel({
       const deadline = Date.now() + POLL_TIMEOUT_MS;
       for (;;) {
         await new Promise((r) => setTimeout(r, POLL_MS));
-        if (activeGraph.current !== graphId || turn.stopped || !cancellation.isCurrent(turn)) return;
+        if (turn.stopped) return;
+        if (activeGraph.current !== graphId) {
+          // The job keeps running on the server; reopening this workflow
+          // re-attaches to it.
+          patch({ stage: '', notes: ['You switched workflows while this was generating. '
+            + 'It keeps running; open this workflow again to pick it up.'] });
+          return;
+        }
+        // A message sent meanwhile does not drop the generation: its result
+        // is offered instead of applied (below), as that turn may change the
+        // canvas too.
         if (Date.now() > deadline) {
           patch({ stage: '', errors: ['Generation timed out.'] });
           return;
@@ -195,7 +220,7 @@ export default function ChatPanel({
           patch({ stage: '', errors: [`Lost track of the generation job: ${err.message}`] });
           return;
         }
-        if (turn.stopped || !cancellation.isCurrent(turn)) return;
+        if (turn.stopped) return;
         if (job.status === 'cancelled') { patch({ stage: '', content: 'Stopped.', stopped: true }); return; }
         if (job.status === 'running') {
           patch({ stage: `${job.stage} (${job.elapsed}s)` });
@@ -214,8 +239,9 @@ export default function ChatPanel({
           // Generation returns a whole new workflow, not edits that could be
           // replayed. If the person changed the canvas while it ran, replacing
           // it would silently throw their work away: ask first.
-          const current = before ? getGraphRef.current?.() : null;
-          if (current && canvasKey(current) !== canvasKey(before)) {
+          const current = getGraphRef.current?.();
+          const superseded = !cancellation.isCurrent(turn);
+          if (superseded || generationWouldReplaceWork(before, current)) {
             patch({ stage: '', pendingGraph: job.graph, pendingSummary: summary,
               notes: job.graph.migration_warnings || [] });
             return;

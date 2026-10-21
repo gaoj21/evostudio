@@ -136,7 +136,9 @@ Valid operations:
 - {"op": "generate_workflow", "goal": "<goal sentence>"} -- builds an entire \
 workflow from scratch with the framework's planner. Use this, alone, when the \
 user asks for a workflow for a goal and the canvas is empty or they want to \
-start over. It REPLACES every existing node.
+start over. It REPLACES every existing node. It runs in the background for a \
+few minutes: your reply must say the workflow is being generated and will \
+appear on the canvas when it is done -- never that it has been created.
   The `goal` must state what the workflow SHOULD ACCOMPLISH, as a task in the \
 user's domain -- never "build/create a workflow that ...". The planner takes \
 the goal literally, so a meta-phrased goal makes it plan the work of building \
@@ -1084,7 +1086,11 @@ def chat(graph_id: str, body: dict = Body(...)):
             "graph": graph,
             "applied": False,
             "errors": [],
-            "notes": ([] if len(operations) == 1 else
+            # The model's reply is written before anything was built; say
+            # what is actually happening, or "created" reads as done.
+            "notes": ["Generating the workflow in the background; it appears on "
+                      "the canvas when it is done (usually a few minutes)."]
+                     + ([] if len(operations) == 1 else
                       ["Other operations in this turn were skipped: generating a "
                        "workflow replaces the whole canvas."])
                      + (["A generation was already running for this workflow — "
