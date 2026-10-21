@@ -11,9 +11,16 @@ export function useCanvasAgents(graphId, reportError) {
   const [agents, setAgents] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
+  // A rename moves the workflow to a new id but it is the same workflow: its
+  // Agents stay on screen (and an open Agent's unsaved settings with them)
+  // while they are read again under the new id.
+  const renamedTo = useRef(null);
+  const follow = useCallback(id => { renamedTo.current = id; }, []);
   useEffect(() => {
     let active = true;
-    setAgents([]); setLoaded(false);
+    const same = renamedTo.current === graphId;
+    renamedTo.current = null;
+    if (!same) { setAgents([]); setLoaded(false); }
     if (graphId && api.canvasAgents) api.canvasAgents(graphId).then(r => { if (active) { setAgents(r.agents); setLoaded(true); } }).catch(e => { if (active) reportError(e); });
     return () => { active = false; };
   }, [graphId, reportError]);
@@ -74,5 +81,5 @@ export function useCanvasAgents(graphId, reportError) {
     ...(m.read ? [{ id: `chat-read:${a.id}:${memoryId(m)}`, source: memoryId(m), target: chatNodeId(a.id), sourceHandle: m.read_source_handle || 's-out', targetHandle: m.read_target_handle || 'in', label: 'reads', data: { chatAgent: a.id, agent: chatNodeId(a.id), resource: memoryId(m), memory: 'read', space: memoryId(m), direction: 'read' } }] : []),
     ...(m.write ? [{ id: `chat-write:${a.id}:${memoryId(m)}`, source: chatNodeId(a.id), target: memoryId(m), sourceHandle: m.write_source_handle || 'out', targetHandle: m.write_target_handle || 's-in', label: 'writes', data: { chatAgent: a.id, agent: chatNodeId(a.id), resource: memoryId(m), memory: 'write', space: memoryId(m), direction: 'write' } }] : []),
   ])), [agents]);
-  return { agents, loaded, nodes, edges, add, save, remove, restore, unarchive, busy, setAgents, isSaving: id => !!pendingSaves[`${graphId}:${id}`] };
+  return { agents, loaded, nodes, edges, add, save, remove, restore, unarchive, busy, setAgents, follow, isSaving: id => !!pendingSaves[`${graphId}:${id}`] };
 }

@@ -70,3 +70,55 @@ it('says what Stop reached and what it cannot recall, and never offers Stop twic
   expect(view.queryByRole('button',{name:'Stop'})).toBeNull();
   expect(view.getByRole('button',{name:'Send'})).toBeDisabled();  // no message typed yet
 });
+
+it('marks unsaved harness settings and asks before leaving with them', async () => {
+  const agent={id:'a3',name:'Chat',instructions:'Help',max_steps:20,timeout:300,memories:[]};
+  const onBack=vi.fn();
+  const save=vi.fn(async (_,patch) => ({...agent,...patch}));
+  const {container}=render(<ChatAgentInspector graphId="g" agent={agent} onBack={onBack} onSave={save} />);
+  const view=within(container), user=userEvent.setup();
+  await user.click(view.getByRole('button',{name:'Harness settings →'}));
+  expect(view.queryByText('Unsaved changes')).not.toBeInTheDocument();
+  await user.type(view.getByLabelText('Instructions'),' more');
+  expect(view.getByText('Unsaved changes')).toBeInTheDocument();
+  await user.click(view.getByRole('button',{name:'← Back to chat'}));
+  const ask=vi.spyOn(window,'confirm').mockReturnValue(false);
+  await user.click(view.getByRole('button',{name:'← Back to workflow'}));
+  expect(ask).toHaveBeenCalled();
+  expect(onBack).not.toHaveBeenCalled();
+  await user.click(view.getByRole('button',{name:'Harness settings →'}));
+  expect(view.getByLabelText('Instructions')).toHaveValue('Help more');
+  await user.click(view.getByRole('button',{name:'Save settings'}));
+  await waitFor(()=>expect(save).toHaveBeenCalledWith(agent,{instructions:'Help more'}));
+  ask.mockClear();
+  await user.click(view.getByRole('button',{name:'← Back to workflow'}));
+  expect(ask).not.toHaveBeenCalled();
+  expect(onBack).toHaveBeenCalled();
+  ask.mockRestore();
+});
+
+it('shows a connection this task can no longer reach and removes it', async () => {
+  const {api} = await import('../../api.js');
+  const gone='b'.repeat(32), live='c'.repeat(32);
+  api.agentSessions.mockResolvedValue({sessions:[]});
+  api.chatMemoryResources.mockResolvedValueOnce({resources:[{id:`mem:space:${live}`,name:'Live notes',kind:'mem0',space_id:live,writable:true}]});
+  const agent={id:'stale',name:'Helper',instructions:'Help',max_steps:20,timeout:300,
+    memories:[{space_id:gone,read:true,write:true},{space_id:live,read:true,write:false}]};
+  const refused=Object.assign(new Error('HTTP 422'),{body:{detail:`Shared memory 'Team notes' (${gone}) belongs to another project or task, so this task cannot use it (the task may have been moved). Remove it under Connected memories, then save again.`}});
+  const save=vi.fn().mockRejectedValueOnce(refused).mockImplementation(async (a, patch) => ({...a, ...(typeof patch === 'function' ? patch(a) : patch)}));
+  const {container}=render(<ChatAgentInspector graphId="g" agent={agent} onBack={vi.fn()} onSave={save} />);
+  const view=within(container), user=userEvent.setup();
+  expect(await view.findByText(/unavailable \(remove it in Harness settings\)/)).toHaveTextContent(`Shared memory ${gone.slice(0,8)}`);
+  await user.click(view.getByRole('button',{name:'Harness settings →'}));
+  const group=view.getByRole('group',{name:'Unavailable memories'});
+  expect(group).toHaveTextContent(`Shared memory ${gone.slice(0,8)} · Read / Write`);
+  expect(group).not.toHaveTextContent('Live notes');
+  // Saving other settings names the space and says how to fix it.
+  await user.type(view.getByLabelText('Name'),' 2');
+  await user.click(view.getByRole('button',{name:'Save settings'}));
+  expect(await view.findByRole('alert')).toHaveTextContent("Shared memory 'Team notes'");
+  await user.click(view.getByRole('button',{name:'Remove unavailable memories'}));
+  await waitFor(()=>expect(save).toHaveBeenCalledTimes(2));
+  const patch=save.mock.calls[1][1];
+  expect(patch(agent)).toEqual({memories:[{space_id:live,read:true,write:false}]});
+});

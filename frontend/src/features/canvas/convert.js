@@ -1,12 +1,22 @@
 // Conversions between the contract's canvas graph JSON and React Flow state.
 // Node id === task name (unique, sluggified).
 
+// A name in another script keeps an identity of its own: its letters cannot be
+// spelled in an identifier, so a short FNV-1a hash of them is appended (the
+// server's slug does exactly the same, so both sides agree on the name).
 export function sluggify(name) {
-  const s = String(name || '')
+  const ascii = String(name || '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
-  return s || 'node';
+  const raw = String(name || '').trim();
+  let other = false;
+  for (const ch of raw) if (ch.codePointAt(0) > 127 && /[\p{L}\p{N}]/u.test(ch)) { other = true; break; }
+  if (!other) return ascii || 'node';
+  let h = 0x811c9dc5;
+  for (const ch of raw) h = Math.imul((h ^ ch.codePointAt(0)) >>> 0, 0x01000193) >>> 0;
+  const tag = h.toString(16).padStart(8, '0').slice(0, 6);
+  return ascii ? `${ascii}_${tag}` : `node_${tag}`;
 }
 
 export function uniqueName(base, taken) {

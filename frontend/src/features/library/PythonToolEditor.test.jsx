@@ -105,3 +105,17 @@ describe('an uploaded folder toolkit',()=>{
     {name:'mylib',code:'TOOL_CLASS = Other\n',edit_entry:true})));
  });
 });
+
+it('asks before a click outside the dialog discards unsaved code',async()=>{
+ const close=vi.fn();
+ const {container}=render(<PythonToolEditor onClose={close} onSaved={vi.fn()}/>);
+ const user=userEvent.setup();
+ container.querySelector('.modal-backdrop').click();
+ expect(close).toHaveBeenCalledTimes(1);
+ await user.type(screen.getByLabelText('Python Tool code'),'def f(): pass');
+ const ask=vi.spyOn(window,'confirm').mockReturnValue(false);
+ fireEvent.click(container.querySelector('.modal-backdrop'));
+ expect(ask).toHaveBeenCalled();
+ expect(close).toHaveBeenCalledTimes(1);
+ ask.mockRestore();
+});

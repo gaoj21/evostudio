@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import {describe,it,expect,vi,beforeEach} from 'vitest';
 import DataLoaderInput from './DataLoaderInput.jsx';
 import {api} from '../../api.js';
+import {clearCodeDrafts,hasCodeDrafts} from './codeDrafts.js';
 vi.mock('../../api.js',()=>({api:{listDataResources:vi.fn(),listCustomTools:vi.fn(),uploadDataResource:vi.fn(),previewDataLoader:vi.fn(),stopDataLoaderPreview:vi.fn(),deleteDataResource:vi.fn(),attachDataResource:vi.fn(),listSourceTypes:vi.fn(),inspectDataLoaderCode:vi.fn()}}));
 beforeEach(()=>{vi.clearAllMocks();api.inspectDataLoaderCode.mockResolvedValue({inputs:[],warnings:[],output_schema_available:true});api.listDataResources.mockResolvedValue({resources:[{id:'data',name:'Folder',files:[{path:'a.json'}]}]});api.listCustomTools.mockResolvedValue({tools:[]});api.listSourceTypes.mockResolvedValue({source_types:[{type:'http_api'},{type:'user_dataset',local:true},{type:'project_feed',local:true,project:'demo'}]});});
 describe('DataLoader input',()=>{
@@ -140,4 +141,28 @@ describe('a slow sample',()=>{
   await userEvent.selectOptions(screen.getByLabelText('How to use the data'),'reference');
   await waitFor(()=>expect(api.stopDataLoaderPreview).toHaveBeenCalled());
  });
+});
+
+it('keeps unconfirmed Dataset code when the Inspector unmounts and brings it back for the same node',async()=>{
+ const config={loader:'python',code:'a = 1'};
+ const first=render(<DataLoaderInput nodeId="loader" config={config} onChange={vi.fn()}/>);
+ const editor=screen.getByLabelText('Python Dataset code');
+ await userEvent.clear(editor);await userEvent.type(editor,'b = 2');
+ first.unmount();
+ expect(hasCodeDrafts()).toBe(true);
+ render(<DataLoaderInput nodeId="loader" config={config} onChange={vi.fn()}/>);
+ expect(screen.getByLabelText('Python Dataset code')).toHaveValue('b = 2');
+ expect(screen.getByText(/Unconfirmed draft/)).toBeTruthy();
+ await userEvent.click(screen.getByRole('button',{name:'Discard changes'}));
+ expect(screen.getByLabelText('Python Dataset code')).toHaveValue('a = 1');
+ expect(hasCodeDrafts()).toBe(false);
+ clearCodeDrafts();
+});
+it('does not hand one node\'s draft to another',async()=>{
+ const first=render(<DataLoaderInput nodeId="one" config={{loader:'python',code:''}} onChange={vi.fn()}/>);
+ await userEvent.type(screen.getByLabelText('Python Dataset code'),'x');
+ first.unmount();
+ render(<DataLoaderInput nodeId="two" config={{loader:'python',code:''}} onChange={vi.fn()}/>);
+ expect(screen.getByLabelText('Python Dataset code')).toHaveValue('');
+ clearCodeDrafts();
 });

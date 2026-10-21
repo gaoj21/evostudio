@@ -1,9 +1,9 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import ToolsPanel from './ToolsPanel.jsx';
+import ToolsPanel, { SkillEditor } from './ToolsPanel.jsx';
 
 const api = vi.hoisted(() => ({
   listCustomTools: vi.fn(),
@@ -142,5 +142,32 @@ describe('deleting a skill', () => {
     await user.click(await screen.findByTitle('Delete skill'));
     expect(await screen.findByText('Skill is locked')).toBeInTheDocument();
     expect(screen.getByText(/rubric/)).toBeInTheDocument();
+  });
+});
+
+describe('editing a skill', () => {
+  it('saves once however often Enter is pressed, and asks before a stray click discards it', async () => {
+    let finish;
+    api.saveSkill.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const onClose = vi.fn();
+    const onSaved = vi.fn();
+    const user = userEvent.setup();
+    const { container } = render(<SkillEditor onClose={onClose} onSaved={onSaved} />);
+    await user.type(screen.getByPlaceholderText('writing_style_guide'), 'guide');
+    await user.type(screen.getByPlaceholderText(/Risk levels/), 'When to use it');
+    await user.type(container.querySelector('textarea'), 'Do this.');
+
+    const ask = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    await user.click(container.querySelector('.modal-backdrop'));
+    expect(ask).toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    ask.mockRestore();
+
+    const form = container.querySelector('form');
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+    expect(api.saveSkill).toHaveBeenCalledTimes(1);
+    finish({});
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
   });
 });

@@ -4,6 +4,7 @@ import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import App from './App.jsx';
+import { clearCodeDrafts, codeDraftKeys, hasCodeDrafts, setCodeDraftOpen } from './features/data/codeDrafts.js';
 
 const state = vi.hoisted(() => ({ layout: 'desktop', center: vi.fn(), fit: vi.fn() }));
 const api = vi.hoisted(() => ({
@@ -32,6 +33,7 @@ const api = vi.hoisted(() => ({
   getWatch: vi.fn(),
   listBatches: vi.fn(),
   saveGraph: vi.fn(),
+  renameGraph: vi.fn(),
   runGraph: vi.fn(),
   startWatch: vi.fn(),
   importGraph: vi.fn(),
@@ -94,9 +96,13 @@ vi.mock('./features/chat/ChatPanel.jsx', () => ({
 vi.mock('./features/workspace/WorkspacePanel.jsx', () => ({
   default: () => <div>Workspace is visible</div>,
 }));
-vi.mock('./features/canvas/Inspector.jsx', () => ({
+vi.mock('./features/canvas/Inspector.jsx', async () => {
+  const { default: PythonDatasetEditor } = await import('./features/data/PythonDatasetEditor.jsx');
+  const { datasetDraftKey } = await import('./features/data/codeDrafts.js');
+  return {
   default: ({ onGraphChange, node, onRename, graph }) => (
     <>
+      {node?.id === 'loader' && <PythonDatasetEditor key={node.id} draftKey={datasetDraftKey(node.id)} code="" onChange={() => {}} />}
       <button type="button" onClick={() => onGraphChange({ name: 'Renamed workflow' })}>
         Rename on canvas
       </button>
@@ -105,7 +111,8 @@ vi.mock('./features/canvas/Inspector.jsx', () => ({
       {node && <button type="button" onClick={() => onRename(node.id, 'renamed_writer')}>Rename node</button>}
     </>
   ),
-}));
+  };
+});
 vi.mock('./features/execution/RunDialog.jsx', () => ({
   default: ({ open, onSubmit }) => open
     ? <button type="button" onClick={() => onSubmit({})}>Start test run</button>
@@ -115,8 +122,9 @@ vi.mock('./features/evaluation/EvolvePanel.jsx', () => ({
   default: ({ open }) => open ? <div>Evolve overlay</div> : null,
 }));
 vi.mock('./components/TopBar.jsx', () => ({
-  default: ({ dirty, onRun, onImport, onWorkspace, onToggleWatch, onReview, onRuns, onSave, onResetMemory, onDelete }) => (
+  default: ({ dirty, onRun, onImport, onWorkspace, onToggleWatch, onReview, onRuns, onSave, onResetMemory, onDelete, onRename }) => (
     <div>
+      <button type="button" onClick={() => onRename('Fresh name')}>Rename workflow</button>
       <button type="button" onClick={onResetMemory}>Reset memory</button>
       <button type="button" onClick={onDelete}>Delete workflow</button>
       <span data-testid="dirty">{dirty ? 'dirty' : 'clean'}</span>
@@ -687,6 +695,163 @@ it('keeps settings edited while a save is in flight', async () => {
   await act(async () => { finish({ ...GRAPH, name: 'Renamed workflow', goal: '' }); });
   expect(screen.getByTestId('goal')).toHaveTextContent('edited during save');
   await waitFor(() => expect(screen.getByTestId('dirty')).toHaveTextContent('dirty'));
+});
+
+it('sends one save when Cmd+S is pressed again while a save is in flight', async () => {
+  let finish;
+  api.saveGraph.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+  const { user } = await loadedApp();
+  await user.click(screen.getByRole('button', { name: 'Rename on canvas' }));
+  fireEvent.keyDown(window, { key: 's', metaKey: true });
+  fireEvent.keyDown(window, { key: 's', metaKey: true });
+  await user.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(api.saveGraph).toHaveBeenCalledTimes(1));
+  await act(async () => { finish({ ...GRAPH, id: 'renamed-workflow', name: 'Renamed workflow' }); });
+  await waitFor(() => expect(screen.getByTestId('dirty')).toHaveTextContent('clean'));
+  expect(api.saveGraph).toHaveBeenCalledTimes(1);
+  // The next save follows the id the first one moved the workflow to.
+  fireEvent.keyDown(window, { key: 's', metaKey: true });
+  await waitFor(() => expect(api.saveGraph).toHaveBeenCalledTimes(2));
+  expect(api.saveGraph.mock.calls[1][0]).toBe('renamed-workflow');
+});
+
+it('renames only after an in-flight save, under the id that save returned', async () => {
+  let finish;
+  api.saveGraph.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+  api.renameGraph.mockResolvedValue({ ...GRAPH, id: 'fresh-name', name: 'Fresh name' });
+  const { user } = await loadedApp();
+  await user.click(screen.getByRole('button', { name: 'Rename on canvas' }));
+  await user.click(screen.getByRole('button', { name: 'Save' }));
+  await user.click(screen.getByRole('button', { name: 'Rename workflow' }));
+  expect(api.renameGraph).not.toHaveBeenCalled();
+  await act(async () => { finish({ ...GRAPH, id: 'renamed-workflow', name: 'Renamed workflow' }); });
+  await waitFor(() => expect(api.renameGraph).toHaveBeenCalledWith('renamed-workflow', 'Fresh name'));
+  await waitFor(() => expect(screen.getByTestId('dirty')).toHaveTextContent('clean'));
+});
+
+it('saves after an in-flight rename, under the new identity', async () => {
+  let finish;
+  api.renameGraph.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+  api.saveGraph.mockImplementation(async (id, body) => ({ ...body, id }));
+  const { user } = await loadedApp();
+  await user.click(screen.getByRole('button', { name: 'Rename workflow' }));
+  await waitFor(() => expect(api.renameGraph).toHaveBeenCalledWith('old-id', 'Fresh name'));
+  fireEvent.keyDown(window, { key: 's', metaKey: true });
+  await act(async () => { await Promise.resolve(); });
+  expect(api.saveGraph).not.toHaveBeenCalled();
+  await act(async () => { finish({ ...GRAPH, id: 'fresh-name', name: 'Fresh name' }); });
+  await waitFor(() => expect(api.saveGraph).toHaveBeenCalledTimes(1));
+  expect(api.saveGraph.mock.calls[0][0]).toBe('fresh-name');
+  expect(api.saveGraph.mock.calls[0][1].name).toBe('Fresh name');
+});
+
+it('keeps an open Chat Agent and its unsaved settings across a workflow rename', async () => {
+  const agent = { id: 'agent1', name: 'Helper', instructions: 'Help', provider: null, max_steps: 20, timeout: 300, toolkits: null, memories: [], x: 0, y: 0 };
+  api.canvasAgents.mockResolvedValue({ agents: [agent] });
+  api.renameGraph.mockResolvedValue({ ...GRAPH, id: 'fresh-name', name: 'Fresh name' });
+  const { user } = await loadedApp();
+  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:agent1')).toBe(true));
+  act(() => state.canvas.onNodeClick(null, { id: 'chat:agent1' }));
+  await user.click(await screen.findByRole('button', { name: 'Harness settings →' }));
+  await user.type(screen.getByLabelText('Instructions'), ' more');
+  // The Agents are read again under the new id; until they arrive the open
+  // one must stay on screen.
+  let reread;
+  api.canvasAgents.mockReturnValueOnce(new Promise((resolve) => { reread = resolve; }));
+  await user.click(screen.getByRole('button', { name: 'Rename workflow' }));
+  await waitFor(() => expect(api.canvasAgents).toHaveBeenCalledWith('fresh-name'));
+  expect(screen.getByLabelText('Instructions')).toHaveValue('Help more');
+  await act(async () => { reread({ agents: [agent] }); });
+  expect(screen.getByLabelText('Instructions')).toHaveValue('Help more');
+  expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+});
+
+it('asks before leaving a node or saving over unconfirmed Inspector code', async () => {
+  const { user } = await loadedApp();
+  const draft = {};
+  act(() => state.canvas.onNodeClick(null, { id: 'a' }));
+  act(() => setCodeDraftOpen(draft, true));
+  const ask = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  try {
+    act(() => state.canvas.onNodeClick(null, { id: 'b' }));
+    act(() => state.canvas.onPaneClick());
+    expect(ask).toHaveBeenCalledTimes(2);
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(ask).toHaveBeenCalledTimes(3);
+    expect(api.saveGraph).not.toHaveBeenCalled();
+    const unload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(true);
+  } finally {
+    ask.mockRestore();
+    act(() => setCodeDraftOpen(draft, false));
+  }
+});
+
+describe('unconfirmed Dataset code while the Inspector is away', () => {
+  const LOADER = { ...GRAPH, tasks: [{ name: 'loader', inputs: [], outputs: [] }, { name: 'other', inputs: [], outputs: [] }] };
+  async function typeDraft() {
+    api.getGraph.mockResolvedValue(LOADER);
+    const loaded = await loadedApp();
+    await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'loader')).toBe(true));
+    act(() => state.canvas.onNodeClick(null, { id: 'loader' }));
+    await loaded.user.type(screen.getByLabelText('Python Dataset code'), 'x = 1');
+    return loaded;
+  }
+
+  it('keeps the draft across switching to Chat and back, with no prompt', async () => {
+    const ask = vi.spyOn(window, 'confirm');
+    try {
+      const { user } = await typeDraft();
+      expect(screen.getByTestId('dirty')).toHaveTextContent('dirty');
+      await user.click(screen.getByRole('button', { name: 'Chat', exact: true }));
+      expect(screen.queryByLabelText('Python Dataset code')).not.toBeInTheDocument();
+      expect(screen.getByTestId('dirty')).toHaveTextContent('dirty');
+      expect(hasCodeDrafts()).toBe(true);
+      await user.click(screen.getByRole('button', { name: 'Inspector', exact: true }));
+      expect(screen.getByLabelText('Python Dataset code')).toHaveValue('x = 1');
+      expect(screen.getByText(/Unconfirmed draft/)).toBeInTheDocument();
+      // Leaving through the canvas also unmounts it; the node brings it back.
+      act(() => state.canvas.onNodeClick(null, { id: 'loader' }));
+      expect(screen.getByLabelText('Python Dataset code')).toHaveValue('x = 1');
+      expect(ask).not.toHaveBeenCalled();
+      const unload = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(unload);
+      expect(unload.defaultPrevented).toBe(true);
+      await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+      expect(hasCodeDrafts()).toBe(false);
+      expect(screen.getByTestId('dirty')).toHaveTextContent('clean');
+    } finally {
+      ask.mockRestore();
+      act(() => clearCodeDrafts());
+    }
+  });
+
+  it('drops the draft once the user agrees to leave its node', async () => {
+    const ask = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    try {
+      await typeDraft();
+      act(() => state.canvas.onNodeClick(null, { id: 'other' }));
+      expect(ask).toHaveBeenCalledTimes(1);
+      expect(hasCodeDrafts()).toBe(false);
+      act(() => state.canvas.onNodeClick(null, { id: 'loader' }));
+      expect(screen.getByLabelText('Python Dataset code')).toHaveValue('');
+    } finally {
+      ask.mockRestore();
+      act(() => clearCodeDrafts());
+    }
+  });
+
+  it('follows its node through a rename and ends with the node', async () => {
+    const { user } = await typeDraft();
+    await user.click(screen.getByRole('button', { name: 'Rename node' }));
+    await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'renamed_writer')).toBe(true));
+    expect(codeDraftKeys()).toEqual(['dataset:renamed_writer']);
+    // Chat replacing the canvas without that node ends its draft.
+    await user.click(screen.getByRole('button', { name: 'Chat', exact: true }));
+    act(() => state.chat.onApply({ ...GRAPH, tasks: [{ name: 'other', inputs: [], outputs: [] }] }));
+    await waitFor(() => expect(hasCodeDrafts()).toBe(false));
+  });
 });
 
 it('undoes the Chat Agent changes an assistant turn made', async () => {

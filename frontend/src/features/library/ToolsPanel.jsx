@@ -39,9 +39,17 @@ export function SkillEditor({ initial, onClose, onSaved }) {
   const [content, setContent] = useState(initial?.content || '');
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
+  // Enter in a field submits the form again while the first save is out.
+  const inFlight = useRef(false);
+  const changed = name !== (initial?.name || '') || description !== (initial?.description || '')
+    || content !== (initial?.content || '');
+  // A stray click outside the dialog must not throw away what was typed.
+  const dismiss = () => { if (!changed || window.confirm('Discard unsaved changes to this skill?')) onClose(); };
 
   const save = async (e) => {
     e.preventDefault();
+    if (inFlight.current) return;
+    inFlight.current = true;
     setSaving(true);
     setError(null);
     try {
@@ -50,12 +58,13 @@ export function SkillEditor({ initial, onClose, onSaved }) {
     } catch (err) {
       setError(err?.body?.detail || err.message);
     } finally {
+      inFlight.current = false;
       setSaving(false);
     }
   };
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onClick={dismiss}>
       <form className="modal" onClick={(e) => e.stopPropagation()} onSubmit={save}>
         <h3>{initial ? `Skill: ${initial.name}` : 'New skill'}</h3>
         <div className="field">

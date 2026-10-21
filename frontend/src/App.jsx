@@ -51,6 +51,7 @@ import MemoryPanel from './features/memory/MemoryPanel.jsx';
 import EvolvePanel from './features/evaluation/EvolvePanel.jsx';
 import ReviewPanel from './components/ReviewPanel.jsx';
 import WorkspacePanel from './features/workspace/WorkspacePanel.jsx';
+import { CODE_DRAFT_WARNING, clearCodeDrafts, datasetDraftKey, hasCodeDrafts, moveCodeDraft, onCodeDraftsChange } from './features/data/codeDrafts.js';
 import ChatPanel, { renameChatHistory } from './features/chat/ChatPanel.jsx';
 import RunsPanel from './features/execution/RunsPanel.jsx';
 import SchedulePanel from './features/execution/SchedulePanel.jsx';
@@ -120,6 +121,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
   graphRef.current = graph;
   const reportAgentError = useCallback(e => setErrors(extractErrors(e)), []);
   const canvasAgents = useCanvasAgents(graph?.id, reportAgentError);
+  const followAgents = canvasAgents.follow;
   
   const [spaceNames, setSpaceNames] = useState({});
   useEffect(() => {
@@ -135,6 +137,8 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
   const [edges, setEdges] = useEdgesState([]);
+  const edgesRef = useRef(edges);
+  edgesRef.current = edges;
   // Edges the migration drew for dependencies the old engine implied. Real,
   // and kept in the graph, but a canvas is easier to read without them.
   const [showImplied, setShowImplied] = useState(() => {
@@ -164,6 +168,28 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
     return showMemory ? [...flow, ...memoryOverlay(nodes, { resources: graph?.memory_resources || [], positions: graph?.memory_positions || {}, spaceNames }).memEdges.map(e => ({ ...e, selected: selectedMemoryEdges.has(e.id) }))] : flow;
   }, [edges, nodes, graph?.memory_resources, graph?.memory_positions, showImplied, showMemory, selectedMemoryEdges, spaceNames]);
   const [selectedId, setSelectedId] = useState(null);
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+  // Unconfirmed code in an Inspector editor: not on the canvas, still unsaved.
+  const [codeDrafts, setCodeDrafts] = useState(hasCodeDrafts);
+  useEffect(() => onCodeDraftsChange(setCodeDrafts), []);
+  // Drafts outlive the Inspector (switching the pane to Chat, collapsing it),
+  // but not the Studio that showed them.
+  useEffect(() => () => clearCodeDrafts(), []);
+  // A draft goes with its node: deleting the node (or Chat replacing it) ends it.
+  const draftNodeKeys = nodes.map(n => datasetDraftKey(n.id)).join('\n');
+  useEffect(() => {
+    if (!hasCodeDrafts()) return;
+    const present = new Set(draftNodeKeys.split('\n'));
+    clearCodeDrafts(key => typeof key !== 'string' || !key.startsWith(datasetDraftKey('')) || present.has(key));
+  }, [draftNodeKeys]);
+  // Leaving the node whose editor holds it drops it, so that asks first.
+  const keepCodeDraft = () => {
+    if (!hasCodeDrafts()) return false;
+    if (!window.confirm(CODE_DRAFT_WARNING)) return true;
+    clearCodeDrafts();
+    return false;
+  };
   const [inspectorParent, setInspectorParent] = useState(null);
   useEffect(() => { setInspectorParent(null); }, [graph?.id]);
   const [resourceMeasurements, setResourceMeasurements] = useState({});
@@ -405,13 +431,16 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
 
   const confirmDiscard = useCallback(
     async (what) => {
-      if (!dirty) return true;
-      return confirm({
+      if (!dirty && !hasCodeDrafts()) return true;
+      const ok = await confirm({
         title: 'Discard unsaved changes?',
-        body: `This workflow has unsaved edits. ${what} will lose them.`,
+        body: dirty ? `This workflow has unsaved edits. ${what} will lose them.`
+          : `There is unconfirmed Dataset code in the Inspector. ${what} will lose it.`,
         confirmLabel: 'Discard',
         danger: true,
       });
+      if (ok) clearCodeDrafts();
+      return ok;
     },
     [dirty, confirm]
   );
@@ -436,6 +465,8 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
     async (id) => {
       const g = await api.getGraph(id);
       const { nodes: n, edges: e } = graphToFlow(g);
+      // Another workflow's node ids may repeat these; its drafts are not theirs.
+      if (g.id !== graphRef.current?.id) clearCodeDrafts();
       const meta = { id: g.id, name: g.name, goal: g.goal || '',
                      output_dir: g.output_dir || 'runs',
                      preprocess: g.preprocess || null,
@@ -611,12 +642,14 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
   // Inspector navigation is driven only by user navigation, never React Flow's
   // asynchronous selection notifications (including notifications from old renders).
   const openNodeInspector = useCallback((_event, node) => {
+    if (node.id !== selectedIdRef.current && keepCodeDraft()) return;
     setInspectorParent(null);
     setSelectedId(node.id);
     openInspector();
     if (layout === 'desktop') expandPanel(rightPanelRef, 'inspector', DEFAULT_INSPECTOR_SIZE);
   }, [openInspector, layout, expandPanel]);
   const returnToWorkflow = () => {
+    if (selectedIdRef.current && keepCodeDraft()) return;
     setInspectorParent(null);
     setSelectedId(null);
     setSelectedMemoryEdges(new Set());
@@ -738,6 +771,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
       const taken = new Set(nodes.map((n) => n.id));
       taken.delete(id);
       const next = uniqueName(rawName, taken);
+      moveCodeDraft(datasetDraftKey(id), datasetDraftKey(next));
       setNodes((nds) =>
         renameMemoryReferences(nds.map((n) => {
           if (n.id !== id) return n;
@@ -812,58 +846,103 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
     })();
   }, [graph?.id, graph?.name, refreshList, openGraph, newGraph, confirm]);
 
+  // One save or rename of the workflow at a time. A save can move the
+  // workflow's id (its name is its identity), so a second request sent while
+  // the first is out would go to the id that no longer exists. A save asked
+  // for while one is in flight joins it; a rename waits for it, and a save
+  // asked for during a rename waits for the rename and then saves under the
+  // new identity.
+  const saveFlight = useRef(null);
+  const renameFlight = useRef(null);
+  const track = (ref, promise) => {
+    ref.current = promise;
+    const clear = () => { if (ref.current === promise) ref.current = null; };
+    promise.then(clear, clear);
+    return promise;
+  };
+  const settled = (promise) => (promise ? promise.catch(() => {}) : null);
+
   // Renaming is its own action, not a save: it moves the workflow's identity
   // and everything filed under it, and must not drag whatever is unsaved on
   // the canvas along with it.
-  const onRename = useCallback(async (name) => {
-    if (!graph?.id || name === graph.name) return;
-    setErrors(null);
-    try {
-      const renamed = await api.renameGraph(graph.id, name);
-      const meta = { ...graph, id: renamed.id, name: renamed.name };
-      if (renamed.id !== graph.id) renameChatHistory(graph.id, renamed.id);
-      setResourceMeasurements({});
-      setGraph(meta);
-      // A clean canvas stays clean: its baseline holds the old name, so
-      // without this the rename alone would leave it looking edited.
-      if (!dirty) markClean(meta, nodes, edges);
-      refreshList();
-    } catch (err) {
-      setErrors(extractErrors(err));
-    }
-  }, [graph, dirty, nodes, edges, markClean, refreshList]);
-
-  const saveCurrent = useCallback(async () => {
-    if (!graph?.id) return null;
-    const body = flowToGraph(graph, nodes, edges);
-    const saved = await api.saveGraph(graph.id, body);
-    // Renaming a workflow renames its identity too, so the id that comes back
-    // may not be the one that went out. Everything downstream — run history,
-    // the workspace, exports — is keyed on it, so follow it.
-    if (saved.id !== graph.id) renameChatHistory(graph.id, saved.id);
-    const fromServer = { id: saved.id, name: saved.name, goal: saved.goal || '',
-                         output_dir: saved.output_dir || 'runs',
-                         preprocess: saved.preprocess || null };
-    const meta = { ...graph, ...fromServer };
-    // Merge onto the settings as they are now, not as they were sent: an edit
-    // made while the save was in flight must survive it (and stay unsaved).
-    setGraph((current) => {
-      if (!current || current.id !== graph.id) return current;
-      const merged = { ...current, id: saved.id };
-      for (const key of ['name', 'goal', 'output_dir', 'preprocess']) {
-        if (current[key] === graph[key]) merged[key] = fromServer[key];
+  const onRename = useCallback((name) => {
+    const previous = renameFlight.current || saveFlight.current;
+    return track(renameFlight, (async () => {
+      await settled(previous);
+      await settled(saveFlight.current);
+      // Read the workflow as it is now: a save that just finished may have
+      // moved its id.
+      const graph = graphRef.current;
+      if (!graph?.id || name === graph.name) return;
+      setErrors(null);
+      try {
+        const clean = cleanRef.current === JSON.stringify(flowToGraph(graph, nodesRef.current, edgesRef.current));
+        const renamed = await api.renameGraph(graph.id, name);
+        const meta = { ...graphRef.current, id: renamed.id, name: renamed.name };
+        if (renamed.id !== graph.id) { renameChatHistory(graph.id, renamed.id); followAgents(renamed.id); }
+        setResourceMeasurements({});
+        graphRef.current = meta;
+        setGraph(meta);
+        // A clean canvas stays clean: its baseline holds the old name, so
+        // without this the rename alone would leave it looking edited.
+        if (clean) markClean(meta, nodesRef.current, edgesRef.current);
+        refreshList();
+      } catch (err) {
+        setErrors(extractErrors(err));
       }
-      return merged;
-    });
-    markClean(meta, nodes, edges);
-    refreshList();
-    return meta;
-  }, [graph, nodes, edges, refreshList, markClean]);
+    })());
+  }, [markClean, refreshList, followAgents]);
+
+  const saveCurrent = useCallback(() => {
+    if (saveFlight.current) return saveFlight.current;
+    const pendingRename = renameFlight.current;
+    return track(saveFlight, (async () => {
+      await settled(pendingRename);
+      // The workflow as it is when the save goes out (a rename that finished
+      // while this waited has already moved it).
+      const graph = graphRef.current;
+      const nodes = nodesRef.current;
+      const edges = edgesRef.current;
+      if (!graph?.id) return null;
+      const body = flowToGraph(graph, nodes, edges);
+      const saved = await api.saveGraph(graph.id, body);
+      // Renaming a workflow renames its identity too, so the id that comes back
+      // may not be the one that went out. Everything downstream — run history,
+      // the workspace, exports — is keyed on it, so follow it.
+      if (saved.id !== graph.id) {
+        renameChatHistory(graph.id, saved.id);
+        if (graphRef.current?.id === graph.id) followAgents(saved.id);
+      }
+      const fromServer = { id: saved.id, name: saved.name, goal: saved.goal || '',
+                           output_dir: saved.output_dir || 'runs',
+                           preprocess: saved.preprocess || null };
+      const meta = { ...graph, ...fromServer };
+      // Merge onto the settings as they are now, not as they were sent: an edit
+      // made while the save was in flight must survive it (and stay unsaved).
+      const follow = (current) => {
+        if (!current || current.id !== graph.id) return current;
+        const merged = { ...current, id: saved.id };
+        for (const key of ['name', 'goal', 'output_dir', 'preprocess']) {
+          if (current[key] === graph[key]) merged[key] = fromServer[key];
+        }
+        return merged;
+      };
+      graphRef.current = follow(graphRef.current);
+      setGraph(follow);
+      // Only the workflow still on screen takes this save as its baseline:
+      // one opened while the save was out has its own.
+      if (graphRef.current?.id === saved.id) markClean(meta, nodes, edges);
+      refreshList();
+      return meta;
+    })());
+  }, [refreshList, markClean, followAgents]);
 
   const onSaveRef = useRef(null);
 
   const onSave = useCallback(async () => {
-    if (!graph?.id) return;
+    if (!graphRef.current?.id) return;
+    // A save writes the canvas; code not yet confirmed into its node is not on it.
+    if (hasCodeDrafts() && !window.confirm('Unconfirmed Dataset code in the Inspector is not part of this save. Confirm it first, or save the rest anyway?')) return;
     setSaving(true);
     setErrors(null);
     try {
@@ -873,7 +952,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
     } finally {
       setSaving(false);
     }
-  }, [graph?.id, saveCurrent]);
+  }, [saveCurrent]);
 
   onSaveRef.current = onSave;
 
@@ -942,14 +1021,14 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
   }, [undo, redo, runMode]);
 
   useEffect(() => {
-    if (!dirty) return undefined;
+    if (!dirty && !codeDrafts) return undefined;
     const onBeforeUnload = (e) => {
       e.preventDefault();
       e.returnValue = '';
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [dirty]);
+  }, [dirty, codeDrafts]);
 
   // Import lands in a new workflow, but opening it still replaces the canvas
   // currently on screen. Guard that transition exactly like New and Select.
@@ -1689,7 +1768,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
       )}
       <div className="sidebar-body">
         {(forcedTab || rightTab) === 'inspector' ? (
-          chatAgent ? <ChatAgentInspector key={`${graph?.id}:${chatAgent.id}`} graphId={graph?.id} agent={chatAgent} saving={canvasAgents.isSaving(chatAgent.id)} memoryNodes={memoryOverlay(nodes, { resources: graph?.memory_resources || [], spaceNames }).memNodes} backLabel={inspectorParent ? '← Back to memory' : '← Back to workflow'} onBack={() => { if (inspectorParent) { setSelectedId(inspectorParent); setInspectorParent(null); } else returnToWorkflow(); }} onSave={canvasAgents.save} /> :
+          chatAgent ? <ChatAgentInspector key={chatAgent.id} graphId={graph?.id} agent={chatAgent} saving={canvasAgents.isSaving(chatAgent.id)} memoryNodes={memoryOverlay(nodes, { resources: graph?.memory_resources || [], spaceNames }).memNodes} backLabel={inspectorParent ? '← Back to memory' : '← Back to workflow'} onBack={() => { if (inspectorParent) { setSelectedId(inspectorParent); setInspectorParent(null); } else returnToWorkflow(); }} onSave={canvasAgents.save} /> :
           isMemoryId(selectedId) ? <MemoryResourceInspector key={`${graph?.id}:${selectedId}`}
             resource={selectedMemory} graphId={graph?.id} nodes={[...nodes, ...canvasAgents.nodes]} edges={[...executionEdges, ...chatEdges]} runMode={runMode}
             onBack={returnToWorkflow}
@@ -1746,7 +1825,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
         graphId={graph?.id}
         runMode={runMode}
         saving={saving}
-        dirty={dirty}
+        dirty={dirty || codeDrafts}
         compact={layout !== 'desktop'}
         onSelectGraph={selectGraph}
         onNew={onNew}
@@ -2130,7 +2209,7 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
         graphId={graph?.id}
         onClose={closeOverlay}
         onApplied={(g) => {
-          refreshList().then(() => openGraph(g.id));
+          refreshList().then(() => openGraph(g.id)).catch((err) => setErrors(extractErrors(err)));
         }}
       />
       <ReviewPanel open={activeOverlay === 'review'} onClose={closeOverlay} />

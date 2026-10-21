@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import React from 'react';
 import { beforeEach, expect, it, vi } from 'vitest';
@@ -28,4 +28,19 @@ it('Discard draft deletes the server draft instead of saving an empty one', asyn
   await user.click(await screen.findByRole('button', { name: 'Discard draft' }));
   await waitFor(() => expect(api.deleteEvaluatorDraft).toHaveBeenCalledWith('g1'));
   expect(api.saveEvaluatorDraft).not.toHaveBeenCalledWith('g1', { code: '', config: {} });
+});
+
+it('still writes code typed while an earlier draft write was in flight', async () => {
+  let finish;
+  api.evaluatorDraft.mockResolvedValue({});
+  api.saveEvaluatorDraft.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+  const user = userEvent.setup();
+  const view = render(<EvaluationCode graphId="g1" onChange={vi.fn()} />);
+  const editor = await screen.findByLabelText('Python Evaluator code');
+  await user.type(editor, 'a');
+  await waitFor(() => expect(api.saveEvaluatorDraft).toHaveBeenCalledTimes(1), { timeout: 2000 });
+  await user.type(editor, 'b');
+  await act(async () => { finish({}); });
+  view.unmount();
+  await waitFor(() => expect(api.saveEvaluatorDraft).toHaveBeenLastCalledWith('g1', { code: 'ab', config: {} }));
 });

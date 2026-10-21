@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from backend.api.studio_config import DATA_DIR
 from backend.api import graphs
-from backend.features.persistence import replace as replace_file
+from backend.features.persistence import write_json
 
 PROJECTS_DIR = DATA_DIR / 'projects'
 router = APIRouter(prefix='/api/projects', tags=['projects'])
@@ -52,9 +52,10 @@ def get_project(project_id):
 def list_projects():
     result=[]
     for p in PROJECTS_DIR.glob('*.json'):
-        try: result.append(json.loads(p.read_text(encoding='utf-8')))
+        try: item = json.loads(p.read_text(encoding='utf-8'))
         except (OSError, ValueError): continue
-    return sorted(result, key=lambda x:x['updated_at'], reverse=True)
+        if isinstance(item, dict): result.append(item)
+    return sorted(result, key=lambda x:str(x.get('updated_at') or ''), reverse=True)
 
 
 @router.post('', status_code=201)
@@ -62,9 +63,7 @@ def create_project(body: ProjectInput):
     with _lock:
         project={'id':uuid.uuid4().hex, **body.model_dump(),
                  'updated_at':datetime.now(timezone.utc).isoformat()}
-        PROJECTS_DIR.mkdir(parents=True,exist_ok=True)
-        p=_path(project['id']);temp=p.with_suffix('.tmp')
-        temp.write_text(json.dumps(project,ensure_ascii=False,indent=2), encoding='utf-8');replace_file(temp, p)
+        write_json(_path(project['id']), project)
     return project
 
 
@@ -94,13 +93,94 @@ def create_task(project_id: str, body: TaskInput):
         graphs.delete_graph(graph['id']);raise
 
 
+def memory_uses(graph, agents):
+    """Every Mem0 space the task refers to, with where: canvas, node or Agent."""
+    from backend.api import harness_api
+    uses = []
+    for resource in graph.get('memory_resources') or []:
+        uses.append((resource.get('space_id'), {'kind': 'canvas', 'name': resource.get('name')}))
+    for task in graph.get('tasks') or []:
+        policy = task.get('memory') or {}
+        if policy.get('provider') == 'mem0' and policy.get('space_id'):
+            uses.append((policy['space_id'], {'kind': 'node', 'name': task.get('name')}))
+    for agent in agents:
+        for binding in agent.get('memories') or []:
+            uses.append((harness_api.space_of(binding), {'kind': 'agent', 'name': agent.get('name'), 'agent_id': agent.get('id')}))
+    return [(space_id, use) for space_id, use in uses if space_id]
+
+
+def lost_memory_bindings(graph, moved, agents):
+    """Mem0 spaces this task uses now that it could not reach after the move.
+
+    Shared memory is scoped to a project (or to an unassigned task), so a
+    move leaves behind every space of the old scope. Bindings that were
+    already out of reach are not the move's doing and are not listed."""
+    from backend.api import mem0_service
+    before, after = mem0_service.scope(graph), mem0_service.scope(moved)
+    if before == after: return []
+    lost = []
+    for space_id, use in memory_uses(graph, agents):
+        record = mem0_service.space_record(space_id)
+        if record and record.get('scope') == before:
+            lost.append({**use, 'space_id': space_id, 'space': record.get('name') or space_id})
+    return lost
+
+
+def unreachable_memory_bindings(graph, copied, agents):
+    """Mem0 spaces a copy could not use. A copy is a new task: whatever its
+    scope cannot reach is listed, since its Agents could not be created with it."""
+    from backend.api import mem0_service
+    scope = mem0_service.scope(copied)
+    lost = []
+    for space_id, use in memory_uses(graph, agents):
+        record = mem0_service.space_record(space_id)
+        if not record or record.get('scope') != scope:
+            lost.append({**use, 'space_id': space_id, 'space': (record or {}).get('name') or space_id})
+    return lost
+
+
+def _destination_name(project_id):
+    return get_project(project_id)['name'] if project_id != 'unassigned' else 'Unassigned tasks'
+
+
+def detach_memory_bindings(graph, space_ids):
+    """The graph without these spaces, unbound the way the canvas unbinds them."""
+    tasks = []
+    for task in graph.get('tasks') or []:
+        policy = task.get('memory') or {}
+        if policy.get('provider') == 'mem0' and policy.get('space_id') in space_ids:
+            policy = {k: v for k, v in policy.items() if k != 'space_id'}
+            task = {**task, 'use_long_term_memory': False,
+                    'memory': {**policy, 'read_enabled': False, 'write_enabled': False}}
+        tasks.append(task)
+    resources = [r for r in graph.get('memory_resources') or [] if r.get('space_id') not in space_ids]
+    positions = {k: v for k, v in (graph.get('memory_positions') or {}).items()
+                 if k.removeprefix('mem:space:') not in space_ids}
+    return {**graph, 'tasks': tasks, 'memory_resources': resources, 'memory_positions': positions}
+
+
 @router.put('/{project_id}/tasks/{graph_id}')
-def assign_task(project_id: str, graph_id: str):
+def assign_task(project_id: str, graph_id: str, detach: bool = False):
+    """Move a task. Shared memory it uses from the old project stays there:
+    without `detach` the move is refused (409) with the bindings it would
+    lose; with it they are removed and listed under `detached`."""
+    from backend.api import harness_api
     if project_id != 'unassigned': get_project(project_id)
     if not re.fullmatch(r"[a-z0-9_-]+", graph_id): raise HTTPException(404, "Task not found")
-    graph=graphs.load_graph(graph_id)
-    if not graph:raise HTTPException(404,'Task not found')
-    return graphs.save_graph(graph_id,{**graph,'project_id':None if project_id == 'unassigned' else project_id,'task_id':graph.get('task_id') or graph['id']})
+    with _lock:
+        graph=graphs.load_graph(graph_id)
+        if not graph:raise HTTPException(404,'Task not found')
+        moved={**graph,'project_id':None if project_id == 'unassigned' else project_id,'task_id':graph.get('task_id') or graph['id']}
+        lost=lost_memory_bindings(graph, moved, harness_api.list_agents(graph_id)['agents'])
+        if lost and not detach:
+            destination = _destination_name(project_id)
+            raise HTTPException(409, {
+                'message': f"This task uses shared memory that stays with its current project and will not be available in {destination}.",
+                'destination': destination, 'bindings': lost})
+        space_ids={item['space_id'] for item in lost}
+        saved=graphs.save_graph(graph_id, detach_memory_bindings(moved, space_ids) if space_ids else moved)
+        if space_ids: harness_api.detach_spaces(moved, space_ids)
+    return {**saved, 'detached': lost}
 
 
 @router.delete('/{project_id}')
@@ -116,16 +196,17 @@ def delete_project(project_id: str):
 def update_project(project_id: str, body: ProjectInput):
     with _lock:
         project = {**get_project(project_id), **body.model_dump(), 'updated_at': datetime.now(timezone.utc).isoformat()}
-        path = _path(project_id)
-        temp = path.with_suffix('.tmp')
-        temp.write_text(json.dumps(project, ensure_ascii=False, indent=2), encoding='utf-8')
-        replace_file(temp, path)
+        write_json(_path(project_id), project)
     return project
 
 
 @router.post('/{project_id}/tasks/{graph_id}/copy', status_code=201)
-def copy_task(project_id: str, graph_id: str):
-    """Copy definitions with a fresh execution identity; resources remain references."""
+def copy_task(project_id: str, graph_id: str, detach: bool = False):
+    """Copy definitions with a fresh execution identity; resources remain references.
+
+    Shared memory the copy's scope cannot reach cannot come along: without
+    `detach` the copy is refused (409) with those bindings; with it the copy
+    is made without them and they are listed under `detached`."""
     import copy
     from backend.api import harness_api
     if project_id != 'unassigned': get_project(project_id)
@@ -133,17 +214,25 @@ def copy_task(project_id: str, graph_id: str):
     original = graphs.load_graph(graph_id)
     if not original: raise HTTPException(404, 'Task not found')
     agents = harness_api.list_agents(graph_id)['agents']
+    task_id = uuid.uuid4().hex
+    target = {**original, 'project_id': None if project_id == 'unassigned' else project_id, 'task_id': task_id}
+    lost = unreachable_memory_bindings(original, target, agents)
+    if lost and not detach:
+        destination = _destination_name(project_id)
+        raise HTTPException(409, {
+            'message': f"This task uses shared memory that will not be available to its copy in {destination}.",
+            'destination': destination, 'bindings': lost})
+    space_ids = {item['space_id'] for item in lost}
     name = f"{original['name']} (copy)"
     created = graphs.create_graph(name, original.get('goal', ''))
     try:
-        cloned = graphs.save_graph(created['id'], {
-            **copy.deepcopy(original), 'id':created['id'], 'name':name,
-            'project_id':None if project_id == 'unassigned' else project_id,
-            'task_id':uuid.uuid4().hex})
+        body = {**copy.deepcopy(target), 'id': created['id'], 'name': name}
+        cloned = graphs.save_graph(created['id'], detach_memory_bindings(body, space_ids) if space_ids else body)
         for agent in agents:
             settings = {k:v for k,v in agent.items() if k in harness_api.AgentSettings.model_fields}
+            settings['memories'] = [m for m in settings.get('memories') or [] if harness_api.space_of(m) not in space_ids]
             harness_api.create_agent(cloned['id'], harness_api.AgentSettings(**settings))
-        return cloned
+        return {**cloned, 'detached': lost}
     except Exception:
         # No partial task should appear after an unsuccessful copy.
         for agent in harness_api.list_agents(created['id'])['agents']:

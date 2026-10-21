@@ -5,6 +5,10 @@ import ResourceActions from '../../components/ResourceActions.jsx';
 import { api } from '../../api.js';
 import CopyButton from '../chat/CopyButton.jsx';
 const errorText = e => String(e.body?.detail || e.message);
+// The settings fields a draft can differ from what is saved in (memory
+// connections save on their own, the id never changes).
+const settingKeys = (...drafts) => [...new Set(drafts.flatMap(Object.keys))].filter(k => !['id', 'memories'].includes(k));
+const differs = (a, b, k) => JSON.stringify(a[k]) !== JSON.stringify(b[k]);
 // Which conversation was open, so reopening this Agent returns to it (and to a
 // turn still running there) rather than to whichever session is newest.
 const sessionKey = (graphId, agentId) => `evoagentx-studio:agent-session:${graphId}:${agentId}`;
@@ -23,6 +27,7 @@ export default function ChatAgentInspector({ graphId, agent, onBack, onSave, sav
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(true);
   const [toolSearch, setToolSearch] = useState('');
   const [spaces, setSpaces] = useState([]);
+  const [spacesLoaded, setSpacesLoaded] = useState(false);
   const [sessions, setSessions] = useState([]);
   const [sessionId, setSessionId] = useState(() => loadSessionId(graphId, agent.id));
   const [message, setMessage] = useState('');
@@ -33,6 +38,9 @@ export default function ChatAgentInspector({ graphId, agent, onBack, onSave, sav
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const session = sessions.find(s => s.id === sessionId);
+  const settingsDirty = settingKeys(draft, baseline).some(k => differs(draft, baseline, k));
+  // Leaving the Agent drops its unsaved settings with it, so ask first.
+  const leave = () => { if (!settingsDirty || window.confirm('Discard unsaved harness settings?')) onBack(); };
   useEffect(() => {
     try { if (sessionId) localStorage.setItem(sessionKey(graphId, agent.id), sessionId); } catch { /* Browser storage may be unavailable. */ }
   }, [graphId, agent.id, sessionId]);
@@ -65,7 +73,7 @@ export default function ChatAgentInspector({ graphId, agent, onBack, onSave, sav
       if (active) timer = setTimeout(refresh, 1500);
     }
     refresh();
-    (api.chatMemoryResources ? api.chatMemoryResources(graphId) : api.mem0Spaces(graphId).then(r => ({ resources: r.spaces.map(s => ({ ...s, id: `mem:space:${s.id}`, writable: true })) }))).then(r => { if (active) setSpaces(r.resources); }).catch(e => { if (active) setError(errorText(e)); });
+    (api.chatMemoryResources ? api.chatMemoryResources(graphId) : api.mem0Spaces(graphId).then(r => ({ resources: r.spaces.map(s => ({ ...s, id: `mem:space:${s.id}`, writable: true })) }))).then(r => { if (active) { setSpaces(r.resources); setSpacesLoaded(true); } }).catch(e => { if (active) setError(errorText(e)); });
     return () => { active = false; clearTimeout(timer); };
   }, [graphId, agent.id]);
   async function action(fn) {
@@ -74,6 +82,16 @@ export default function ChatAgentInspector({ graphId, agent, onBack, onSave, sav
   }
   function replace(s) { setSessions(rows => [s, ...rows.filter(r => r.id !== s.id)]); setSessionId(s.id); }
   const resources = spaces.map(s => ({ ...s, name: memoryNodes.find(n => n.id === s.id)?.data.title || s.name }));
+  // Connections this task can no longer reach — typically shared memory of
+  // the project the task was moved out of. Saving refuses them, so they are
+  // shown and can be removed here.
+  const available = m => resources.some(r => r.id === memoryId(m));
+  const stale = spacesLoaded ? agent.memories.filter(m => !available(m)) : [];
+  const memoryName = m => resources.find(r => r.id === memoryId(m))?.name || memoryNodes.find(n => n.id === memoryId(m))?.data.title
+    || (m.space_id ? `Shared memory ${m.space_id.slice(0, 8)}` : memoryId(m));
+  function removeStale() {
+    action(() => onSave(agent, current => ({ memories: current.memories.filter(available) })));
+  }
   function memory(resource, key, value) {
     action(() => onSave(agent, current => {
       const previous = current.memories.find(m => memoryId(m) === resource.id) || { ...memoryBinding(resource.id), read: false, write: false };
@@ -83,7 +101,7 @@ export default function ChatAgentInspector({ graphId, agent, onBack, onSave, sav
   }
   return <aside className="inspector memory-inspector">
     <header className="memory-inspector-header">
-      <button className="link" onClick={page === 'settings' ? () => setPage('chat') : onBack}>{page === 'settings' ? '← Back to chat' : backLabel}</button>
+      <button className="link" onClick={page === 'settings' ? () => setPage('chat') : leave}>{page === 'settings' ? '← Back to chat' : backLabel}</button>
       <h3>{agent.name}</h3>
       <span className="muted small">Independent Agent · LangGraph</span>
     </header>
@@ -118,7 +136,21 @@ export default function ChatAgentInspector({ graphId, agent, onBack, onSave, sav
         {!resources.length && <p>No Memory resources are available in this task.</p>}
         <p className="muted small">Connections save immediately. Read retrieves before each message; Write saves successful exchanges.</p>
         {resources.map(s => <div className="field" key={s.id}><strong>{s.name}</strong>{['read', 'write'].map(key => <label key={key}><input type="checkbox" disabled={busy || (key === 'write' && !s.writable)} aria-label={`${s.name} ${key}`} checked={!!agent.memories.find(m => memoryId(m) === s.id)?.[key]} onChange={e => memory(s, key, e.target.checked)} />{key === 'read' ? 'Read' : 'Write'}</label>)}{!s.writable && <p className="muted small">{s.write_reason}</p>}</div>)}
-        <button disabled={busy || !draft.name.trim()} onClick={() => action(async () => { const patch = Object.fromEntries(Object.entries(draft).filter(([k, v]) => !['id', 'memories'].includes(k) && JSON.stringify(v) !== JSON.stringify(baseline[k]))); const saved = await onSave(agent, patch); setDraft(saved); setBaseline(saved); setPage('chat'); })}>Save settings</button>
+        {stale.length > 0 && <div className="field" role="group" aria-label="Unavailable memories">
+          <strong>Unavailable memories</strong>
+          <p className="muted small">This task can no longer use these connections, for example shared memory of a project it was moved from. Settings cannot be saved until they are removed.</p>
+          {stale.map(m => <div key={memoryId(m)}>{memoryName(m)} · {[m.read && 'Read', m.write && 'Write'].filter(Boolean).join(' / ')}</div>)}
+          <button type="button" disabled={busy || saving} onClick={removeStale}>Remove unavailable memories</button>
+        </div>}
+        {settingsDirty && <p role="status" className="muted small">Unsaved changes</p>}
+        <button disabled={busy || !draft.name.trim()} onClick={() => action(async () => {
+          const sent = draft;
+          const patch = Object.fromEntries(settingKeys(draft, baseline).filter(k => differs(draft, baseline, k)).map(k => [k, draft[k]]));
+          const saved = await onSave(agent, patch);
+          // Edits made while the save was out stay on screen, and unsaved.
+          setDraft(current => Object.fromEntries([...Object.entries(saved), ...settingKeys(current).filter(k => differs(current, sent, k)).map(k => [k, current[k]])]));
+          setBaseline(saved); setPage('chat');
+        })}>Save settings</button>
         <p className="muted small">Settings apply to the next message. An active execution keeps its starting configuration.</p>
       </> : <>
         <div className="memory-row"><button onClick={() => setPage('settings')}>Harness settings →</button><button disabled={busy} onClick={() => action(async () => replace(await api.createAgentSession(graphId, agent.id)))}>New session</button></div>
@@ -139,7 +171,7 @@ export default function ChatAgentInspector({ graphId, agent, onBack, onSave, sav
           })}>Confirm delete</button>
         </> : <button disabled={busy || running} title={running ? 'Stop this conversation before deleting it' : 'Delete this conversation'} onClick={() => setConfirmDelete(true)}>Delete conversation</button>}</div>}
         {!session?.messages.length && <p>Chat here to run this Agent independently. It can discover tools and use connected memories.</p>}
-        <div className="field"><strong>Connected Memory</strong>{!agent.memories.length && <p>No Memory connected.</p>}{agent.memories.map(m => <div key={memoryId(m)}>{resources.find(r => r.id === memoryId(m))?.name || memoryNodes.find(n => n.id === memoryId(m))?.data.title || memoryId(m)} · {[m.read && 'Read', m.write && 'Write'].filter(Boolean).join(' / ')}</div>)}</div>
+        <div className="field"><strong>Connected Memory</strong>{!agent.memories.length && <p>No Memory connected.</p>}{agent.memories.map(m => <div key={memoryId(m)}>{memoryName(m)} · {[m.read && 'Read', m.write && 'Write'].filter(Boolean).join(' / ')}{stale.includes(m) && ' · unavailable (remove it in Harness settings)'}</div>)}</div>
         <div aria-live="polite">{session?.messages.map((m, i) => <article className="agent-message" key={i}><strong>{m.role === 'user' ? 'You' : agent.name}</strong><div>{m.content}</div>{m.content && <CopyButton text={m.content} label={m.role === 'user' ? 'Copy your message' : 'Copy reply'} />}{m.failed && <small>Previous attempt failed; not replayed.</small>}</article>)}</div>
         {session?.events.length > 0 && <details><summary>Execution activity ({session.events.length})</summary>{session.events.map((e, i) => <div className="agent-event" key={i}><strong>{e.type} {e.name || ''}</strong>{e.type === 'memory_read' && <span> · {e.hits} records{e.total_records != null ? ` / ${e.total_records} stored` : ''}{e.mode === 'browse' ? ' · overview preview' : ''}</span>}<pre>{JSON.stringify(e.args || e.items || e.content, null, 2)}</pre></div>)}</details>}
         {session && <p className="muted small">{session.token_usage?.reported_calls

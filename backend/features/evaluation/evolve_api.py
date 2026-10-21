@@ -23,7 +23,7 @@ from backend.api import sources
 from backend.api.graphs import strip_task, topo_sort_tasks
 from backend.api.studio_config import data_path
 from backend.features.execution import token_usage
-from backend.features.persistence import is_safe_id
+from backend.features.persistence import is_safe_id, write_json
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -655,8 +655,8 @@ def _persist(state: dict) -> None:
     try:
         # Internal handles (the usage hook's key) are not part of the record.
         saved = {k: v for k, v in state.items() if not k.startswith("_")}
-        with open(_task_dir(state["task_id"]) / "result.json", "w", encoding="utf-8") as f:
-            json.dump(saved, f, indent=2, ensure_ascii=False, default=str)
+        # Atomic: the listing reads these while a task is saving.
+        write_json(_task_dir(state["task_id"]) / "result.json", saved)
     except OSError:
         pass
 
@@ -708,6 +708,18 @@ def _orphaned(state: dict) -> dict:
     return state
 
 
+_LISTED = ("task_id", "graph_id", "status", "stage", "error", "metric", "params",
+           "created_at", "finished_at", "elapsed_seconds", "source", "token_usage",
+           "stop_requested")
+
+
+def _listing(task: dict) -> dict:
+    """A task as the list shows it: list_evolve_tasks' fields and scores."""
+    return {**{k: task.get(k) for k in _LISTED},
+            "baseline": {"metrics": {"score": ((task.get("baseline") or {}).get("metrics") or {}).get("score")}},
+            "optimized": {"metrics": {"score": ((task.get("optimized") or {}).get("metrics") or {}).get("score")}}}
+
+
 def list_tasks(graph_id: str | None = None) -> list[dict]:
     # A task cut off by a restart leaves its candidates' scratch stores
     # behind; nothing reads them again, so they go here. Only the scratch
@@ -719,20 +731,22 @@ def list_tasks(graph_id: str | None = None) -> list[dict]:
         discard_candidate_stores(keep=running)
     except OSError:
         pass
+    from backend.features.persistence import file_view
     by_id: dict[str, dict] = {}
     if EVOLVE_DIR.is_dir():
         for path in EVOLVE_DIR.glob("*/result.json"):
-            try:
-                with open(path, encoding="utf-8") as f:
-                    by_id[path.parent.name] = _orphaned(json.load(f))
-            except (json.JSONDecodeError, OSError):
-                continue
+            # What the list shows, once per version of each file: a result
+            # holds the optimized graph and every record (tens of MB each).
+            listed = file_view(path, "evolve-listing", _listing, persist=True)
+            if listed is not None:
+                by_id[path.parent.name] = _orphaned(listed)
     with _lock:
         for task_id, state in _tasks.items():
             by_id[task_id] = _live(state)
     tasks = list(by_id.values())
     if graph_id:
-        tasks = [t for t in tasks if t.get("graph_id") == graph_id]
+        ids = graph_store.history_ids(graph_id)   # a rename's refile in progress too
+        tasks = [t for t in tasks if t.get("graph_id") in ids]
     tasks.sort(key=lambda t: t.get("created_at", ""), reverse=True)
     return tasks[:20]
 
@@ -937,7 +951,7 @@ def _with_evaluation_code(graph_id: str, graph: dict, body: dict) -> tuple[dict,
         body["mode"] = "evaluate"            # code is evaluated; Evolve continues an evaluation
     elif body.get("from_evaluation"):
         prior = get_task(str(body["from_evaluation"]))
-        if prior is None or prior.get("graph_id") != graph_id:
+        if prior is None or prior.get("graph_id") not in graph_store.history_ids(graph_id):
             raise sources.SourceError("Choose an evaluation of this workflow to evolve from.")
         if (prior.get("params") or {}).get("mode") != "evaluate" or prior.get("status") != "done":
             raise sources.SourceError("Evolve from a finished evaluation.")
@@ -1031,16 +1045,21 @@ def apply_evolve_result(task_id: str, mode: str = "new"):
             name=f"{optimized.get('name', task.get('graph_id'))} (evolved)",
             goal=optimized.get("goal", ""),
         )
-        return graph_store.save_graph(new_graph["id"], {**optimized, "name": new_graph["name"]})
+        # A workflow of its own: the original's task_id would make the two
+        # share Chat Agents — and deleting the copy archive the original's.
+        return graph_store.save_graph(new_graph["id"], {**optimized, "name": new_graph["name"],
+                                                        "task_id": None})
 
-    graph_id = task.get("graph_id")
+    # Renamed since, with its history still being refiled: where it is now.
+    graph_id = graph_store.current_id(task.get("graph_id") or "")
     current = graph_store.load_graph(graph_id or "")
     if current is None:
         raise HTTPException(status_code=409, detail=(
             f"The workflow '{graph_id}' no longer exists; save as new instead."))
     backup = graph_store.create_graph(
         name=f"{current.get('name', graph_id)} (before evolve)", goal=current.get("goal", ""))
-    graph_store.save_graph(backup["id"], {**current, "id": backup["id"], "name": backup["name"]})
+    graph_store.save_graph(backup["id"], {**current, "id": backup["id"], "name": backup["name"],
+                                          "task_id": None})
     # Only the prompts Evolve changed move: the workflow as it is now, with
     # the optimized instructions, rather than the snapshot the optimizer ran
     # on — a prompt edited since the task started is not put back.

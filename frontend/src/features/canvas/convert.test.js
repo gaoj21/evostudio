@@ -20,6 +20,13 @@ describe('sluggify', () => {
     expect(sluggify('!!!')).toBe('node');
     expect(sluggify('')).toBe('node');
   });
+
+  it('gives names in other scripts a stable name of their own', () => {
+    expect(sluggify('Plain Name')).toBe('plain_name');
+    expect(sluggify('任务 {x}')).toBe('x_65c975');
+    expect(sluggify('信用风险')).toBe('node_6a9693');
+    expect(sluggify('信用风险')).not.toBe(sluggify('市场风险'));
+  });
 });
 
 describe('uniqueName', () => {

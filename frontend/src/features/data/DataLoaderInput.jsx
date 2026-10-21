@@ -4,6 +4,7 @@ import { api } from '../../api.js';
 import JsonView from '../../components/JsonView.jsx';
 import DatasetInterface, {DatasetOutputs} from './DatasetInterface.jsx';
 import PythonDatasetEditor, {DATASET_EXAMPLE} from './PythonDatasetEditor.jsx';
+import { datasetDraftKey, setCodeDraftOpen } from './codeDrafts.js';
 
 export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) {
   const [resources, setResources] = useState([]);
@@ -11,6 +12,12 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [codeDirty,setCodeDirty] = useState(false);
+  // Unconfirmed code counts as unsaved work for the whole Studio. On a node it
+  // is kept under the node's id so it survives the Inspector unmounting;
+  // without one it lasts as long as this editor.
+  const looseKey = useRef({});
+  useEffect(() => { if (!nodeId) setCodeDraftOpen(looseKey.current, codeDirty); }, [codeDirty, nodeId]);
+  useEffect(() => () => setCodeDraftOpen(looseKey.current, false), []);
   const [inputSchema,setInputSchema] = useState(null);
   const [codeOpen, setCodeOpen] = useState(!config.output_schema?.length);
   const resultRef = useRef(null);
@@ -104,7 +111,7 @@ export default function DataLoaderInput({ config, onChange, getGraph, nodeId }) 
       const {reader_tool,transform_tool,transform_scope,field_mapping,record_path,source_config,...kept}=config;
       version.current += 1; setPreview(null);
       onChange({...kept,loader:'python',code:DATASET_EXAMPLE},[]);
-    }}>Replace with PyTorch Dataset</button></div> : <details open={codeOpen} onToggle={e=>setCodeOpen(e.currentTarget.open)}><summary>Dataset code</summary><PythonDatasetEditor key={nodeId} onDirtyChange={setCodeDirty} code={config.code} onChange={code=>update({code})} disabled={busy}/></details>}
+    }}>Replace with PyTorch Dataset</button></div> : <details open={codeOpen} onToggle={e=>setCodeOpen(e.currentTarget.open)}><summary>Dataset code</summary><PythonDatasetEditor key={nodeId} draftKey={nodeId ? datasetDraftKey(nodeId) : undefined} onDirtyChange={setCodeDirty} code={config.code} onChange={code=>update({code})} disabled={busy}/></details>}
     <p className="muted small">Read and preprocess in build_dataset or Dataset.__getitem__. Studio handles batching and keeps the final partial batch.</p>
     <div className="field"><label htmlFor="loader-read_batch_size">Batch size</label><NumberInput id="loader-read_batch_size" type="number" min={1} max={1024} value={config.read_batch_size ?? 100} onChange={e=>update({read_batch_size:Number(e.target.value)})}/><small className="muted">Shared by data loading, workflow batches and native API batching.</small></div>
     <div className="field"><label htmlFor="loader-n">Sample count (0 = all records)</label><NumberInput id="loader-n" min={0} step={1} value={config.n ?? 0} onChange={e=>update({n:Number(e.target.value)})}/><small className="muted">Limits records at the reader before materialization. Dataset constructors must still use lazy loading for large files.</small></div>

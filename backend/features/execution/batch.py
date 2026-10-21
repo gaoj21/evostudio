@@ -1196,6 +1196,56 @@ def apply_review_outcome(run_id: str, review: dict) -> None:
                     item["final_action"] = review["final_action"]
 
 
+def record_review_outcome(batch_id: str, run_id: str, review: dict) -> bool:
+    """A resolved review onto the saved batch holding `run_id`; whether it
+    held it.
+
+    A batch still in memory is written from memory (apply_review_outcome
+    has already updated it), as its own snapshots are. Otherwise the file is
+    read and replaced under the persistence lock, its journal folded in, so
+    neither a snapshot nor a journal line written meanwhile is lost — or
+    overrides the outcome with the item's earlier review status."""
+    from backend.features.persistence import is_safe_id
+    if not is_safe_id(batch_id):
+        return False
+    with _lock:
+        state = _batches.get(batch_id)
+        snapshot = None
+        if state is not None:
+            if not any(i.get("run_id") == run_id for i in state.get("items") or []):
+                return False
+            snapshot = _take_snapshot(state)
+    if snapshot is not None:
+        try:
+            _write_snapshot(snapshot)
+        except OSError:
+            pass
+        return True
+    path = BATCHES_DIR / f"{batch_id}.json"
+    with _persist_lock:
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = _with_journal(batch_id, json.load(f))
+        except (OSError, ValueError):
+            return False
+        items = [i for i in data.get("items") or [] if i.get("run_id") == run_id]
+        if not items:
+            return False
+        for item in items:
+            item["review_status"] = review["status"]
+            item["final_action"] = review["final_action"]
+        try:
+            write_json(path, data, indent=None)
+        except OSError:
+            return True
+        disk = _disk_state(batch_id)
+        disk["seq"] += 1
+        disk.update(written=disk["seq"], base=0, gen=disk["gen"] + 1)
+        _journal_path(batch_id).unlink(missing_ok=True)
+        remember_view(path, "batch-digest", _digest(data), persist=True)
+    return True
+
+
 def _node_record(run: dict) -> dict:
     """What node progress needs from a settled Run, kept on its batch item:
     each node's status in the order it ran, and the usage of those that
@@ -1384,7 +1434,9 @@ def list_batches(graph_id: str | None = None, limit: int = 50) -> list[dict]:
         by_id[batch_id] = _digest(_live(snapshot))
     batches = list(by_id.values())
     if graph_id:
-        batches = [b for b in batches if b.get("graph_id") == graph_id]
+        from backend.features.workflow.graphs import history_ids
+        ids = history_ids(graph_id)       # a rename's refile in progress too
+        batches = [b for b in batches if b.get("graph_id") in ids]
     batches.sort(key=lambda b: b.get("created_at") or "", reverse=True)
     return batches[:limit]
 

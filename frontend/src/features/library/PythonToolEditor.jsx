@@ -196,7 +196,7 @@ export default function PythonToolEditor({initial,onClose,onSaved}) {
    return {...kept,name:name.trim() || undefined,code,config,...(packaged && code!==initial.code ? {edit_entry:true} : {})};
  };
  async function save(e){
-   e.preventDefault();if(dirty || !schema)return;setBusy(true);setError('');
+   e.preventDefault();if(busy || dirty || !schema)return;setBusy(true);setError('');
    try{await api.saveCustomTool(body());onSaved();}catch(e){setError(e.body?.detail || e.message);}finally{setBusy(false);}
  }
  async function discover(){
@@ -209,7 +209,10 @@ export default function PythonToolEditor({initial,onClose,onSaved}) {
    catch(e){setError(e.body?.detail || e.message);}finally{setBusy(false);}
  }
  const hasConfiguration = schema?.configuration && (schema.kind === 'factory' || schema.factory || schema.configuration.inputs?.length > 0);
- return <div className="modal-backdrop" onClick={onClose}><form className="modal" onClick={e=>e.stopPropagation()} onSubmit={save}>
+ // A stray click outside the dialog must not throw away the code.
+ const changed = dirty || name !== (initial?.name || '') || code !== (initial?.code || '') || JSON.stringify(config) !== JSON.stringify(initial?.config || {});
+ const dismiss = () => { if (!busy && (!changed || window.confirm('Discard unsaved changes to this toolkit?'))) onClose(); };
+ return <div className="modal-backdrop" onClick={dismiss}><form className="modal" onClick={e=>e.stopPropagation()} onSubmit={save}>
  <h3>Custom toolkit</h3>
  <div className="field"><label htmlFor="python-tool-name">Tool / toolkit name</label><input id="python-tool-name" value={name} disabled={busy || !!packaged} onChange={e=>{setName(e.target.value);setResult(null);}} placeholder="text_tools"/></div>
  {packaged && <p role="note" className="muted small">Uploaded folder · entry <code>{packaged.entry}</code> · {packaged.files} files. Saving an edit writes this code back into <code>{packaged.entry}</code> in the folder; its other files stay as uploaded. The code runs inside the folder, so sibling modules import normally.</p>}

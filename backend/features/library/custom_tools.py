@@ -66,8 +66,10 @@ import json
 import subprocess
 import sys
 import threading
+import uuid
 from pathlib import Path
 from backend.api.studio_config import data_path
+from backend.features.persistence import replace as replace_file, write_json
 
 from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 
@@ -381,6 +383,22 @@ def analyse(code: str) -> dict:
     return {"description": _module_description(code), "tools": tools}
 
 
+def check_spec_types(spec) -> None:
+    """A request body's fields have the types a spec needs: a number where
+    the name goes is a 422 to fix, not a server error -- and a string of
+    sources is not a list of one-letter names."""
+    if not isinstance(spec, dict):
+        raise CustomToolError("A toolkit is a JSON object.")
+    for key in ("name", "code", "description"):
+        if spec.get(key) is not None and not isinstance(spec[key], str):
+            raise CustomToolError(f"{key} must be a string.")
+    for key in ("sources", "requirements", "tests"):
+        if spec.get(key) is not None and not isinstance(spec[key], list):
+            raise CustomToolError(f"{key} must be a list.")
+    if spec.get("config") is not None and not isinstance(spec["config"], dict):
+        raise CustomToolError("config must be an object.")
+
+
 def validate_spec(spec: dict, builtin_names: list[str],
                   existing: list[dict] | None = None, folder: Path | None = None) -> dict:
     """The toolkit a spec's code defines, ready to store.
@@ -394,6 +412,7 @@ def validate_spec(spec: dict, builtin_names: list[str],
     worker, to read it. `folder` is where an uploaded toolkit's files are
     when they are not yet in place (an upload being checked).
     """
+    check_spec_types(spec)
     code = spec.get("code") or ""
     info = interface(code)
     kind = info["kind"]
@@ -610,8 +629,8 @@ def save_custom_tool(spec: dict) -> dict:
                 spec = validate_spec({**spec, "code": previous["code"]},
                                      tools_registry.builtin_names())
             spec = {**spec, "package": previous["package"], "code": previous["code"]}
-        with open(_path(spec["name"]), "w", encoding="utf-8") as f:
-            json.dump(spec, f, indent=2, ensure_ascii=False)
+        # Whole or not at all: a listing never meets a half-written spec.
+        write_json(_path(spec["name"]), spec)
     return spec
 
 
@@ -765,10 +784,19 @@ def unpack_toolkit(blob: bytes, name: str | None, entry: str | None,
             return {**spec, "checked": True}
         folder = package_dir(spec["name"])
         with _lock:
-            if folder.is_dir():
-                shutil.rmtree(folder)
+            # Copied in beside the old folder first: a copy that fails half
+            # way leaves the toolkit that was there, not half of each.
             folder.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(staging, folder)
+            incoming = folder.with_name(f".{folder.name}.{uuid.uuid4().hex}.incoming")
+            outgoing = folder.with_name(f".{folder.name}.{uuid.uuid4().hex}.outgoing")
+            try:
+                shutil.copytree(staging, incoming)
+                if folder.is_dir():
+                    folder.rename(outgoing)
+                incoming.rename(folder)
+            finally:
+                shutil.rmtree(incoming, ignore_errors=True)
+                shutil.rmtree(outgoing, ignore_errors=True)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     save_custom_tool(spec)
@@ -805,7 +833,12 @@ def save_package_entry(name: str, body: dict, builtin_names: list[str]) -> dict:
     spec = validate_spec({**body, "name": name, "package": package}, builtin_names)
     with _lock:
         entry.parent.mkdir(parents=True, exist_ok=True)
-        entry.write_text(spec["code"], encoding="utf-8")
+        temporary = entry.with_name(f".{entry.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_text(spec["code"], encoding="utf-8")
+            replace_file(temporary, entry)
+        finally:
+            temporary.unlink(missing_ok=True)
     return save_custom_tool({**spec, "package": package})
 
 
@@ -979,7 +1012,11 @@ def list_custom():
 @router.post("/tools/custom")
 def save_custom(body: dict = Body(...)):
     from backend.api import tools_registry
-    previous = _read_spec((body.get("name") or "").strip()) if isinstance(body, dict) else None
+    try:
+        check_spec_types(body)
+    except CustomToolError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    previous = _read_spec((body.get("name") or "").strip())
     if (previous and previous.get("package") and "code" in body
             and (body.get("code") or "") != previous.get("code")):
         if body.get("edit_entry") is not True:
@@ -1102,6 +1139,8 @@ def preview_tool(body: dict = Body(...)):
         results = []
         with tool_sessions.scope() as scope:
             for call in calls:
+                if call is not None and not isinstance(call, dict):
+                    raise CustomToolError('Each call is an object: {tool, args}.')
                 name = (call or {}).get('tool') or spec['tools'][0]['name']
                 if name not in exported:
                     raise CustomToolError('Choose an exported tool.')

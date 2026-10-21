@@ -44,3 +44,15 @@ it('offers a group-by-entity-and-period example with no preset field names',asyn
   // A general template: it names no business fields of its own.
   for (const risk of ['company','as_of','news_batch','window_start','window_end']) expect(code).not.toContain(risk);
 });
+
+it('follows new confirmed code, but never over unconfirmed edits',async()=>{
+  const {rerender}=render(<PythonDatasetEditor code="a = 1" onChange={vi.fn()}/>);
+  const editor=screen.getByLabelText('Python Dataset code');
+  rerender(<PythonDatasetEditor code="a = 2" onChange={vi.fn()}/>);
+  expect(editor).toHaveValue('a = 2');
+  await userEvent.type(editor,'  # mine');
+  rerender(<PythonDatasetEditor code="a = 3" onChange={vi.fn()}/>);
+  expect(editor).toHaveValue('a = 2  # mine');
+  await userEvent.click(screen.getByText('Discard changes'));
+  expect(editor).toHaveValue('a = 3');
+});

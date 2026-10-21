@@ -3,6 +3,7 @@ import json
 import math
 from collections import Counter
 from fastapi import APIRouter, Body, HTTPException, Query
+from backend.features.workflow.graphs import history_ids
 from backend.api import runner, model_json, batch, result_compute
 from backend.api.chat_api import _ask, _run_digest, ChatError
 from backend.api.chat_engine import ChatEngine
@@ -98,7 +99,7 @@ def scoped_records(graph_id, scope='all', run_id=None, batch_id=None):
         if batch_id:
             if batch_id not in batches:
                 stored = batch.get_batch(batch_id)
-                batches[batch_id] = {i.get('run_id'): i for i in (stored or {}).get('items', [])} if stored and stored.get('graph_id') == graph_id else {}
+                batches[batch_id] = {i.get('run_id'): i for i in (stored or {}).get('items', [])} if stored and stored.get('graph_id') in history_ids(graph_id) else {}
             item = batches[batch_id].get(r['run_id'])
         enriched.append({**r, 'source_inputs': (item or {}).get('inputs') or r.get('inputs') or {},
                          'expected_label': (item or {}).get('label')})

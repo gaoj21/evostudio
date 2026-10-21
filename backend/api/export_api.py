@@ -42,7 +42,8 @@ from .project_import import (  # noqa: F401 - compatibility re-exports
 )
 
 router = APIRouter(prefix="/api")
-router.include_router(import_router)
+# The import routes carry their own "/api" prefix: app.py mounts them
+# beside this router (nested here they answered at /api/api/graphs/import).
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BACKEND_DIR = Path(__file__).resolve().parent

@@ -9,6 +9,7 @@ from pathlib import PurePosixPath
 from fastapi import APIRouter, HTTPException, Request, Body
 from backend.api.studio_config import data_path
 from backend.api.sources import SourceError
+from backend.features.persistence import write_json
 
 _association_lock = threading.Lock()
 
@@ -77,7 +78,16 @@ def public(item):
 
 @router.get('')
 def listing():
-    return {'resources': [public(json.loads(p.read_text(encoding='utf-8'))) for p in sorted(directory().glob('*/manifest.json')) if not p.parent.name.startswith('.')]}
+    resources = []
+    for path in sorted(directory().glob('*/manifest.json')):
+        if path.parent.name.startswith('.'):
+            continue
+        # One unreadable manifest must not hide every other resource.
+        try:
+            resources.append(public(json.loads(path.read_text(encoding='utf-8'))))
+        except (OSError, ValueError, KeyError, TypeError, SourceError):
+            continue
+    return {'resources': resources}
 
 
 
@@ -197,9 +207,7 @@ def attach_workspace(resource_id: str, body: dict = Body(...)):
             graph_ids = set(item.get('workspace_graph_ids') or [])
             graph_ids.add(graph_id)
             item['workspace_graph_ids'] = sorted(graph_ids)
-            temporary = path_for(resource_id) / ('.manifest-' + uuid.uuid4().hex)
-            temporary.write_text(json.dumps(item), encoding='utf-8')
-            temporary.replace(path_for(resource_id) / 'manifest.json')
+            write_json(path_for(resource_id) / 'manifest.json', item, indent=None)
         return public(item)
     except SourceError as exc:
         raise HTTPException(404, str(exc)) from exc

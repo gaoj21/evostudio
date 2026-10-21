@@ -1883,8 +1883,11 @@ def _run_index(graph_id: str | None) -> tuple[list, dict]:
         live = {run_id: _public(state) for run_id, state in _runs.items()}
     for run_id, run in live.items():
         found[run_id] = (_run_meta(run), None)
+    # A renamed workflow's runs not yet refiled still carry its old id.
+    from backend.features.workflow.graphs import history_ids
+    ids = history_ids(graph_id) if graph_id else None
     chosen = [(run_id, meta, path) for run_id, (meta, path) in found.items()
-              if not graph_id or meta.get("graph_id") == graph_id]
+              if not graph_id or meta.get("graph_id") in ids]
     # Run id breaks ties, so pages of the same listing never overlap.
     chosen.sort(key=lambda row: (row[1].get("created_at") or "", row[0]), reverse=True)
     return chosen, live

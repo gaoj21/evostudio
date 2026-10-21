@@ -90,14 +90,23 @@ export default function EvaluationCode({ graphId, onChange, disabled = false }) 
     return () => { active = false; };
   }, [graphId]);
 
-  const saveDraft = useCallback(async (draft) => {
+  // Draft writes go out one after another, so a slow earlier write can never
+  // land after (and over) a newer one.
+  const writes = useRef(Promise.resolve());
+  const saveDraft = useCallback((draft) => {
     writeLocalDraft(graphId, draft);
     setDraftState('saving');
-    try {
-      await api.saveEvaluatorDraft(graphId, draft);
-      baseline.current = draft; unsaved.current = false;
-      setDraftSavedAt(new Date().toISOString()); setDraftState('saved');
-    } catch { setDraftState('local'); }
+    writes.current = writes.current.then(async () => {
+      try {
+        await api.saveEvaluatorDraft(graphId, draft);
+        baseline.current = draft;
+        // Typing that went on while this was out is still owed a write.
+        const p = pending.current;
+        if (p.code === draft.code && JSON.stringify(p.config) === JSON.stringify(draft.config)) unsaved.current = false;
+        setDraftSavedAt(new Date().toISOString()); setDraftState('saved');
+      } catch { setDraftState('local'); }
+    });
+    return writes.current;
   }, [graphId]);
 
   useEffect(() => { pending.current = { code: live, config }; }, [live, config]);
@@ -116,8 +125,9 @@ export default function EvaluationCode({ graphId, onChange, disabled = false }) 
   // Leaving (the form, or the workflow) flushes what the debounce still owes.
   useEffect(() => () => {
     if (!unsaved.current || !graphId) return;
-    writeLocalDraft(graphId, pending.current);
-    api.saveEvaluatorDraft(graphId, pending.current).catch(() => {});
+    const draft = pending.current;
+    writeLocalDraft(graphId, draft);
+    writes.current = writes.current.then(() => api.saveEvaluatorDraft(graphId, draft)).catch(() => {});
   }, [graphId]);
 
   const discardDraft = async () => {

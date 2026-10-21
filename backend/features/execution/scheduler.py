@@ -54,6 +54,13 @@ def _now() -> datetime:
 
 def validate(body: dict) -> dict:
     """A schedule, normalised, or a complaint about why it is not one."""
+    # A number where text goes is a 422 to fix, not a server error; and the
+    # string "false" must not switch on an unattended schedule.
+    for key in ("mode", "session", "time_input", "time"):
+        if body.get(key) is not None and not isinstance(body[key], str):
+            raise ScheduleError(f"{key} must be text")
+    if not isinstance(body.get("enabled", True), bool):
+        raise ScheduleError("enabled must be true or false")
     mode = (body.get("mode") or "daily").strip()
     if mode not in MODES:
         raise ScheduleError(f"mode must be one of {list(MODES)}, got {mode!r}")

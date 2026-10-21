@@ -28,6 +28,7 @@ import uuid
 
 from fastapi import APIRouter, Body, HTTPException
 
+from backend.features.workflow.graphs import history_ids
 from backend.api import custom_tools
 from backend.api import model_json, chat_control
 from backend.api.chat_engine import ChatEngine
@@ -364,8 +365,24 @@ def _build_system_prompt(graph: dict, agents: list | None = None) -> str:
 
 def _slug(name: str) -> str:
     """Mirror of the frontend's sluggify(), so names round-trip unchanged."""
+    from backend.features.persistence import name_tag
     s = re.sub(r"[^a-z0-9]+", "_", str(name or "").lower()).strip("_")
+    tag = name_tag(name)
+    if tag:
+        return f"{s}_{tag}" if s else f"node_{tag}"
     return s or "node"
+
+
+def _save_graph(graph_id: str, graph: dict) -> dict:
+    """Save as PUT /api/graphs/{id} does: the workspace is compiled from the
+    saved canvas too, or it keeps the previous version until a manual save."""
+    saved = graph_store.save_graph(graph_id, graph)
+    try:
+        from backend.api import workspace
+        workspace.write_project(saved)
+    except Exception:  # noqa: BLE001 - a half-built workflow must still save
+        pass
+    return saved
 
 
 def _unique(base: str, taken: set) -> str:
@@ -769,7 +786,7 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None,
                     plan = run_plan.compile_plan(graph)
                     errors = run_plan.check_inputs(plan, config['inputs'])
                     if errors: raise ChatError('; '.join(errors))
-                    graph = graph_store.save_graph(graph_id, graph); graph_id = graph['id']; saved = True
+                    graph = _save_graph(graph_id, graph); graph_id = graph['id']; saved = True
                     observe(op, scheduler.set_schedule(graph, config))
 
             elif op in ('read_watch', 'start_watch', 'stop_watch'):
@@ -779,7 +796,7 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None,
                 else:
                     errors = _validate(graph)
                     if errors: raise ChatError('; '.join(errors))
-                    graph = graph_store.save_graph(graph_id, graph); graph_id = graph['id']; saved = True
+                    graph = _save_graph(graph_id, graph); graph_id = graph['id']; saved = True
                     observe(op, {'watchers': watcher.start_graph_watch(graph)})
 
             elif op == "read_schedule":
@@ -801,7 +818,7 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None,
                 if not wanted:
                     wanted = next((r['run_id'] for r in runner.list_runs(graph_id=graph_id) if r['status'] == 'running'), None)
                 run = runner.get_run(wanted) if wanted else None
-                if not run or run.get('graph_id') != graph_id: raise ChatError('No matching run in this workflow')
+                if not run or run.get('graph_id') not in history_ids(graph_id): raise ChatError('No matching run in this workflow')
                 observe(op, runner.cancel_run(wanted))
 
             elif op in ('list_batches', 'read_batch', 'cancel_batch'):
@@ -809,7 +826,7 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None,
                 if op == 'list_batches': observe(op, batch.list_batches(graph_id=graph_id))
                 else:
                     candidate = batch.get_batch(raw.get('batch_id', ''))
-                    if not candidate or candidate.get('graph_id') != graph_id: raise ChatError('No matching batch in this workflow')
+                    if not candidate or candidate.get('graph_id') not in history_ids(graph_id): raise ChatError('No matching batch in this workflow')
                     observe(op, _truncate(candidate, 10000) if op == 'read_batch' else batch.cancel_batch(candidate['batch_id']))
 
             elif op == "list_runs":
@@ -829,7 +846,7 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None,
                         raise ChatError("read_run: this workflow has no runs yet")
                     wanted = recent[0].get("run_id")
                 run = runner.get_run(wanted)
-                if run is None or run.get("graph_id") != graph_id:
+                if run is None or run.get("graph_id") not in history_ids(graph_id):
                     raise ChatError(f"read_run: no run '{wanted}'")
                 observe("read_run", _run_digest(run))
 
@@ -859,7 +876,7 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None,
                 if errors:
                     raise ChatError("save_graph refused, the workflow is invalid: "
                                     + "; ".join(errors))
-                graph = graph_store.save_graph(graph_id, graph)
+                graph = _save_graph(graph_id, graph)
                 graph_id = graph["id"]
                 saved = True
 

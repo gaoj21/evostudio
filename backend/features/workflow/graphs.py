@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from backend.api.studio_config import DATA_DIR
-from backend.features.persistence import is_safe_id, replace, safe_id
+from backend.features.persistence import is_safe_id, name_tag, replace, safe_id
 
 GRAPHS_DIR = DATA_DIR / "graphs"
 
@@ -41,7 +41,10 @@ def _slugify(name: str) -> str:
     slug = name.lower().replace(" ", "-").replace("_", "-")
     slug = re.sub(r"[^a-z0-9-]", "", slug)
     slug = re.sub(r"-+", "-", slug).strip("-")
-    return slug or "graph"
+    # A name in Chinese (say) keeps a tag of what was dropped, rather than
+    # every such workflow becoming "graph", or "信用 Risk" becoming "risk".
+    tag = name_tag(name)
+    return f"{slug or 'graph'}-{tag}" if tag else (slug or "graph")
 
 
 def _graph_path(graph_id: str) -> Path:
@@ -152,6 +155,9 @@ def rename_graph(graph_id: str, name: str) -> dict:
         # Legacy Chat Agents and sessions are keyed by the original graph ID.
         # Keep that owner stable when the editable graph name/ID changes.
         graph['task_id'] = graph.get('task_id') or graph_id
+        # The marker goes first, as for a delete: a server stopped anywhere
+        # after this finishes the rename at its next start (resume_refiles).
+        _write_marker(graph_id, new_id, graph['task_id'], kind="rename")
         graph["id"] = new_id
         graph["name"] = name
         _save(graph)
@@ -177,6 +183,19 @@ def _in_flight(graph_id: str) -> str:
         parts.append(f"{runs} run{'s' if runs > 1 else ''}")
     if batches:
         parts.append(f"{batches} batch{'es' if batches > 1 else ''}")
+    # An Evolve task saves its result, and a watcher starts its runs, under
+    # the id they were started with.
+    try:
+        from backend.features.evaluation import evolve_api
+        with evolve_api._lock:
+            if any(t.get("graph_id") == graph_id and t.get("status") == "running"
+                   for t in evolve_api._tasks.values()):
+                parts.append("an Evolve task")
+    except ImportError:                 # optimizer dependencies not installed
+        pass
+    from backend.features.execution import watcher
+    if watcher.graph_watch_status(graph_id).get("watching"):
+        parts.append("a source watch")
     return " and ".join(parts)
 
 
@@ -204,8 +223,113 @@ def _move_graph_data(old_id: str, new_id: str) -> list[str]:
                 "rename %s -> %s: could not move %s: %s", old_id, new_id, old, exc)
             failed.append(f"{old.name} stayed under '{old_id}': {exc}")
 
-    _repoint_history(old_id, new_id)
+    # The schedule is filed under the id: every rename carries it, the
+    # Chat's save_graph and an Evolve apply as well as the rename endpoint.
+    try:
+        from backend.features.execution import scheduler
+        scheduler.rename(old_id, new_id)
+    except Exception as exc:  # noqa: BLE001 - said, not fatal to the rename
+        failed.append(f"the schedule stayed under '{old_id}': {exc}")
+    # What each source watcher has already run: left behind, watching the
+    # renamed workflow would run every old record again.
+    from backend.features.execution import watcher
+    graph = load_graph(new_id) or {}
+    for task in graph.get("tasks") or []:
+        old, new = watcher._seen_path(old_id, task.get("name") or ""), \
+            watcher._seen_path(new_id, task.get("name") or "")
+        if old.is_file() and not new.exists():
+            try:
+                replace(old, new)
+            except OSError as exc:
+                failed.append(f"{old.name} stayed under '{old_id}': {exc}")
+
+    # Runs and batches still in memory follow at once; the files — every
+    # run and batch the workflow ever had, on a synced folder minutes for a
+    # long history — are refiled after the rename has answered, as for a
+    # delete. Meanwhile they are listed under the new id (history_ids).
+    _repoint_live(history_ids(old_id), new_id)
+    threading.Thread(target=_refile, args=(old_id, new_id),
+                     name=f"rename-{old_id}", daemon=True).start()
     return failed
+
+
+# Ids whose history is still being refiled, each to the id it goes to (a
+# rename's new id, a delete's archived one). Loaded from the markers on first
+# use, so a refile a restart cut short is listed right from the start.
+_forward: dict[str, str] = {}
+_forward_from: list = [None]
+# One refile at a time per file: a delete or second rename racing a refile
+# re-reads the file and skips it once it no longer names the old id.
+_history_write_lock = threading.Lock()
+
+
+def _forward_map() -> dict:
+    """Called with _archiving_lock held."""
+    folder = _refile_markers_dir()
+    if _forward_from[0] != folder:
+        _forward.clear()
+        _forward_from[0] = folder
+        if folder.is_dir():
+            for marker in folder.glob("*.json"):
+                try:
+                    data = json.loads(marker.read_text(encoding="utf-8"))
+                    _forward.setdefault(str(data["old_id"]), str(data["new_id"]))
+                except (OSError, ValueError, KeyError, TypeError):
+                    continue
+    return _forward
+
+
+def history_ids(graph_id: str) -> set:
+    """`graph_id` and every id whose history is still being refiled to it.
+
+    A renamed workflow's runs and batches keep its old id on disk until the
+    background refile reaches them; everything that lists or checks a
+    workflow's history goes through this, so they are its own meanwhile."""
+    ids = {graph_id}
+    with _archiving_lock:
+        forward = _forward_map()
+        if not forward:
+            return ids
+        grew = True
+        while grew:
+            grew = False
+            for old, new in forward.items():
+                if new in ids and old not in ids:
+                    ids.add(old)
+                    grew = True
+    return ids
+
+
+def current_id(graph_id: str) -> str:
+    """The id a workflow's history is being refiled to, following renames
+    still in progress; `graph_id` itself otherwise."""
+    seen = set()
+    with _archiving_lock:
+        forward = _forward_map()
+        while graph_id in forward and graph_id not in seen:
+            seen.add(graph_id)
+            graph_id = forward[graph_id]
+    return graph_id
+
+
+def _repoint_live(ids: set, new_id: str) -> None:
+    """Runs, batches and Evolve tasks still in memory, to `new_id`."""
+    from backend.api import batch as batch_store
+    from backend.api import runner
+    stores = [runner._runs, batch_store._batches]
+    try:
+        from backend.features.evaluation import evolve_api
+        stores.append(evolve_api._tasks)
+    except ImportError:
+        pass
+    for store in stores:
+        for state in list(store.values()):
+            if state.get("graph_id") in ids:
+                state["graph_id"] = new_id
+
+
+def _evolve_graph(document: dict) -> dict:
+    return {"graph_id": document.get("graph_id")}
 
 
 def _history_files(graph_id: str) -> list[tuple[Path, int | None]]:
@@ -218,6 +342,7 @@ def _history_files(graph_id: str) -> list[tuple[Path, int | None]]:
     from backend.features.persistence import file_view
     # A run still in memory is listed from memory (path None), but its file
     # is on disk too and must follow, or it keeps the old id.
+    ids = history_ids(graph_id)
     found = []
     for run_id, _, path in runner._run_index(graph_id)[0]:
         path = path or runner.RUNS_DIR / f"{run_id}.json"
@@ -226,42 +351,81 @@ def _history_files(graph_id: str) -> list[tuple[Path, int | None]]:
     if batch_store.BATCHES_DIR.is_dir():
         for path in batch_store.BATCHES_DIR.glob("*.json"):
             digest = file_view(path, "batch-digest", batch_store._digest, persist=True)
-            if digest is not None and digest.get("graph_id") == graph_id:
+            if digest is not None and digest.get("graph_id") in ids:
                 found.append((path, None))
+    # Evolve tasks are listed by workflow too.
+    try:
+        from backend.features.evaluation import evolve_api
+    except ImportError:
+        return found
+    if evolve_api.EVOLVE_DIR.is_dir():
+        for path in evolve_api.EVOLVE_DIR.glob("*/result.json"):
+            view = file_view(path, "evolve-graph", _evolve_graph, persist=True)
+            if view is not None and view.get("graph_id") in ids:
+                found.append((path, "evolve"))
     return found
 
 
 def _repoint_history(old_id: str, new_id: str, files=None) -> None:
-    """Point this workflow's past runs and batches at its new id.
+    """Point this workflow's past runs, batches and Evolve tasks at its new id.
 
     Without this its own history disappears from the History panel the moment
     it is renamed — the records are still there, filed under a name that no
     longer exists. Only this workflow's files are rewritten, each atomically,
-    and the listings' views of them are updated with them.
-    """
+    and the listings' views of them are updated with them. Each goes to where
+    the workflow is now (a rename or delete since started refiles it too)."""
     from backend.api import batch as batch_store
     from backend.api import runner
-    from backend.features.persistence import remember_view, write_json
-    for store in (runner._runs, batch_store._batches):
-        for state in list(store.values()):
-            if state.get("graph_id") == old_id:
-                state["graph_id"] = new_id
+    from backend.features.persistence import file_version, remember_view, write_json
+    ids = history_ids(old_id)
+    _repoint_live(ids, current_id(new_id))
     for path, indent in (_history_files(old_id) if files is None else files):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-        if data.get("graph_id") != old_id:
-            continue
-        data["graph_id"] = new_id
-        try:
-            write_json(path, data, indent=indent)
-        except OSError:
-            continue
-        if indent is None:
-            remember_view(path, "batch-digest", batch_store._digest(data), persist=True)
-        else:
-            remember_view(path, "run-meta", runner._run_meta(data), persist=True)
+        # A batch file is also written by its batch: under its lock, so a
+        # snapshot written meanwhile is neither lost nor overwritten.
+        batch_lock = batch_store._persist_lock if indent is None else _no_lock
+        with _history_write_lock, batch_lock:
+            # A writer that does not take these locks may change the file
+            # between the read and the write: then read it again rather
+            # than write the older copy over it.
+            data = None
+            for _attempt in range(3):
+                version = file_version(path)
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    data = None
+                    break
+                if data.get("graph_id") not in ids:
+                    data = None
+                    break
+                data["graph_id"] = current_id(new_id)
+                if file_version(path) == version:
+                    break
+            else:
+                data = None
+            if data is None:
+                continue
+            try:
+                write_json(path, data, indent=2 if indent == "evolve" else indent)
+            except OSError:
+                continue
+            if indent is None:
+                remember_view(path, "batch-digest", batch_store._digest(data), persist=True)
+            elif indent == "evolve":
+                remember_view(path, "evolve-graph", _evolve_graph(data), persist=True)
+            else:
+                remember_view(path, "run-meta", runner._run_meta(data), persist=True)
+
+
+class _NoLock:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+_no_lock = _NoLock()
 
 
 # Ids whose history is still being refiled after a delete: taken until done.
@@ -307,6 +471,8 @@ def _refile(old_id: str, new_id: str, files=None) -> None:
             "delete %s: could not refile its history: %s", old_id, exc)
     else:
         _refile_marker(old_id).unlink(missing_ok=True)
+        with _archiving_lock:
+            _forward_map().pop(old_id, None)
     finally:
         with _archiving_lock:
             _archiving.discard(old_id)
@@ -326,6 +492,7 @@ def resume_refiles() -> list[str]:
         try:
             data = json.loads(marker.read_text(encoding="utf-8"))
             old_id, new_id, task_id = data["old_id"], data["new_id"], data.get("task_id")
+            kind = data.get("kind") or "delete"
             if not (is_safe_id(old_id) and is_safe_id(new_id)) or marker.stem != old_id:
                 raise ValueError("ids do not match the marker")
         except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -336,8 +503,11 @@ def resume_refiles() -> list[str]:
             if old_id in _archiving:        # this process is already on it
                 continue
             _archiving.add(old_id)
-        pending.append((old_id, new_id, task_id))
-    for old_id, new_id, task_id in pending:
+        pending.append((old_id, new_id, task_id, kind))
+    for old_id, new_id, task_id, kind in pending:
+        if kind == "rename":
+            _resume_rename(old_id, new_id)
+            continue
         if _graph_path(old_id).is_file():
             # Stopped before the workflow file went: nothing was deleted.
             _refile_marker(old_id).unlink(missing_ok=True)
@@ -346,7 +516,29 @@ def resume_refiles() -> list[str]:
             continue
         # Moving what is still in place and refiling are both safe to repeat.
         _archive_graph_data(old_id, new_id, background=False, task_id=task_id)
-    return [old_id for old_id, _, _ in pending]
+    return [old_id for old_id, *_ in pending]
+
+
+def _resume_rename(old_id: str, new_id: str) -> None:
+    """Finish a rename a stopped server left half-done."""
+    if _graph_path(old_id).is_file() and not _graph_path(new_id).is_file():
+        # Stopped before the workflow was saved under its new id: no rename.
+        _refile_marker(old_id).unlink(missing_ok=True)
+        with _archiving_lock:
+            _archiving.discard(old_id)
+            _forward_map().pop(old_id, None)
+        return
+    _graph_path(old_id).unlink(missing_ok=True)
+    target = current_id(new_id)
+    for old, new in zip(_data_paths(old_id), _data_paths(target)):
+        if old.exists() and not new.exists():
+            try:
+                new.parent.mkdir(parents=True, exist_ok=True)
+                import shutil
+                shutil.move(str(old), str(new))
+            except OSError:
+                pass
+    _refile(old_id, new_id)
 
 
 def _save(graph: dict) -> None:
@@ -407,14 +599,33 @@ def delete_graph(graph_id: str) -> bool:
         # finishes the delete at its next start (resume_refiles), instead of
         # leaving data or history under an id a new workflow could take.
         try:
-            task_id = json.loads(path.read_text(encoding="utf-8")).get("task_id")
+            document = json.loads(path.read_text(encoding="utf-8"))
+            task_id = document.get("task_id")
+            nodes = [t.get("name") for t in document.get("tasks") or [] if isinstance(t, dict)]
         except (OSError, ValueError, AttributeError):
-            task_id = None
+            task_id, nodes = None, []
         archived_id = _archived_id(graph_id)
         _write_marker(graph_id, archived_id, task_id)
         path.unlink()
+        _archive_watch_state(graph_id, archived_id, nodes)
     _archive_graph_data(graph_id, archived_id, task_id=task_id)
     return True
+
+
+def _archive_watch_state(graph_id: str, archived_id: str, nodes) -> None:
+    """What each source watcher already ran, set aside with the rest: a new
+    workflow of that name must not skip records as already seen."""
+    from backend.features.execution import watcher
+    stamp = archived_id.rsplit(".deleted-", 1)[1]
+    for name in nodes:
+        seen = watcher._seen_path(graph_id, name or "")
+        if seen.is_file():
+            target = seen.parent / f".deleted-{stamp}" / seen.name
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                replace(seen, target)
+            except OSError:
+                pass
 
 
 def _archived_id(graph_id: str) -> str:
@@ -422,15 +633,17 @@ def _archived_id(graph_id: str) -> str:
     return f"{graph_id}.deleted-{stamp}"
 
 
-def _write_marker(graph_id: str, archived_id: str, task_id: str | None = None) -> None:
+def _write_marker(graph_id: str, archived_id: str, task_id: str | None = None,
+                  kind: str = "delete") -> None:
     import logging
     from backend.features.persistence import write_json
     with _archiving_lock:
         _archiving.add(graph_id)
+        _forward_map()[graph_id] = archived_id
     try:
         write_json(_refile_marker(graph_id), {
             "old_id": graph_id, "new_id": archived_id, "task_id": task_id,
-            "started_at": _utcnow()})
+            "kind": kind, "started_at": _utcnow()})
     except OSError as exc:
         logging.getLogger(__name__).warning(
             "delete %s: could not record its pending archive: %s", graph_id, exc)
@@ -484,6 +697,20 @@ def _archive_graph_data(graph_id: str, archived_id: str | None = None,
     return archived_id
 
 
+def check_shape(body: dict) -> None:
+    """A body whose nodes or edges are not lists of objects is the client's
+    mistake (422), not a crash deep inside migration (500)."""
+    for key in ("tasks", "edges"):
+        value = body.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, list) or not all(isinstance(v, dict) for v in value):
+            raise GraphValidationError([f"'{key}' must be a list of objects."])
+    for key in ("name", "goal"):
+        if body.get(key) is not None and not isinstance(body[key], str):
+            raise GraphValidationError([f"'{key}' must be text."])
+
+
 def validate_harness_tasks(tasks):
     for task in tasks:
         config = task.get('harness')
@@ -503,6 +730,7 @@ def save_graph(graph_id: str, body: dict) -> dict:
     Renaming the workflow renames its identity with it, so the returned graph
     may carry a different id from the one in the URL — the caller follows it.
     """
+    check_shape(body)
     existing = load_graph(graph_id) or {}
     validate_harness_tasks(body.get('tasks', []))
     resources = body.get('memory_resources', existing.get('memory_resources', []))
@@ -537,7 +765,12 @@ def save_graph(graph_id: str, body: dict) -> dict:
     if existing and new_name and new_name != existing.get("name"):
         # Do this first: everything below writes under the id, and the point of
         # a rename is that those writes land under the new one.
-        graph_id = rename_graph(graph_id, new_name)["id"]
+        renamed = rename_graph(graph_id, new_name)
+        graph_id = renamed["id"]
+        # The rename pins the Chat Agents' owner (task_id) to the old id; the
+        # document read before it has not got it, and dropping it here left
+        # the workflow's Chat Agents behind under the old id.
+        existing = {**existing, "task_id": renamed.get("task_id")}
     graph = {
         "id": graph_id,
         "name": body.get("name", existing.get("name", graph_id)),
@@ -576,11 +809,14 @@ def evaluator_list(evaluators):
 
 def set_evaluators(graph_id: str, evaluators) -> dict:
     """Replace a workflow's evaluators, leaving the canvas untouched."""
-    graph = load_graph(graph_id)
-    if graph is None:
-        raise GraphValidationError(["Workflow not found."])
-    graph["evaluators"] = evaluator_list(evaluators)
+    validated = evaluator_list(evaluators)
+    # Read and write under one lock: a canvas save landing in between would
+    # otherwise be overwritten with the document as it was before it.
     with _lock:
+        graph = load_graph(graph_id)
+        if graph is None:
+            raise GraphValidationError(["Workflow not found."])
+        graph["evaluators"] = validated
         _save(graph)
     from backend.features.evaluation.evaluator_tools import clear_saved_drafts
     clear_saved_drafts(graph_id, graph["evaluators"])
@@ -904,6 +1140,7 @@ def validate_graph(graph: dict, check_memory: bool = True) -> tuple[list[dict], 
     # export — is migrated here the same way a stored graph is on load, so
     # the transition is one rule in one place. On a copy: validating must
     # not change what was handed in.
+    check_shape(graph)
     graph = migrate_flow(copy.deepcopy(graph))
     tasks = graph.get("tasks", []) or []
     edges = graph.get("edges", []) or []

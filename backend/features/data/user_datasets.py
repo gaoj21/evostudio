@@ -79,10 +79,18 @@ def references(dataset_id):
     from backend.api import graphs
     uses = []
     for path in graphs.GRAPHS_DIR.glob('*.json'):
-        graph = json.loads(path.read_text(encoding='utf-8'))
-        for node in graph.get('tasks', []):
-            if _mentions(node.get('source') or {}, dataset_id):
-                uses.append({'graph_id': graph['id'], 'graph_name': graph.get('name', graph['id']), 'node': node['name']})
+        # One unreadable workflow file must not fail every dataset preview,
+        # rename and delete.
+        try:
+            graph = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(graph, dict):
+            continue
+        graph_id = graph.get('id') or path.stem
+        for node in graph.get('tasks') or []:
+            if isinstance(node, dict) and _mentions(node.get('source') or {}, dataset_id):
+                uses.append({'graph_id': graph_id, 'graph_name': graph.get('name', graph_id), 'node': node.get('name')})
     return uses
 
 

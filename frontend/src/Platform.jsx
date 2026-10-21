@@ -9,7 +9,31 @@ import './platform.css';
 
 function errorText(error) {
   const detail = error?.body?.detail;
-  return typeof detail === 'string' ? detail : error.message || 'Please try again.';
+  return typeof detail === 'string' ? detail : detail?.message || error.message || 'Please try again.';
+}
+
+const BINDING_KIND = { agent: 'Chat Agent', node: 'Node', canvas: 'Canvas memory' };
+const bindingLine = b => b.kind === 'canvas' ? `${BINDING_KIND.canvas} "${b.space}"` : `${BINDING_KIND[b.kind] || b.kind} "${b.name}" → "${b.space}"`;
+
+// Shared memory stays with its project. A move or copy that would leave some
+// behind is refused with the list; the user decides whether to detach it.
+// Resolves to the server's answer, or null when the user said no.
+async function withDetachConfirm(call, verb) {
+  try { return await call({}); }
+  catch (e) {
+    const detail = e?.body?.detail;
+    if (e?.status !== 409 || !Array.isArray(detail?.bindings)) throw e;
+    const ask = `${detail.message}\n\nThese Chat Agents and nodes would lose it:\n${detail.bindings.map(b => `• ${bindingLine(b)}`).join('\n')}\n\n${verb} anyway and detach them?`;
+    if (!window.confirm(ask)) return null;
+    return call({ detach: true });
+  }
+}
+export const moveTask = (projectId, taskId) => withDetachConfirm(options => api.assignTask(projectId, taskId, ...(options.detach ? [options] : [])), 'Move');
+export const copyTask = (projectId, taskId) => withDetachConfirm(options => api.copyTask(projectId, taskId, ...(options.detach ? [options] : [])), 'Copy');
+
+export function detachedNotice(task, verb = 'Moved') {
+  const lost = task?.detached || [];
+  return lost.length ? `${verb} "${task.name}". Detached shared memory: ${lost.map(bindingLine).join('; ')}.` : '';
 }
 
 export default function Platform() {
@@ -24,6 +48,7 @@ export default function Platform() {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [menu, setMenu] = useState(null);
   const [taskAction, setTaskAction] = useState(null);
   const [revision, setRevision] = useState(0);
@@ -62,8 +87,8 @@ export default function Platform() {
   }
   async function assign(task, projectId) {
     if (!projectId) return;
-    setBusy(true); setError('');
-    try { await api.assignTask(projectId, task.id); setRevision(v => v + 1); }
+    setBusy(true); setError(''); setNotice('');
+    try { const moved = await moveTask(projectId, task.id); if (moved) { setNotice(detachedNotice(moved)); setRevision(v => v + 1); } }
     catch (e) { setError(errorText(e)); }
     finally { setBusy(false); }
   }
@@ -76,13 +101,21 @@ export default function Platform() {
   async function applyTaskAction(event) {
     event.preventDefault();
     const values = Object.fromEntries(new FormData(event.currentTarget));
-    setBusy(true); setError('');
+    setBusy(true); setError(''); setNotice('');
     try {
-      if (taskAction.kind === 'copy') await api.copyTask(selected, taskAction.task.id);
+      if (taskAction.kind === 'move') {
+        const moved = await moveTask(values.project, taskAction.task.id);
+        if (!moved) return;
+        setNotice(detachedNotice(moved));
+      }
+      if (taskAction.kind === 'copy') {
+        const copied = await copyTask(selected, taskAction.task.id);
+        if (!copied) return;
+        setNotice(detachedNotice(copied, 'Copied'));
+      }
       if (taskAction.kind === 'delete') await api.deleteGraph(taskAction.task.id);
       if (taskAction.kind === 'rename-project') await api.updateProject(taskAction.task.id, { name: values.name.trim(), description: taskAction.task.description || '' });
       if (taskAction.kind === 'rename') await api.renameGraph(taskAction.task.id, values.name.trim());
-      if (taskAction.kind === 'move') await api.assignTask(values.project, taskAction.task.id);
       if (taskAction.kind === 'delete-project') { await api.deleteProject(taskAction.task.id); setSelected('unassigned'); }
       setTaskAction(null); setRevision(v => v + 1);
     } catch (e) { setError(errorText(e)); }
@@ -117,6 +150,7 @@ export default function Platform() {
       <header className="project-heading"><div><div className="project-eyebrow">YOUR WORKSPACE / {project ? 'PROJECT' : 'EXISTING WORK'}</div>{project ? <ResourceActions name={project.name} items={projectActions(project)}><h1>{project.name}</h1></ResourceActions> : <h1>Unassigned tasks</h1>}<p>{project?.description || 'Your existing workflows are here. Organize them into projects when you are ready.'}</p></div>
         <div className="form-actions"><button disabled={busy} onClick={() => { setForm('project'); setError(''); }}>+ New project</button><button className="platform-primary" disabled={busy} onClick={() => startTask()}>+ New task</button></div>
       </header>
+      {notice && <div className="platform-notice" role="status">{notice} <button onClick={() => setNotice('')}>Dismiss</button></div>}
       {error && <div className="platform-error" role="alert">{error} <button onClick={() => setRevision(v => v + 1)}>Retry loading</button></div>}
       {form && <section className="project-form" aria-label={form === 'project' ? 'New project' : 'New task'}>
         <h2>{form === 'project' ? 'Give your work a home' : 'What should the agent do?'}</h2>
@@ -151,7 +185,7 @@ export default function Platform() {
       <form onSubmit={applyTaskAction}>
         {['rename', 'rename-project'].includes(taskAction.kind) && <label>Name<input autoFocus name="name" required maxLength={120} defaultValue={taskAction.task.name} /></label>}
         {taskAction.kind === 'move' && <label>Project<select autoFocus name="project" defaultValue={selected}><option value="unassigned">Unassigned tasks</option>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>}
-        {taskAction.kind === 'copy' && <p>Copy the workflow and canvas configuration into this project. Data resources, tools and shared Memory remain references; run and chat history are not copied.</p>}
+        {taskAction.kind === 'copy' && <p>Copy the workflow and canvas configuration into this project. Data resources, tools and shared Memory remain references (shared Memory the copy cannot reach is detached after you confirm); run and chat history are not copied.</p>}
         {taskAction.kind === 'delete' && <p>{DELETE_WORKFLOW_TEXT}</p>}
         {taskAction.kind === 'delete-project' && <p>Only empty projects can be deleted. Move or delete their tasks first.</p>}
         <div className="form-actions"><button autoFocus={taskAction.kind.startsWith('delete')} type="button" disabled={busy} onClick={() => setTaskAction(null)}>Cancel</button><button disabled={busy} className={taskAction.kind.startsWith('delete') ? 'danger' : 'platform-primary'}>{busy ? 'Saving…' : taskAction.kind.startsWith('delete') ? 'Delete' : taskAction.kind === 'copy' ? 'Copy' : 'Save'}</button></div>

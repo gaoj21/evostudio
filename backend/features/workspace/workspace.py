@@ -34,7 +34,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from backend.api.studio_config import data_path
-from backend.features.persistence import contains
+from backend.features.persistence import contains, replace
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -632,8 +632,23 @@ def write_file(graph_id: str, relpath: str, content: bytes) -> dict:
     if len(content) > MAX_WRITE_BYTES:
         raise WorkspaceError(f"File too large: {len(content)} bytes (max {MAX_WRITE_BYTES})")
     target = _resolve_in_workspace(graph_id, relpath)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(content)
+    if target.is_dir():
+        raise WorkspaceError(f"{relpath!r} is a folder, not a file.")
+    import tempfile
+    temp = None
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Written aside, then put in place: a reader (or a run reading its
+        # inputs) never meets half a file, and two saves never interleave.
+        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".write-", delete=False) as out:
+            temp = Path(out.name)
+            out.write(content)
+        replace(temp, target)
+    except (NotADirectoryError, FileExistsError):
+        raise WorkspaceError(f"A file is in the way of {relpath!r}: a folder on that path is a file.")
+    finally:
+        if temp is not None:
+            temp.unlink(missing_ok=True)
     return {"path": relpath, "size": target.stat().st_size}
 
 
@@ -677,7 +692,10 @@ def make_dir(graph_id: str, relpath: str) -> dict:
     if not relpath or relpath.endswith("/"):
         raise WorkspaceError(f"Invalid directory path: {relpath!r}")
     target = _resolve_in_workspace(graph_id, relpath)
-    target.mkdir(parents=True, exist_ok=True)
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except (NotADirectoryError, FileExistsError):
+        raise WorkspaceError(f"{relpath!r} is, or is inside, a file: a folder cannot go there.")
     return {"path": relpath}
 
 

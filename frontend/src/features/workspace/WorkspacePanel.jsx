@@ -224,6 +224,7 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
   const [error, setError] = useState(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
+  const [savingFile, setSavingFile] = useState(false);
   const [newFileOpen, setNewFileOpen] = useState(false);
   const [newPath, setNewPath] = useState('files/notes.txt');
   const [newFileError, setNewFileError] = useState(null);
@@ -277,6 +278,13 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
   const deleting = useRef(false);
 
   if (!open) return null;
+
+  // Edits to the open file that are not written yet. Opening another file or
+  // closing the panel would drop them, so those ask first.
+  const fileDirty = editing && draft !== (file?.content ?? '');
+  const mayLeaveFile = () => !fileDirty || window.confirm(`Discard unsaved changes to ${selected}?`);
+  const choose = (path) => { if (path === selected || mayLeaveFile()) setSelected(path); };
+  const close = () => { if (mayLeaveFile()) onClose(); };
 
   const removeFile = async (path, { recursive = false } = {}) => {
     if (deleting.current || !window.confirm(`Delete ${path}?`)) return;
@@ -344,7 +352,7 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
         onClick: () => removeFile(entry.path) },
     ]),
   ] : [
-    { key: 'open', label: 'Open', onClick: () => setSelected(entry.path) },
+    { key: 'open', label: 'Open', onClick: () => choose(entry.path) },
     { key: 'dl', label: 'Download', onClick: () => download(entry.path) },
     { key: 'copy', label: 'Copy path', onClick: () => copyPath(entry.path) },
     ...(isMemory(entry.path) ? [] : [
@@ -404,7 +412,7 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
       setNewFileOpen(false);
       await load();
       if (selected === path) { setFile({ path, content: '' }); setDraft(''); setEditing(true); }
-      else { editAfterLoad.current = path; setSelected(path); }
+      else if (mayLeaveFile()) { editAfterLoad.current = path; setSelected(path); }
     } catch (err) {
       setNewFileError(err?.body?.detail || err.message);
     }
@@ -422,6 +430,10 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
   };
 
   const saveEdit = async () => {
+    // One write at a time; the editor is read-only while it is out, so what
+    // is written is what is on screen.
+    if (savingFile) return;
+    setSavingFile(true);
     setError(null);
     try {
       await api.saveWorkspaceFile(graphId, selected, draft);
@@ -431,6 +443,8 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
       setFile(refreshed);
     } catch (err) {
       setError(err?.body?.detail || err.message);
+    } finally {
+      setSavingFile(false);
     }
   };
 
@@ -450,7 +464,7 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
     <div className="ws-panel">
       <div className="drawer-head">
         <h3 style={{ margin: 0 }}>Workspace</h3>
-        <button onClick={onClose}>✕</button>
+        <button onClick={close}>✕</button>
       </div>
       <div className="ws-toolbar">
         <button type="button" onClick={openNewFile} disabled={!graphId}>
@@ -474,7 +488,7 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
         <FileTree
           files={files}
           selected={selected}
-          onSelect={setSelected}
+          onSelect={choose}
           onDelete={removeFile}
           expanded={expanded}
           onToggle={toggleFolder}
@@ -512,10 +526,11 @@ export default function WorkspacePanel({ open, graphId, onClose }) {
             </div>
             {editing ? (
               <>
-                <textarea className="ws-editor" value={draft} onChange={(e) => setDraft(e.target.value)} />
+                <textarea className="ws-editor" value={draft} readOnly={savingFile} onChange={(e) => setDraft(e.target.value)} />
                 <div className="modal-actions">
-                  <button type="button" onClick={() => setEditing(false)}>Cancel</button>
-                  <button type="button" className="primary" onClick={saveEdit}>Save</button>
+                  {fileDirty && <span className="muted small" role="status">Unsaved changes</span>}
+                  <button type="button" disabled={savingFile} onClick={() => setEditing(false)}>Cancel</button>
+                  <button type="button" className="primary" disabled={savingFile} onClick={saveEdit}>{savingFile ? 'Saving…' : 'Save'}</button>
                 </div>
               </>
             ) : (

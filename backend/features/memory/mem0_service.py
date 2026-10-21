@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from backend.api.studio_config import data_path
+from backend.features.persistence import write_json
 
 ROOT = data_path('mem0')
 _lock = threading.RLock()
@@ -59,10 +60,14 @@ def scope(graph):
 def spaces(graph):
     result = []
     for path in (ROOT / 'spaces').glob('*.json'):
-        item = json.loads(path.read_text(encoding='utf-8'))
-        if item['scope'] == scope(graph):
+        # One unreadable file must not hide every other space.
+        try:
+            item = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        if isinstance(item, dict) and item.get('scope') == scope(graph):
             result.append(item)
-    return sorted(result, key=lambda item: item['name'])
+    return sorted(result, key=lambda item: str(item.get('name') or ''))
 
 
 def get_space(graph, space_id):
@@ -77,15 +82,23 @@ def get_space(graph, space_id):
     return item
 
 
+def space_record(space_id):
+    """A space's stored record whatever its scope, or None: for naming a
+    space a task can no longer reach, never for reading it."""
+    if not isinstance(space_id, str) or not re.fullmatch('[a-f0-9]{32}', space_id):
+        return None
+    try:
+        item = json.loads((ROOT / 'spaces' / (space_id + '.json')).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    return item if isinstance(item, dict) else None
+
+
 def create_space(graph, name):
     with _lock:
         item = {'id': uuid.uuid4().hex, 'name': name, 'scope': scope(graph),
                 'created_at': datetime.now(timezone.utc).isoformat()}
-        folder = ROOT / 'spaces'
-        folder.mkdir(parents=True, exist_ok=True)
-        temp = folder / (item['id'] + '.tmp')
-        temp.write_text(json.dumps(item, ensure_ascii=False), encoding='utf-8')
-        temp.replace(folder / (item['id'] + '.json'))
+        write_json(ROOT / 'spaces' / (item['id'] + '.json'), item, indent=None)
         return item
 
 

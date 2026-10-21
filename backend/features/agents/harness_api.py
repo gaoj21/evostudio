@@ -121,14 +121,52 @@ def get(db, id, scope, kind, parent=None):
     return json.loads(row[1])
 
 
+def space_of(binding):
+    """The Mem0 space a binding names, or None for a workflow memory."""
+    if binding.get('space_id'): return binding['space_id']
+    reference = str(binding.get('memory_id') or '')
+    return reference.removeprefix('mem:space:') if reference.startswith('mem:space:') else None
+
+
+def unavailable_memory(binding):
+    """Why a Mem0 binding cannot be used here, naming the space and the fix."""
+    space_id = space_of(binding)
+    record = mem0_service.space_record(space_id)
+    if record is None:
+        return (f"Shared memory {space_id} no longer exists. Remove it under "
+                "Connected memories, then save again.")
+    return (f"Shared memory '{record.get('name') or space_id}' ({space_id}) belongs to another "
+            "project or task, so this task cannot use it (the task may have been moved). "
+            "Remove it under Connected memories, then save again.")
+
+
 def validate_memories(graph, settings):
     ids = []
     for binding in settings['memories']:
         try: resource = memory_resources.resolve(graph, memory_resources.key(binding))
-        except ValueError as exc: raise HTTPException(422, str(exc)) from exc
+        except ValueError as exc:
+            if space_of(binding): raise HTTPException(422, unavailable_memory(binding)) from exc
+            raise HTTPException(422, str(exc)) from exc
         if binding.get('write') and not resource['writable']: raise HTTPException(422, resource['write_reason'])
         ids.append(resource['id'])
     if len(set(ids)) != len(ids): raise HTTPException(422, 'Duplicate memory connection')
+
+
+def detach_spaces(graph, space_ids):
+    """Remove these Mem0 spaces from every Chat Agent of the task; returns
+    what each changed Agent lost, for telling the user."""
+    space_ids = set(space_ids)
+    scope = owner(graph)
+    detached = []
+    with _lock, database() as db:
+        for id, body in db.execute('SELECT id, body FROM objects WHERE owner=? AND kind=?', (scope, 'agent')).fetchall():
+            agent = json.loads(body)
+            kept = [m for m in agent.get('memories', []) if space_of(m) not in space_ids]
+            if len(kept) == len(agent.get('memories', [])): continue
+            lost = [space_of(m) for m in agent['memories'] if space_of(m) in space_ids]
+            put(db, id, scope, 'agent', '', {**agent, 'memories': kept})
+            detached.append({'agent_id': id, 'agent': agent.get('name'), 'space_ids': lost})
+    return detached
 
 
 @router.get('/memory-resources')

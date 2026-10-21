@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -169,4 +169,31 @@ it('configures a weekly Monday schedule and recovery policy', async () => {
   await user.selectOptions(screen.getByLabelText('After downtime'), 'all');
   await user.click(screen.getByRole('button', { name: 'Schedule it' }));
   expect(api.setSchedule).toHaveBeenCalledWith('probe', expect.objectContaining({ mode: 'weekly', weekday: 0, recovery_policy: 'all' }));
+});
+
+describe('unsaved schedule edits', () => {
+  it('keeps what was typed before the schedule arrived, and asks before closing over it', async () => {
+    let arrive;
+    api.getSchedule.mockReturnValue(new Promise((resolve) => { arrive = resolve; }));
+    api.setSchedule.mockResolvedValue({ ...DAILY });
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<SchedulePanel open graphId="probe" onClose={onClose} />);
+    await user.type(screen.getByLabelText(/Session/), 'typed-early');
+    await act(async () => { arrive(DAILY); });
+    expect(screen.getByLabelText(/Session/)).toHaveValue('typed-early');
+    expect(screen.getByLabelText(/Inputs/).value).toContain('Lima');
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+
+    const ask = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    await user.click(screen.getByRole('button', { name: '✕' }));
+    expect(ask).toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    ask.mockRestore();
+
+    await user.click(screen.getByRole('button', { name: 'Update' }));
+    await waitFor(() => expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: '✕' }));
+    expect(onClose).toHaveBeenCalled();
+  });
 });

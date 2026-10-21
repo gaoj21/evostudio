@@ -26,7 +26,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from backend.api.studio_config import data_path
-from backend.features.persistence import is_safe_id
+from backend.features.persistence import is_safe_id, write_json
 
 REVIEWS_DIR = data_path("reviews")
 RUNS_DIR = data_path("runs")
@@ -169,8 +169,8 @@ def maybe_create_review(run_state: dict, gray_zone=None, rule: dict | None = Non
 
 
 def _save(review: dict) -> None:
-    with open(REVIEWS_DIR / f"{review['review_id']}.json", "w", encoding="utf-8") as f:
-        json.dump(review, f, indent=2, ensure_ascii=False, default=str)
+    # Atomic: a decision written over a half-written file loses the review.
+    write_json(REVIEWS_DIR / f"{review['review_id']}.json", review)
 
 
 def get_review(review_id: str) -> dict | None:
@@ -239,32 +239,29 @@ def _writeback(review: dict) -> None:
     runner_mod.apply_review_outcome(run_id, outcome)
     batch_mod.apply_review_outcome(run_id, review)
     run_path = RUNS_DIR / f"{run_id}.json"
+    run = None
     if run_path.is_file():
-        try:
-            with open(run_path, encoding="utf-8") as f:
-                run = json.load(f)
-            run.update(outcome)
-            with open(run_path, "w", encoding="utf-8") as f:
-                json.dump(run, f, indent=2, ensure_ascii=False, default=str)
-        except (json.JSONDecodeError, OSError):
-            pass
+        # Under the refile's lock: a rename refiling this run reads and
+        # rewrites it too, and one of the two writes would be lost.
+        from backend.features.workflow.graphs import _history_write_lock
+        with _history_write_lock:
+            try:
+                with open(run_path, encoding="utf-8") as f:
+                    run = json.load(f)
+                run.update(outcome)
+                write_json(run_path, run)
+            except (json.JSONDecodeError, OSError):
+                pass
+    # Only the batch that holds the run: its id is on the run. Reading every
+    # batch file for one decision read the whole history (hundreds of MB).
+    batch_id = run.get("batch_id") if isinstance(run, dict) else None
+    if batch_id:
+        batch_mod.record_review_outcome(batch_id, run_id, review)
+        return
+    if run is not None and "batch_id" in run:
+        return                          # a single run, in no batch
+    # A run saved before runs named their batch: look for it.
     if not BATCHES_DIR.is_dir():
         return
     for path in BATCHES_DIR.glob("*.json"):
-        try:
-            with open(path, encoding="utf-8") as f:
-                batch = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            continue
-        changed = False
-        for item in batch.get("items", []):
-            if item.get("run_id") == run_id:
-                item["review_status"] = review["status"]
-                item["final_action"] = review["final_action"]
-                changed = True
-        if changed:
-            try:
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump(batch, f, indent=2, ensure_ascii=False, default=str)
-            except OSError:
-                pass
+        batch_mod.record_review_outcome(path.stem, run_id, review)

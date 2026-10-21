@@ -9,17 +9,23 @@ import copy
 import json
 import math
 import re
+import threading
 from statistics import mean
 from fastapi import APIRouter, Body, HTTPException
+from backend.features.workflow.graphs import history_ids
 from backend.api.sources import SourceError
 from backend.api.studio_config import DATA_DIR
-from backend.features.persistence import replace as replace_file
+from backend.features.persistence import write_json
 
 router = APIRouter(prefix='/api', tags=['Evaluators'])
 
 # Where a pasted-but-unsaved evaluator is kept, one draft per workflow, so
 # leaving the panel to copy a run id from elsewhere does not lose the code.
 DRAFTS_DIR = DATA_DIR / 'evaluator_drafts'
+# A draft is written on every pause in typing while a save may be clearing
+# it: the check and the write or removal happen under this lock, so a save
+# never removes a draft typed after it, and two writes never share a file.
+_draft_lock = threading.Lock()
 
 # Legacy fixed scorers. No evaluator can be created with them any more; they
 # remain because `report()` is also the `evaluate_records` library tool, whose
@@ -431,23 +437,21 @@ def put_draft(graph_id, code, config=None, name=None):
     if isinstance(name, str) and name.strip():
         draft['name'] = name.strip()
     path = _draft_path(graph_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + '.tmp')
-    with temporary.open('w', encoding='utf-8') as stream:
-        json.dump(draft, stream, ensure_ascii=False, indent=2)
-    replace_file(temporary, path)
+    with _draft_lock:
+        write_json(path, draft)
     return draft
 
 
 def clear_draft(graph_id, code=None):
     """Drop the draft. With `code`, only when that same code is now saved."""
-    draft = get_draft(graph_id)
-    if draft is None:
-        return False
-    if code is not None and (draft.get('code') or '').strip() != (code or '').strip():
-        return False
-    _draft_path(graph_id).unlink(missing_ok=True)
-    return True
+    with _draft_lock:
+        draft = get_draft(graph_id)
+        if draft is None:
+            return False
+        if code is not None and (draft.get('code') or '').strip() != (code or '').strip():
+            return False
+        _draft_path(graph_id).unlink(missing_ok=True)
+        return True
 
 
 def clear_saved_drafts(graph_id, evaluators):
@@ -457,7 +461,8 @@ def clear_saved_drafts(graph_id, evaluators):
         return
     pasted = (draft.get('code') or '').strip()
     if pasted and any((e.get('code') or '').strip() == pasted for e in evaluators or []):
-        clear_draft(graph_id)
+        # Checked again under the lock: a draft typed since is kept.
+        clear_draft(graph_id, code=pasted)
 
 
 # ---------------------------------------------------------------------------
@@ -476,13 +481,13 @@ def saved_runs(graph_id, body):
     from backend.api import runner, batch
     if body.get('batch_id'):
         saved = batch.get_batch(body['batch_id'])
-        if not saved or saved.get('graph_id') != graph_id:
+        if not saved or saved.get('graph_id') not in history_ids(graph_id):
             raise HTTPException(404, 'Batch not found in this workflow.')
         if saved.get('status') in ('running', 'pending', 'queued', 'cancelling'):
             raise HTTPException(409, 'Wait for the batch to finish or stop it first.')
         return [(runner.get_run(i.get('run_id')) if i.get('run_id') else None) or {**i, 'nodes': []} for i in saved['items']]
     run = runner.get_run(body.get('run_id', ''))
-    if not run or run.get('graph_id') != graph_id:
+    if not run or run.get('graph_id') not in history_ids(graph_id):
         raise HTTPException(404, 'Run not found in this workflow.')
     if run.get('status') in ('running', 'pending', 'queued', 'cancelling'):
         raise HTTPException(409, 'Wait for execution to finish.')

@@ -81,6 +81,21 @@ def is_safe_id(value):
             and '..' not in value and not value.endswith('.'))
 
 
+def name_tag(name):
+    """Six hex digits standing for a name's non-ASCII letters, or '' when it
+    has none. Ids and node names keep only ASCII (`is_safe_id`, Python
+    identifiers, Windows paths), so "信用风险" and "供应商" would otherwise both
+    become the same bare default. FNV-1a over the code points of the stripped
+    name; the frontend's sluggify() computes exactly the same."""
+    raw = str(name or '').strip()
+    if not any(ord(ch) > 127 and ch.isalnum() for ch in raw):
+        return ''
+    h = 0x811c9dc5
+    for ch in raw:
+        h = ((h ^ ord(ch)) * 0x01000193) & 0xFFFFFFFF
+    return f'{h:08x}'[:6]
+
+
 def safe_id(value, kind='id'):
     """`value`, or InvalidId when it is not `is_safe_id`."""
     if not is_safe_id(value):

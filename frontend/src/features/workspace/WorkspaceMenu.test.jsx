@@ -310,3 +310,29 @@ describe('deleting from the tree', () => {
     await waitFor(() => expect(api.getWorkspace.mock.calls.length).toBeGreaterThan(1));
   });
 });
+
+describe('editing a file', () => {
+  it('asks before opening another file over unsaved edits, and saves once', async () => {
+    const user = setup([{ path: 'a.txt', size: 1, mtime: '' }, { path: 'b.txt', size: 1, mtime: '' }]);
+    api.getWorkspaceFile.mockImplementation(async (_g, path) => ({ path, content: 'old' }));
+    await user.click(await screen.findByText('a.txt'));
+    await user.click(await screen.findByRole('button', { name: 'Edit' }));
+    await user.type(document.querySelector('textarea.ws-editor'), ' new');
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+    const ask = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    await user.click(screen.getByText('b.txt'));
+    expect(ask).toHaveBeenCalled();
+    expect(document.querySelector('textarea.ws-editor')).toHaveValue('old new');
+    ask.mockRestore();
+
+    let finish;
+    api.saveWorkspaceFile.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Saving…' }));
+    expect(api.saveWorkspaceFile).toHaveBeenCalledTimes(1);
+    expect(api.saveWorkspaceFile).toHaveBeenCalledWith('probe', 'a.txt', 'old new');
+    await act(async () => finish({}));
+    await waitFor(() => expect(document.querySelector('textarea.ws-editor')).toBeNull());
+  });
+});

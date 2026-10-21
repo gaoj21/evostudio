@@ -1,4 +1,5 @@
 import React, {useEffect, useRef, useState} from 'react';
+import { getCodeDraft, keepCodeDraft } from './codeDrafts.js';
 
 export const DATASET_EXAMPLE = `from pathlib import Path
 from torch.utils.data import IterableDataset
@@ -127,14 +128,21 @@ export const DATASET_EXAMPLES = [
   { label: 'Group by entity and period', code: AGGREGATE_EXAMPLE },
 ];
 
-export default function PythonDatasetEditor({code, onChange, disabled, kind='Dataset', example=DATASET_EXAMPLE, examples, onDirtyChange, onDraftChange}) {
+export default function PythonDatasetEditor({code, onChange, disabled, kind='Dataset', example=DATASET_EXAMPLE, examples, onDirtyChange, onDraftChange, draftKey}) {
   const choices = examples || (kind === 'Dataset' ? DATASET_EXAMPLES : [{ label: 'Example', code: example }]);
   const [choice, setChoice] = useState(0);
   const input = useRef(null);
   const [error, setError] = useState('');
-  const [draft, setDraft] = useState(code || '');
+  // With a draftKey, unconfirmed text outlives this editor (the Inspector
+  // unmounts when the pane shows Chat) and comes back when it mounts again.
+  const [kept] = useState(() => draftKey ? getCodeDraft(draftKey) : null);
+  const [draft, setDraft] = useState(kept ? kept.text : code || '');
   const dirty = draft !== (code || '');
-  useEffect(()=>{setDraft(code || '');setError('');},[code]);
+  // Follow the confirmed code when it changes elsewhere (undo, Chat), but never
+  // over unconfirmed edits: those are only replaced by Discard changes.
+  const synced = useRef(kept ? kept.base : code || '');
+  useEffect(()=>{if(draftKey) keepCodeDraft(draftKey, draft, code || '');},[draftKey,draft,code]);
+  useEffect(()=>{const prev=synced.current, next=code || '';synced.current=next;setDraft(d=>d===prev?next:d);setError('');},[code]);
   useEffect(()=>{onDirtyChange?.(dirty);},[dirty,onDirtyChange]);
   // The live text, unconfirmed included: the Evaluate panel keeps it as a
   // draft so pasted code survives leaving the panel.

@@ -40,6 +40,8 @@ def workspace_write_text(graph_id: str, body: dict = Body(...)):
     _check_graph(graph_id)
     path = body.get("path") or ""
     content = body.get("content") or ""
+    if not isinstance(path, str) or not isinstance(content, str):
+        raise HTTPException(status_code=422, detail="path and content must be text.")
     try:
         return workspace.write_file(graph_id, path, content.encode("utf-8"))
     except workspace.WorkspaceError as e:
@@ -61,6 +63,8 @@ def workspace_upload(graph_id: str, file: UploadFile, path: str = Query(default=
 def workspace_mkdir(graph_id: str, body: dict = Body(...)):
     """Create a directory: {"path": "files/batch-1"}"""
     _check_graph(graph_id)
+    if not isinstance(body.get("path") or "", str):
+        raise HTTPException(status_code=422, detail="path must be text.")
     try:
         return workspace.make_dir(graph_id, body.get("path") or "")
     except workspace.WorkspaceError as e:

@@ -38,25 +38,33 @@ export default function SchedulePanel({ open, graphId, onClose }) {
   const [inputsText, setInputsText] = useState('{}');
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  // The form as last loaded or saved: anything else on screen is unsaved.
+  const [baseline, setBaseline] = useState(null);
+  const form = { mode, time, weekday, zone, timeInput, recovery, minutes: String(minutes), session, inputsText };
+  const dirty = !!baseline && Object.keys(form).some((k) => form[k] !== baseline[k]);
 
   useEffect(() => {
     if (!open || !graphId) return undefined;
     let active = true;
     // Start from the defaults: a workflow without a schedule must not inherit
     // the previous workflow's inputs or session.
-    setError(null); setSchedule(null);
-    setWeekday(0); setRecovery('ask'); setTimeInput(''); setZone(Intl.DateTimeFormat().resolvedOptions().timeZone); setMode('daily'); setTime('09:00'); setMinutes(60); setSession(''); setInputsText('{}');
+    const defaults = { mode: 'daily', time: '09:00', weekday: 0, zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      timeInput: '', recovery: 'ask', minutes: '60', session: '', inputsText: '{}' };
+    setError(null); setSchedule(null); setBaseline(defaults);
+    setWeekday(0); setRecovery('ask'); setTimeInput(''); setZone(defaults.zone); setMode('daily'); setTime('09:00'); setMinutes(60); setSession(''); setInputsText('{}');
     api.getSchedule(graphId).then((s) => {
       if (!active) return;
       setSchedule(s);
       if (!s.scheduled) return;
-      setMode(s.mode || 'daily');
-      setWeekday(s.weekday ?? 0); setRecovery(s.recovery_policy || 'ask');
-      setZone(s.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone); setTimeInput(s.time_input || '');
-      setTime(s.time || '09:00');
-      setMinutes(s.interval_minutes || 60);
-      setSession(s.session || '');
-      setInputsText(JSON.stringify(s.inputs || {}, null, 2));
+      const loaded = { mode: s.mode || 'daily', weekday: s.weekday ?? 0, recovery: s.recovery_policy || 'ask',
+        zone: s.timezone || defaults.zone, timeInput: s.time_input || '', time: s.time || '09:00',
+        minutes: String(s.interval_minutes || 60), session: s.session || '', inputsText: JSON.stringify(s.inputs || {}, null, 2) };
+      // A field typed into before the schedule arrived keeps what was typed.
+      const take = (key) => (current) => (String(current) === String(defaults[key]) ? loaded[key] : current);
+      setMode(take('mode')); setWeekday(take('weekday')); setRecovery(take('recovery'));
+      setZone(take('zone')); setTimeInput(take('timeInput')); setTime(take('time'));
+      setMinutes(take('minutes')); setSession(take('session')); setInputsText(take('inputsText'));
+      setBaseline(loaded);
     }).catch((err) => { if (active) setError(err?.body?.detail || err.message); });
     return () => { active = false; };
   }, [open, graphId]);
@@ -72,6 +80,8 @@ export default function SchedulePanel({ open, graphId, onClose }) {
 
   if (!open) return null;
 
+  const close = () => { if (!dirty || window.confirm('Discard unsaved schedule changes?')) onClose(); };
+
   const save = async (enabled) => {
     let inputs;
     try {
@@ -82,11 +92,13 @@ export default function SchedulePanel({ open, graphId, onClose }) {
     }
     setBusy(true);
     setError(null);
+    const sent = form;
     try {
       setSchedule(await api.setSchedule(graphId, {
         enabled, mode, time, weekday, timezone: zone, time_input: timeInput.trim(), recovery_policy: recovery, interval_minutes: Number(minutes), inputs,
         session: session.trim() || undefined,
       }));
+      setBaseline(sent);
     } catch (err) {
       setError(err?.body?.detail || err.message);
     } finally {
@@ -116,11 +128,11 @@ export default function SchedulePanel({ open, graphId, onClose }) {
   const on = schedule?.scheduled && schedule?.enabled;
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onClick={close}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="drawer-head">
           <span>Schedule</span>
-          <button type="button" onClick={onClose}>✕</button>
+          <button type="button" onClick={close}>✕</button>
         </div>
 
         <p className="muted small">
@@ -234,6 +246,7 @@ export default function SchedulePanel({ open, graphId, onClose }) {
         {error && <div className="chat-error">{String(error)}</div>}
 
         <div className="modal-actions">
+          {dirty && <span className="muted small" role="status">Unsaved changes</span>}
           {schedule?.scheduled && (
             <button type="button" className="danger-ghost" onClick={remove} disabled={busy}>
               Remove

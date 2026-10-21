@@ -195,6 +195,7 @@ app.include_router(dataloaders.router)
 app.include_router(evaluator_tools.router)
 app.include_router(skills_api.router)
 app.include_router(export_api.router)
+app.include_router(export_api.import_router)
 app.include_router(agent_api.router)
 from . import harness_api
 app.include_router(harness_api.router)

@@ -18,8 +18,11 @@ Routes: GET/POST/DELETE /api/skills (mounted via this module's router).
 import re
 import shutil
 import threading
+import uuid
+from datetime import datetime
 from pathlib import Path
 from backend.api.studio_config import data_path
+from backend.features.persistence import replace as replace_file
 
 from fastapi import APIRouter, Body, HTTPException
 
@@ -82,8 +85,11 @@ def get_skill(name: str) -> dict | None:
 
 def save_skill(spec: dict) -> dict:
     """Create or overwrite a skill. Overwrites keep the previous SKILL.md."""
-    from evoagentx.skills.skill import Skill
+    from evoagentx.skills.skill import Skill, parse_skill_file
 
+    for key in ("name", "description", "content"):
+        if spec.get(key) is not None and not isinstance(spec[key], str):
+            raise SkillError(f"Skill {key} must be a string")
     name = _validate_name((spec.get("name") or "").strip())
     description = (spec.get("description") or "").strip()
     if not description:
@@ -94,11 +100,32 @@ def save_skill(spec: dict) -> dict:
 
     with _lock:
         path = _skill_dir(name)
-        existed = (path / "SKILL.md").is_file()
+        target = path / "SKILL.md"
+        existed = target.is_file()
         path.mkdir(parents=True, exist_ok=True)
         skill = Skill(name=name, description=description, path=str(path), content=content)
-        skill.save(backup=existed)
-    return {"name": name, "description": description, "content": content, "resources": []}
+        # Written aside and read back before it replaces SKILL.md: a reader
+        # never meets half a file, and text that would not parse back as
+        # itself (a description line of `---` ends the frontmatter) is
+        # refused with the previous version still in place.
+        temporary = path / f".SKILL.{uuid.uuid4().hex}.tmp"
+        try:
+            skill.save(path=str(temporary))
+            try:
+                back = parse_skill_file(str(temporary))
+            except Exception:
+                back = None
+            if back is None or (back.name, back.description, back.content) != (name, description, content):
+                raise SkillError("This description or content cannot be stored as written: "
+                                 "keep the description to plain text without a line of '---'.")
+            if existed:
+                versions = path / ".versions"
+                versions.mkdir(exist_ok=True)
+                shutil.copy2(target, versions / f"SKILL_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md")
+            replace_file(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return {"name": name, "description": description, "content": content, "resources": skill.get_resources()}
 
 
 def delete_skill(name: str) -> bool:

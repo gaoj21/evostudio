@@ -99,3 +99,78 @@ it('copies a task into its current project and refreshes the task list',async()=
  await waitFor(()=>expect(api.copyTask).toHaveBeenCalledWith('unassigned','original'));
  expect(await screen.findByText('Original (copy)')).toBeVisible();
 });
+
+const LOST = { status: 409, body: { detail: {
+  message: 'This task uses shared memory that stays with its current project and will not be available in Away.',
+  destination: 'Away',
+  bindings: [{ kind: 'agent', name: 'Helper', space: 'Team notes', space_id: 'a'.repeat(32) },
+             { kind: 'node', name: 'reader', space: 'Team notes', space_id: 'a'.repeat(32) }] } } };
+it('asks before a move detaches shared memory, then says what was detached', async () => {
+ api.listProjects.mockResolvedValue([{ id: 'away', name: 'Away' }]);
+ api.projectTasks.mockResolvedValue([{ id: 'old', name: 'Existing task' }]);
+ api.assignTask.mockRejectedValueOnce(Object.assign(new Error('HTTP 409'), LOST))
+   .mockResolvedValueOnce({ id: 'old', name: 'Existing task', detached: LOST.body.detail.bindings });
+ const ask = vi.spyOn(window, 'confirm').mockReturnValue(true);
+ try {
+  render(<Platform />);
+  fireEvent.change(await screen.findByLabelText('Move Existing task to project'), { target: { value: 'away' } });
+  await waitFor(() => expect(api.assignTask).toHaveBeenCalledTimes(2));
+  expect(ask.mock.calls[0][0]).toContain('Chat Agent "Helper" → "Team notes"');
+  expect(ask.mock.calls[0][0]).toContain('Node "reader" → "Team notes"');
+  expect(ask.mock.calls[0][0]).toContain('Move anyway and detach them?');
+  expect(api.assignTask).toHaveBeenNthCalledWith(1, 'away', 'old');
+  expect(api.assignTask).toHaveBeenNthCalledWith(2, 'away', 'old', { detach: true });
+  expect(await screen.findByRole('status')).toHaveTextContent('Detached shared memory: Chat Agent "Helper" → "Team notes"');
+ } finally { ask.mockRestore(); }
+});
+it('keeps the task where it is when the user declines detaching', async () => {
+ api.listProjects.mockResolvedValue([{ id: 'away', name: 'Away' }]);
+ api.projectTasks.mockResolvedValue([{ id: 'old', name: 'Existing task' }]);
+ api.assignTask.mockRejectedValueOnce(Object.assign(new Error('HTTP 409'), LOST));
+ const ask = vi.spyOn(window, 'confirm').mockReturnValue(false);
+ try {
+  render(<Platform />);
+  fireEvent.click(await screen.findByLabelText('Actions for Existing task'));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Move to project…' }));
+  fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'away' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(ask).toHaveBeenCalled());
+  expect(api.assignTask).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.getByRole('heading', { name: 'Move task' })).toBeInTheDocument();
+ } finally { ask.mockRestore(); }
+});
+it('asks before a copy leaves shared memory behind, then says what was detached', async () => {
+ api.projectTasks.mockResolvedValue([{ id: 'old', name: 'Existing task' }]);
+ const lost = { ...LOST, body: { detail: { ...LOST.body.detail, message: 'This task uses shared memory that will not be available to its copy in Unassigned tasks.' } } };
+ api.copyTask.mockRejectedValueOnce(Object.assign(new Error('HTTP 409'), lost))
+   .mockResolvedValueOnce({ id: 'copy', name: 'Existing task (copy)', detached: LOST.body.detail.bindings.slice(0, 1) });
+ const ask = vi.spyOn(window, 'confirm').mockReturnValue(true);
+ try {
+  render(<Platform />);
+  fireEvent.click(await screen.findByLabelText('Actions for Existing task'));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Copy task' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+  await waitFor(() => expect(api.copyTask).toHaveBeenCalledTimes(2));
+  expect(ask.mock.calls[0][0]).toContain('Copy anyway and detach them?');
+  expect(ask.mock.calls[0][0]).toContain('Chat Agent "Helper" → "Team notes"');
+  expect(api.copyTask).toHaveBeenNthCalledWith(1, 'unassigned', 'old');
+  expect(api.copyTask).toHaveBeenNthCalledWith(2, 'unassigned', 'old', { detach: true });
+  expect(await screen.findByRole('status')).toHaveTextContent('Copied "Existing task (copy)". Detached shared memory: Chat Agent "Helper" → "Team notes"');
+ } finally { ask.mockRestore(); }
+});
+it('makes no copy when the user declines detaching', async () => {
+ api.projectTasks.mockResolvedValue([{ id: 'old', name: 'Existing task' }]);
+ api.copyTask.mockRejectedValueOnce(Object.assign(new Error('HTTP 409'), LOST));
+ const ask = vi.spyOn(window, 'confirm').mockReturnValue(false);
+ try {
+  render(<Platform />);
+  fireEvent.click(await screen.findByLabelText('Actions for Existing task'));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Copy task' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+  await waitFor(() => expect(ask).toHaveBeenCalled());
+  expect(api.copyTask).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.getByRole('heading', { name: 'Copy task?' })).toBeInTheDocument();
+ } finally { ask.mockRestore(); }
+});

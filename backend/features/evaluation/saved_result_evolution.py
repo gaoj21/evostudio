@@ -2,6 +2,7 @@
 import copy
 import json
 from statistics import fmean
+from backend.features.workflow.graphs import history_ids
 from backend.api import sources
 
 
@@ -10,7 +11,7 @@ def resolve(graph_id, body):
     kind = body.get('source')
     if kind == 'saved_batch':
         saved = batch.get_batch(body.get('batch_id', ''))
-        if not saved or saved.get('graph_id') != graph_id:
+        if not saved or saved.get('graph_id') not in history_ids(graph_id):
             raise sources.SourceError('Choose a batch belonging to this workflow.')
         if saved.get('status') in ('running', 'pending', 'queued', 'cancelling'):
             raise sources.SourceError('Wait for the batch to finish or stop it first.')
@@ -18,7 +19,7 @@ def resolve(graph_id, body):
         origin = saved.get('source') or {}
     else:
         run = runner.get_run(body.get('run_id', ''))
-        if not run or run.get('graph_id') != graph_id:
+        if not run or run.get('graph_id') not in history_ids(graph_id):
             raise sources.SourceError('Choose a run belonging to this workflow.')
         if run.get('status') in ('running', 'pending', 'queued', 'cancelling'):
             raise sources.SourceError('Wait for the run to finish or stop it first.')
