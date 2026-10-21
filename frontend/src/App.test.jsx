@@ -941,3 +941,55 @@ it('says what deleting a workflow does to its history: archived, not kept in pla
   await user.click(screen.getByRole('button', { name: 'Cancel' }));
   expect(api.deleteGraph).not.toHaveBeenCalled();
 });
+
+it('creates a Chat Agent the assistant asked for, connects its memory, and undoes both', async () => {
+  const space = 'f'.repeat(32);
+  const id = 'b'.repeat(32);
+  api.canvasAgents.mockResolvedValue({ agents: [{ id: 'a1', name: 'Helper', instructions: 'Help.', memories: [], tools: null, x: 0, y: 0 }] });
+  api.getGraph.mockResolvedValue({ ...GRAPH, memory_resources: [{ space_id: space, name: 'Findings' }] });
+  api.createCanvasAgent.mockImplementation(async (_g, body) => ({ memories: [], ...body }));
+  api.updateCanvasAgent.mockImplementation(async (_g, agentId, body) => ({ id: agentId, ...body }));
+  api.removeCanvasAgent.mockResolvedValue({ removed: true });
+  const user = userEvent.setup();
+  render(<App initialGraphId="old-id" />);
+  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:a1')).toBe(true));
+  await user.click(screen.getByRole('button', { name: 'Chat', exact: true }));
+  // The assistant sees each Agent's settings, memories included.
+  expect(state.chat.getGraph().canvas_agents[0]).toEqual(expect.objectContaining({ id: 'a1', memories: [], tools: null }));
+
+  let outcome;
+  await act(async () => { outcome = await state.chat.onAgentActions([
+    { action: 'create', id, name: 'Scout', settings: { name: 'Scout', instructions: 'Scout.' } },
+    { action: 'update', id, patch: { memories: [{ space_id: space, read: true, write: false }] } }]); });
+  expect(outcome.failed).toEqual([]);
+  expect(api.createCanvasAgent).toHaveBeenCalledWith('old-id', { x: 440, y: 250, name: 'Scout', instructions: 'Scout.', id });
+  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === `chat:${id}`)).toBe(true));
+  await waitFor(() => expect(state.canvas.edges.some(e => e.id === `chat-read:${id}:mem:space:${space}`)).toBe(true));
+  expect(outcome.undo).toEqual([{ action: 'create', id, name: 'Scout' },
+    { action: 'update', id, name: 'Scout', previous: { memories: [] } }]);
+
+  let failed;
+  await act(async () => { failed = await state.chat.onUndoAgentActions(outcome.undo); });
+  expect(failed).toEqual([]);
+  expect(api.updateCanvasAgent).toHaveBeenLastCalledWith('old-id', id, expect.objectContaining({ memories: [] }));
+  expect(api.removeCanvasAgent).toHaveBeenCalledWith('old-id', id);
+  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === `chat:${id}`)).toBe(false));
+});
+
+it('connects a memory to an existing Chat Agent and reverts it on undo', async () => {
+  const space = 'f'.repeat(32);
+  const helper = { id: 'a1', name: 'Helper', instructions: 'Help.', memories: [], x: 0, y: 0 };
+  api.canvasAgents.mockResolvedValue({ agents: [helper] });
+  api.getGraph.mockResolvedValue({ ...GRAPH, memory_resources: [{ space_id: space, name: 'Findings' }] });
+  api.updateCanvasAgent.mockImplementation(async (_g, agentId, body) => ({ id: agentId, ...body }));
+  const user = userEvent.setup();
+  render(<App initialGraphId="old-id" />);
+  await waitFor(() => expect(state.canvas.nodes.some(n => n.id === 'chat:a1')).toBe(true));
+  await user.click(screen.getByRole('button', { name: 'Chat', exact: true }));
+  let outcome;
+  await act(async () => { outcome = await state.chat.onAgentActions([
+    { action: 'update', id: 'a1', patch: { memories: [{ space_id: space, read: true, write: true }] } }]); });
+  await waitFor(() => expect(state.canvas.edges.filter(e => e.data?.chatAgent === 'a1')).toHaveLength(2));
+  await act(async () => { await state.chat.onUndoAgentActions(outcome.undo); });
+  await waitFor(() => expect(state.canvas.edges.filter(e => e.data?.chatAgent === 'a1')).toHaveLength(0));
+});

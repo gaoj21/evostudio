@@ -32,7 +32,11 @@ export function renameChatHistory(oldId, newId) {
 
 export function summarise(operations) {
   const counts = {};
+  // A Chat Agent change says what it did ("connected 'X' to memory 'Y'"),
+  // in the order it happened; everything else is counted by kind.
+  const described = [];
   (operations || []).forEach((o) => {
+    if (o.summary) { described.push(o.summary); return; }
     counts[o.op] = (counts[o.op] || 0) + 1;
   });
   const label = {
@@ -42,8 +46,11 @@ export function summarise(operations) {
     rename_node: 'renamed',
     add_edge: 'edge',
     delete_edge: 'edge removed',
+    create_agent: 'created Chat Agent',
     delete_agent: 'removed Chat Agent',
     update_agent: 'updated Chat Agent',
+    inspect_agent: 'read a Chat Agent',
+    list_agents: 'listed Chat Agents',
     generate_workflow: 'generated workflow',
     create_tool: 'created tool',
     delete_tool: 'deleted tool',
@@ -65,22 +72,25 @@ export function summarise(operations) {
     delete_file: 'deleted a file',
     make_dir: 'made a folder',
   };
-  return Object.entries(counts)
-    .map(([op, n]) => (n > 1 ? `${label[op] || op} ×${n}` : label[op] || op))
+  return [...described, ...Object.entries(counts)
+    .map(([op, n]) => (n > 1 ? `${label[op] || op} ×${n}` : label[op] || op))]
     .join(' · ');
 }
 
 // Operations that edit the canvas graph, and those that change Chat Agents.
 const CANVAS_OPS = new Set(['add_node', 'update_node', 'delete_node', 'rename_node', 'add_edge',
   'delete_edge', 'set_goal', 'set_name', 'auto_layout', 'configure_workflow', 'set_output_dir']);
-const AGENT_OPS = new Set(['delete_agent', 'update_agent']);
+const AGENT_OPS = new Set(['create_agent', 'delete_agent', 'update_agent', 'connect_agent_memory',
+  'disconnect_agent_memory', 'add_agent_tool', 'remove_agent_tool', 'add_agent_skill', 'remove_agent_skill']);
+const AGENT_ACTION_OPS = { create: 'create_agent', remove: 'delete_agent', update: 'update_agent' };
 
 // What a turn actually did. A server that reports the canvas edits that took
 // effect is believed over the operations the model asked for: a delete that
 // matched nothing must not read as "deleted".
 export function appliedOperations(res) {
   if (!Array.isArray(res?.canvas_operations)) return res?.operations || [];
-  const agentOps = (res.agent_actions || []).map(a => ({ op: a.action === 'remove' ? 'delete_agent' : 'update_agent' }));
+  const agentOps = (res.agent_actions || []).map(a => ({ op: AGENT_ACTION_OPS[a.action] || 'update_agent',
+    ...(a.summary ? { summary: a.summary } : {}) }));
   const others = (res.operations || []).filter(o => !CANVAS_OPS.has(o?.op) && !AGENT_OPS.has(o?.op));
   return [...res.canvas_operations, ...agentOps, ...others];
 }

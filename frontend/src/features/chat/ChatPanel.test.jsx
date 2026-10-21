@@ -483,6 +483,13 @@ describe('applied operations', () => {
       canvas_operations: [],
       agent_actions: [{ action: 'remove', id: 'a1' }],
     }))).toBe('removed Chat Agent · checked');
+    // A server that says what each Chat Agent change did is quoted, in order.
+    expect(summarise(appliedOperations({
+      operations: [{ op: 'create_agent' }, { op: 'connect_agent_memory' }, { op: 'inspect_agent' }],
+      canvas_operations: [{ op: 'add_node' }],
+      agent_actions: [{ action: 'create', id: 'n1', summary: "created Chat Agent 'Scout'" },
+        { action: 'update', id: 'n1', summary: "connected 'Scout' to memory 'Notes' (reads)" }],
+    }))).toBe("created Chat Agent 'Scout' · connected 'Scout' to memory 'Notes' (reads) · added · read a Chat Agent");
     // An older server without canvas_operations: the operations stand.
     expect(appliedOperations({ operations: [{ op: 'add_node' }] })).toEqual([{ op: 'add_node' }]);
   });
@@ -611,6 +618,26 @@ describe('a generation that finishes onto a canvas nothing was lost from', () =>
     await send(user, 'Start over with a new workflow');
 
     await waitFor(() => expect(onApply).toHaveBeenCalledWith(GENERATED), { timeout: 4000 });
+  });
+});
+
+describe('Chat Agents the assistant creates', () => {
+  it('hands the create to the canvas, says what was done and offers Undo', async () => {
+    const actions = [{ action: 'create', id: 'n1', name: 'Scout', settings: { name: 'Scout' }, summary: "created Chat Agent 'Scout'" },
+      { action: 'update', id: 'n1', patch: { memories: [{ space_id: 's', read: true }] }, summary: "connected 'Scout' to memory 'Notes' (reads)" }];
+    const undo = [{ action: 'create', id: 'n1', name: 'Scout' }, { action: 'update', id: 'n1', name: 'Scout', previous: { memories: [] } }];
+    const onAgentActions = vi.fn().mockResolvedValue({ failed: [], undo });
+    const onUndoAgentActions = vi.fn().mockResolvedValue([]);
+    api.chatGraph.mockResolvedValue({ reply: 'Created Scout.', operations: [{ op: 'create_agent' }, { op: 'connect_agent_memory' }],
+      canvas_operations: [], agent_actions: actions, applied: false });
+    const { user } = setup({ onAgentActions, onUndoAgentActions });
+
+    await send(user, 'add a chat agent Scout connected to Notes');
+
+    await waitFor(() => expect(onAgentActions).toHaveBeenCalledWith(actions));
+    expect(await screen.findByText("✓ created Chat Agent 'Scout' · connected 'Scout' to memory 'Notes' (reads)")).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Undo this change' }));
+    await waitFor(() => expect(onUndoAgentActions).toHaveBeenCalledWith(undo));
   });
 });
 

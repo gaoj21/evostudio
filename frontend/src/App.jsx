@@ -1083,7 +1083,8 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
   // name. They are not part of the workflow graph and are never saved in it.
   const assistantSnapshot = useCallback(
     () => ({ ...flowToGraph(graph, nodes, edges),
-      canvas_agents: canvasAgents.agents.map(a => ({ id: a.id, name: a.name, instructions: a.instructions })) }),
+      canvas_agents: canvasAgents.agents.map(({ id, name, instructions, provider, max_steps, timeout, toolkits, tools, skill_names, memories, x, y }) =>
+        ({ id, name, instructions, provider, max_steps, timeout, toolkits, tools, skill_names, memories, x, y })) }),
     [graph, nodes, edges, canvasAgents.agents]
   );
 
@@ -1319,50 +1320,79 @@ export function Studio({ initialGraphId, onHome, projectId, initialRun, initialB
   const applyAgentActions = useCallback(async actions => {
     const failed = [];
     const undo = [];
+    // The Agents as this batch leaves them: a later action may address an
+    // Agent an earlier one created, or change one an earlier one changed.
+    const known = new Map(canvasAgents.current().map(a => [a.id, a]));
+    let created = null;
+    const verb = { create: 'created', remove: 'removed', update: 'updated' };
     for (const action of actions || []) {
-      const agent = canvasAgents.agents.find(a => a.id === action.id);
-      const label = agent?.name || action.name || action.id;
+      const agent = known.get(action.id);
+      const label = agent?.name || action.name || action.settings?.name || action.id;
       try {
+        if (action.action === 'create') {
+          const made = await canvasAgents.create({ ...(action.settings || {}), id: action.id });
+          known.set(made.id, made);
+          created = made;
+          undo.push({ action: 'create', id: made.id, name: made.name });
+          continue;
+        }
         if (!agent) throw new Error('it is no longer on the canvas');
         if (action.action === 'remove') {
           await canvasAgents.remove(agent.id);
+          known.delete(agent.id);
+          if (created?.id === agent.id) created = null;
           undo.push({ action: 'remove', id: agent.id, name: agent.name });
           const nodeId = chatNodeId(agent.id);
           setSelectedId(selected => selected === nodeId ? null : selected);
           setInspectorParent(parent => parent === nodeId ? null : parent);
         } else if (action.action === 'update') {
           const patch = action.patch || {};
-          await canvasAgents.save(agent, patch);
+          const saved = await canvasAgents.save(agent, patch);
+          known.set(agent.id, saved || { ...agent, ...patch });
           undo.push({ action: 'update', id: agent.id, name: agent.name,
-            previous: Object.fromEntries(Object.keys(patch).map(key => [key, agent[key]])) });
+            previous: Object.fromEntries(Object.keys(patch).map(key => [key, agent[key] === undefined ? null : agent[key]])) });
         }
       } catch (e) {
-        failed.push(`Chat Agent '${label}' was not ${action.action === 'remove' ? 'removed' : 'updated'}: ${e?.body?.detail || e.message}`);
+        failed.push(`Chat Agent '${label}' was not ${verb[action.action] || 'changed'}: ${e?.body?.detail || e.message}`);
       }
     }
+    // A new Agent is shown and selected, as the Library's button does.
+    if (created && known.has(created.id)) {
+      const shown = known.get(created.id);
+      openNodeInspector(null, { id: chatNodeId(shown.id) });
+      setCenter(shown.x + 130, shown.y + 60, { zoom: 0.85, duration: 200 });
+    }
     return { failed, undo };
-  }, [canvasAgents.agents, canvasAgents.remove, canvasAgents.save]);
+  }, [canvasAgents.current, canvasAgents.create, canvasAgents.remove, canvasAgents.save, openNodeInspector, setCenter]);
   // The chat's Undo for those changes, newest first: a removed Agent comes
-  // back (with its sessions), an updated one gets its previous settings.
+  // back (with its sessions), an updated one gets its previous settings and
+  // a created one is removed again (archived, like any removal).
   const undoAgentActions = useCallback(async entries => {
     const failed = [];
-    const present = new Set(canvasAgents.agents.map(a => a.id));
+    const present = new Set(canvasAgents.current().map(a => a.id));
+    const verb = { create: 'removed', remove: 'restored', update: 'reverted' };
     for (const entry of [...(entries || [])].reverse()) {
       const label = entry.name || entry.id;
       try {
         if (entry.action === 'remove') {
           await canvasAgents.unarchive(entry.id);
           present.add(entry.id);
+        } else if (entry.action === 'create') {
+          if (present.has(entry.id)) await canvasAgents.remove(entry.id);
+          present.delete(entry.id);
+          const nodeId = chatNodeId(entry.id);
+          setSelectedId(selected => selected === nodeId ? null : selected);
+          setInspectorParent(parent => parent === nodeId ? null : parent);
         } else if (entry.action === 'update') {
           if (!present.has(entry.id)) throw new Error('it is no longer on the canvas');
           await canvasAgents.save({ id: entry.id }, () => entry.previous || {});
         }
       } catch (e) {
-        failed.push(`Chat Agent '${label}' was not ${entry.action === 'remove' ? 'restored' : 'reverted'}: ${e?.body?.detail || e.message}`);
+        failed.push(`Chat Agent '${label}' was not ${verb[entry.action] || 'reverted'}: ${e?.body?.detail || e.message}`);
       }
     }
     return failed;
-  }, [canvasAgents.agents, canvasAgents.unarchive, canvasAgents.save]);
+  }, [canvasAgents.current, canvasAgents.unarchive, canvasAgents.remove, canvasAgents.save]);
   const memoryNodes = useMemo(() => {
     if (!showMemory) return [];
     const wrote = {};

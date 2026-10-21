@@ -99,7 +99,8 @@ class TestChatAgents:
     ])
     def test_delete_agent_returns_an_action_for_the_canvas(self, op):
         result = apply(canvas(), [op])
-        assert result["agent_actions"] == [{"action": "remove", "id": AGENT_ID, "name": "Research Chat"}]
+        assert result["agent_actions"] == [{"action": "remove", "id": AGENT_ID, "name": "Research Chat",
+                                     "summary": "removed Chat Agent 'Research Chat'"}]
         assert result["canvas_agents"] == []
         assert names(result) == ["risk_detector", "summarize"]
         assert "canvas_agents" not in result["graph"]
@@ -111,9 +112,12 @@ class TestChatAgents:
             {"op": "rename_node", "name": "research chat", "new_name": "Analyst"},
         ])
         assert result["agent_actions"] == [
-            {"action": "update", "id": AGENT_ID, "patch": {"instructions": "Be brief"}},
-            {"action": "update", "id": AGENT_ID, "patch": {"name": "Analyst"}},
+            {"action": "update", "id": AGENT_ID, "patch": {"instructions": "Be brief"},
+             "summary": "updated Chat Agent 'Research Chat' (instructions)"},
+            {"action": "update", "id": AGENT_ID, "patch": {"name": "Analyst"},
+             "summary": "renamed Chat Agent 'Research Chat' to 'Analyst'"},
         ]
+        assert any("ignored unsupported field(s) engine" in n for n in result["notes"])
         assert result["canvas_agents"][0]["name"] == "Analyst"
 
     def test_workflow_operations_do_not_touch_agents(self):
@@ -230,7 +234,8 @@ def test_agent_actions_reach_the_client(endpoint):
     chat, _ = endpoint
     result = chat("删除 Research Chat", script_=[
         {"reply": "已删除。", "operations": [{"op": "delete_node", "name": "research chat"}]}])
-    assert result["agent_actions"] == [{"action": "remove", "id": AGENT_ID, "name": "Research Chat"}]
+    assert result["agent_actions"] == [{"action": "remove", "id": AGENT_ID, "name": "Research Chat",
+                                     "summary": "removed Chat Agent 'Research Chat'"}]
     assert result["applied"] is False and "No changes were applied to the canvas." not in result["notes"]
 
 

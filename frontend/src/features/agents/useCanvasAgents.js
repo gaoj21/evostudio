@@ -76,10 +76,20 @@ export function useCanvasAgents(graphId, reportError) {
       return agent;
     } finally { adding.current = false; setBusy(false); }
   };
+  // An Agent the workflow assistant asked for, with the id it chose. Placed
+  // where the Library's button would place it unless the settings say where.
+  const create = useCallback(async settings => {
+    const count = latest.current.length;
+    const agent = await api.createCanvasAgent(graphId, { x: 400 + count * 40, y: 250, ...settings });
+    if (currentGraph.current === graphId) { latest.current = [...latest.current.filter(a => a.id !== agent.id), agent]; setAgents(latest.current); }
+    return agent;
+  }, [graphId]);
+  // The Agents as they are now, for work that spans several awaits.
+  const current = useCallback(() => latest.current, []);
   const nodes = useMemo(() => agents.map(a => ({ id: chatNodeId(a.id), type: 'chatAgent', width: 220, height: 88, position: { x: a.x, y: a.y }, data: { title: a.name, agent: a }, deletable: false })), [agents]);
   const edges = useMemo(() => agents.flatMap(a => a.memories.flatMap(m => [
     ...(m.read ? [{ id: `chat-read:${a.id}:${memoryId(m)}`, source: memoryId(m), target: chatNodeId(a.id), sourceHandle: m.read_source_handle || 's-out', targetHandle: m.read_target_handle || 'in', label: 'reads', data: { chatAgent: a.id, agent: chatNodeId(a.id), resource: memoryId(m), memory: 'read', space: memoryId(m), direction: 'read' } }] : []),
     ...(m.write ? [{ id: `chat-write:${a.id}:${memoryId(m)}`, source: chatNodeId(a.id), target: memoryId(m), sourceHandle: m.write_source_handle || 'out', targetHandle: m.write_target_handle || 's-in', label: 'writes', data: { chatAgent: a.id, agent: chatNodeId(a.id), resource: memoryId(m), memory: 'write', space: memoryId(m), direction: 'write' } }] : []),
   ])), [agents]);
-  return { agents, loaded, nodes, edges, add, save, remove, restore, unarchive, busy, setAgents, follow, isSaving: id => !!pendingSaves[`${graphId}:${id}`] };
+  return { agents, loaded, nodes, edges, add, create, current, save, remove, restore, unarchive, busy, setAgents, follow, isSaving: id => !!pendingSaves[`${graphId}:${id}`] };
 }

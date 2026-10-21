@@ -14,7 +14,8 @@ validates and applies. That keeps the feature provider-agnostic and keeps
 every mutation behind code that can reject it.
 
 Operations: add_node / update_node / delete_node / rename_node / add_edge /
-delete_edge / set_goal / set_name / auto_layout / create_tool /
+delete_edge / set_goal / set_name / auto_layout / create_tool / Chat Agent
+create, update, connect-memory, inspect and delete (agent_ops.py) /
 generate_workflow (the framework's WorkFlowGenerator, for building a whole
 workflow from a goal in one step).
 """
@@ -32,7 +33,7 @@ from backend.features.workflow.graphs import history_ids
 from backend.api import custom_tools
 from backend.api import model_json, chat_control
 from backend.api.chat_engine import ChatEngine
-from backend.features.chat import node_resolver, turn_jobs
+from backend.features.chat import agent_ops, node_resolver, turn_jobs
 from backend.api import graphs as graph_store
 from backend.api import skills_api
 from backend.api import tools_registry
@@ -156,15 +157,6 @@ merges the patch into that task; only include fields you are changing.
   Field names must exist. For ordering only use "control_only": true instead.
   Without either, same-name fields are mapped automatically; an edge with no shared fields is control-only.
 - {"op": "delete_edge", "source": "a", "target": "b"}
-- {"op": "delete_agent", "name": "<Chat Agent name or chat:id>"} -- remove a \
-Chat Agent from the canvas (its conversations are archived, not erased).
-- {"op": "update_agent", "name": "<Chat Agent name or chat:id>", "patch": \
-{"name": "...", "instructions": "..."}} -- rename a Chat Agent or change its \
-instructions.
-
-Chat Agents (listed under canvas_agents) are independent conversations placed \
-on the canvas, not workflow nodes: no edges, not part of runs. Use the \
-operations above for them; delete_node and rename_node also accept them.
 Names you are given may differ slightly from the stored ones (case, spaces, \
 another language); operations resolve them and report what they matched. When \
 an operation reports that nothing matched or several things did, it lists the \
@@ -212,6 +204,22 @@ Creation returns an actual verification report to you. Fix failing code and recr
 only call it verified if verification.status is verified. No tests means unverified;
 a successful smoke call alone is not correctness verification. Verification covers examples only.
 - {"op":"verify_tool","name":"text_stats"} -- rerun saved examples and dependency installation.
+
+### Chat Agents
+
+Chat Agents (listed under canvas_agents, with their provider, tools, skills and connected memories) are independent conversations placed on the canvas, not workflow nodes: no edges, not part of runs. Address one by its name or its chat:<id>. A Chat Agent's memory connections are its "memories" list; connect it only to a memory this canvas has (list_memories shows them: shared memories, which it can read and write, and workflow memories, which it can only read).
+
+- {"op": "create_agent", "name": "Researcher", "instructions": "...", "provider": null, "max_steps": 20, "timeout": 300, "tools": ["web_search"], "skill_names": ["style_guide"], "memories": [{"memory": "<memory name or id>", "read": true, "write": false}], "x": 400, "y": 250} -- add a Chat Agent to the canvas. Only name is needed; omit the rest for the defaults (platform provider, max_steps 1-100 default 20, timeout 10-1800 s default 300, every available tool, no skills, no memory, placed beside the other Agents). "tools" lists tool or toolkit names from the catalog (null = all available tools, [] = none); "skill_names" lists skills from the catalog; a memory may also be given as just its name. Later operations in this turn can address the new Agent by its name.
+- {"op": "update_agent", "name": "<Chat Agent name or chat:id>", "patch": {"name": "...", "instructions": "...", "provider": "...", "max_steps": 20, "timeout": 300, "tools": [...], "skill_names": [...], "memories": [...], "x": 0, "y": 0}} -- change only the supplied settings. A list in the patch REPLACES the whole list; to add or remove one item use the operations below.
+- {"op": "connect_agent_memory", "agent": "<Chat Agent>", "memory": "<memory name or id>", "read": true, "write": false} -- connect a Chat Agent to a memory (keeps its other memories). write: true only for a shared memory.
+- {"op": "disconnect_agent_memory", "agent": "<Chat Agent>", "memory": "<memory name or id>"} -- remove that connection; add "direction": "read" or "write" to drop only one direction.
+- {"op": "add_agent_tool", "agent": "<Chat Agent>", "tool": "<tool or toolkit name>"} / {"op": "remove_agent_tool", ...} -- one tool (a toolkit name means all of its tools). An Agent with tools "all available tools" already has every tool.
+- {"op": "add_agent_skill", "agent": "<Chat Agent>", "skill": "<skill>"} / {"op": "remove_agent_skill", ...}
+- {"op": "delete_agent", "name": "<Chat Agent>"} -- remove a Chat Agent from the canvas (its conversations are archived, not erased).
+- {"op": "inspect_agent", "name": "<Chat Agent>"} -- answers back with the Agent's full settings, its connected memories by name and whether each is read and/or written. Use it to answer questions such as "what memory does X use".
+- {"op": "list_agents"} -- answers back with every Chat Agent, compactly.
+
+delete_node, rename_node and inspect_node also accept Chat Agents. An operation that fails (an unknown memory, tool or skill, a value out of range) answers back with the reason and the valid choices: retry with one of them or ask the user.
 
 ### Reading the workflow (these answer back to you)
 
@@ -327,9 +335,13 @@ def _source_catalog() -> str:
         return f"(unavailable: {type(e).__name__})"
 
 
-def _agent_listing(agents: list) -> list:
-    return [{"id": c["id"], "name": c["labels"][0] if c["labels"] else c["id"]}
-            for c in node_resolver.agent_candidates(agents)]
+def _agent_listing(agents: list, graph: dict | None = None) -> list:
+    """Each canvas Chat Agent with the settings the assistant reasons about:
+    provider, tools, skills and connected memories (by name)."""
+    agents = [a for a in agents or [] if isinstance(a, dict) and a.get("id")]
+    resources = agent_ops.memory_catalog(graph) if graph is not None and any(
+        a.get("memories") for a in agents) else []
+    return [agent_ops.summary(a, resources) for a in agents]
 
 
 def _canvas_summary(graph: dict, agents: list) -> str:
@@ -344,14 +356,14 @@ def _canvas_summary(graph: dict, agents: list) -> str:
     edges = [{k: e[k] for k in ("source", "target", "mappings", "control_only") if k in e}
              for e in graph.get("edges", []) if isinstance(e, dict)]
     return json.dumps({"goal": graph.get("goal"), "tasks": tasks, "edges": edges,
-                       "canvas_agents": _agent_listing(agents)}, ensure_ascii=False, default=str)
+                       "canvas_agents": _agent_listing(agents, graph)}, ensure_ascii=False, default=str)
 
 
 def _build_system_prompt(graph: dict, agents: list | None = None) -> str:
     canvas = {"tasks": graph.get("tasks", []), "edges": graph.get("edges", []),
               "output_dir": graph.get("output_dir", "runs"), "preprocess": graph.get("preprocess"),
               "memory_resources": graph.get("memory_resources", []),
-              "canvas_agents": _agent_listing(agents or [])}
+              "canvas_agents": _agent_listing(agents or [], graph)}
     return SYSTEM_PROMPT % {
         "tools": _tool_catalog(),
         "skills": _skill_catalog(),
@@ -531,7 +543,6 @@ def _run_digest(run: dict) -> dict:
 CANVAS_OPS = ("add_node", "update_node", "delete_node", "rename_node", "add_edge",
               "delete_edge", "set_goal", "set_name", "auto_layout",
               "configure_workflow", "set_output_dir")
-AGENT_FIELDS = ("name", "instructions")
 
 
 def apply_operations(graph: dict, operations: list, graph_id: str | None = None,
@@ -574,24 +585,13 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None,
 
     def remove_agent(match):
         agents[:] = [a for a in agents if node_resolver.agent_candidates([a])[0]["id"] != match["id"]]
-        agent_actions.append({"action": "remove", "id": match["id"][len("chat:"):],
-                              "name": (match["ref"] or {}).get("name")})
+        name = (match["ref"] or {}).get("name")
+        agent_actions.append({"action": "remove", "id": match["id"][len("chat:"):], "name": name,
+                              "summary": f"removed Chat Agent '{name or match['id']}'"})
         notes.append(f"Removed Chat Agent '{(match['ref'] or {}).get('name') or match['id']}' "
                      "(its conversations are archived, not erased)")
 
-    def update_agent(match, patch):
-        patch = {k: v for k, v in (patch or {}).items() if k in AGENT_FIELDS}
-        if not patch:
-            raise ChatError(f"update_agent: nothing to change; supported fields: {', '.join(AGENT_FIELDS)}")
-        name = patch.get("name")
-        if name is not None and not (isinstance(name, str) and 1 <= len(name.strip()) <= 120):
-            raise ChatError("update_agent: name must be 1-120 characters")
-        if "instructions" in patch and not (isinstance(patch["instructions"], str) and len(patch["instructions"]) <= 30000):
-            raise ChatError("update_agent: instructions must be text of at most 30000 characters")
-        if name is not None:
-            patch["name"] = name.strip()
-        match["ref"].update(patch)
-        agent_actions.append({"action": "update", "id": match["id"][len("chat:"):], "patch": patch})
+    agent_ops_ = agent_ops.AgentOps(graph, agents, agent_actions, notes, observe, _resolve)
 
     for raw in operations or []:
         chat_control.check()
@@ -636,7 +636,8 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None,
                 applied = {**raw, "name": task["name"]}
 
             elif op in ("delete_node", "delete_agent"):
-                match = _resolve(op, raw.get("name") or raw.get("id"), tasks if op == "delete_node" else [],
+                match = _resolve(op, raw.get("agent") or raw.get("name") or raw.get("id"),
+                                 tasks if op == "delete_node" else [],
                                  agents, destructive=True, notes=notes)
                 if match["kind"] == "chat_agent":
                     remove_agent(match)
@@ -647,14 +648,13 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None,
                                       if e.get("source") != name and e.get("target") != name]
                     applied = {"op": "delete_node", "name": name}
 
-            elif op == "update_agent":
-                match = _resolve(op, raw.get("name") or raw.get("id"), [], agents, notes=notes)
-                update_agent(match, raw.get("patch"))
+            elif agent_ops_.apply(op, raw):
+                pass
 
             elif op == "rename_node":
                 match = _resolve("rename_node", raw.get("name"), tasks, agents, notes=notes)
                 if match["kind"] == "chat_agent":
-                    update_agent(match, {"name": raw.get("new_name")})
+                    agent_ops_.update("rename_node", raw, {"name": raw.get("new_name")}, match=match)
                 else:
                     task = match["ref"]
                     new_name = _unique(raw.get("new_name") or "", taken - {task["name"]})
@@ -757,8 +757,7 @@ def apply_operations(graph: dict, operations: list, graph_id: str | None = None,
             elif op == "inspect_node":
                 match = _resolve("inspect_node", raw.get("name"), tasks, agents, notes=notes)
                 observe("inspect_node", match["ref"] if match["kind"] != "chat_agent" else
-                        {"id": match["id"], **{k: match["ref"].get(k) for k in ("name", "instructions")},
-                         "kind": "chat_agent"})
+                        agent_ops.inspect(match["ref"], agent_ops_.resources))
 
             elif op == "configure_workflow":
                 patch = raw.get('patch') or {}

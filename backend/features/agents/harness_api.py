@@ -181,13 +181,23 @@ def list_agents(graph_id: str):
         return {'agents': [json.loads(r[0]) for r in db.execute('SELECT body FROM objects WHERE owner=? AND kind=?', (scope, 'agent'))]}
 
 
+class NewAgent(AgentSettings):
+    # The workflow assistant chooses the id of an Agent it adds, so later
+    # operations of the same turn can address it; never an id already used.
+    id: str | None = Field(default=None, pattern=r'^[a-f0-9]{32}$')
+
+
 @router.post('', status_code=201)
-def create_agent(graph_id: str, body: AgentSettings):
+def create_agent(graph_id: str, body: NewAgent):
     graph = graph_for(graph_id)
-    settings = body.model_dump()
+    wanted = getattr(body, 'id', None)  # callers may pass plain AgentSettings
+    settings = body.model_dump(exclude={'id'})
     validate_memories(graph, settings)
-    agent = {'id': uuid.uuid4().hex, **settings}
-    with database() as db: put(db, agent['id'], owner(graph), 'agent', '', agent)
+    agent = {'id': wanted or uuid.uuid4().hex, **settings}
+    with _lock, database() as db:
+        if wanted and db.execute('SELECT 1 FROM objects WHERE id=?', (wanted,)).fetchone():
+            raise HTTPException(409, 'An Agent with this ID already exists')
+        put(db, agent['id'], owner(graph), 'agent', '', agent)
     return agent
 
 
